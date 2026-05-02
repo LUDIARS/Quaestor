@@ -2,9 +2,10 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { Buffer } from "node:buffer";
 import * as registry from "../importers/registry.js";
+import { parseSmbcBankPdf } from "../importers/smbc-bank-pdf.js";
 import type { ImportsRepo } from "../db/imports-repo.js";
 import type { TransactionsRepo } from "../db/transactions-repo.js";
-import type { SourceKind } from "../shared/types.js";
+import type { ImporterResult, SourceKind } from "../shared/types.js";
 
 const PostBodySchema = z.object({
   brand: z.string().optional(),       // 省略時は auto-detect
@@ -44,7 +45,15 @@ export function importsRouter(deps: ImportsApiDeps): Hono {
       return c.json({ error: "no importer matched", supported_brands: registry.brands() }, 422);
     }
 
-    const result = picked.importer.parse(buf, { account: parsed.data.account });
+    // smbc-bank は async (PDF パース) 専用 path
+    let result: ImporterResult;
+    if (picked.brand === "smbc-bank") {
+      result = await parseSmbcBankPdf(buf, { account: parsed.data.account });
+    } else if (picked.importer) {
+      result = picked.importer.parse(buf, { account: parsed.data.account });
+    } else {
+      return c.json({ error: "no importer matched", supported_brands: registry.brands() }, 422);
+    }
     const source: SourceKind = sourceForBrand(picked.brand);
 
     const importId = deps.imports.insert({
@@ -77,8 +86,8 @@ export function importsRouter(deps: ImportsApiDeps): Hono {
 }
 
 function sourceForBrand(brand: string): SourceKind {
-  // v0.1 は UFJ クレカのみ。 銀行系 brand を追加したらここを拡張
-  if (brand === "ufj" || brand === "smbc-1" || brand === "smbc-3" || brand === "rakuten") return "credit-card";
+  if (brand === "ufj" || brand === "smbc" || brand === "rakuten") return "credit-card";
   if (brand === "amazon-order-history") return "amazon";
+  if (brand === "smbc-bank" || brand === "ufj-bank") return "bank";
   return "credit-card";
 }
