@@ -109,6 +109,28 @@ const STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_recon_receipt ON reconciliations(receipt_id)`,
   `CREATE INDEX IF NOT EXISTS idx_recon_tx ON reconciliations(transaction_id)`,
+
+  // invoices — 業務に対する請求書 (発行済 + 入金待ち)。 入金確認は bank tx に link する形
+  `CREATE TABLE IF NOT EXISTS invoices (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    issued_at       TEXT NOT NULL,                                          -- ISO yyyy-mm-dd
+    due_date        TEXT,                                                   -- ISO yyyy-mm-dd
+    client          TEXT NOT NULL,                                          -- 取引先 (例: 教育機関株式会社)
+    work_summary    TEXT NOT NULL,                                          -- 業務概要 (請求項目)
+    amount          INTEGER NOT NULL,                                       -- 税込総額 (円)
+    withholding_tax INTEGER NOT NULL DEFAULT 0,                             -- 源泉徴収額 (差引かれた額)
+    status          TEXT NOT NULL DEFAULT 'sent'
+                    CHECK (status IN ('draft','sent','paid','overdue','cancelled')),
+    transaction_id  TEXT REFERENCES transactions(id) ON DELETE SET NULL,    -- 入金 tx に link
+    notes           TEXT,
+    metadata        TEXT,                                                   -- JSON 自由領域
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status, issued_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client)`,
+  `CREATE INDEX IF NOT EXISTS idx_invoices_tx ON invoices(transaction_id)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
