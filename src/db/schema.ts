@@ -45,6 +45,31 @@ const STATEMENTS: string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS uniq_tx_source_id
      ON transactions(source, account, source_id)
      WHERE source_id IS NOT NULL`,
+
+  // account_codes — 勘定科目コード (calc 互換 + ユーザ拡張可)
+  `CREATE TABLE IF NOT EXISTS account_codes (
+    code       INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    kind       TEXT NOT NULL CHECK (kind IN ('revenue','expense','asset','liability')),
+    created_at INTEGER NOT NULL
+  )`,
+
+  // apportionment_rules — 按分率ルール (pattern → rate + code)
+  // priority: 数値が小さいほど優先順位が高い
+  `CREATE TABLE IF NOT EXISTS apportionment_rules (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern    TEXT NOT NULL,
+    rate       REAL NOT NULL CHECK (rate >= 0 AND rate <= 1),
+    code       INTEGER NOT NULL REFERENCES account_codes(code),
+    priority   INTEGER NOT NULL DEFAULT 100,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    note       TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_rules_priority
+     ON apportionment_rules(enabled, priority)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
