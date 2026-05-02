@@ -98,12 +98,42 @@ export function dashboardRouter(deps: { db: Database.Database }): Hono {
       )
       .get(dateFrom, dateTo) as { amount_in: number; amount_out: number; count: number };
 
+    // 税金 / 社保 内訳: bank tx で description が税金関連 keyword に当たるものを集計
+    const taxRows = deps.db
+      .prepare(
+        `SELECT description AS label, COALESCE(SUM(amount_out), 0) AS amount, COUNT(*) AS count
+         FROM transactions
+         WHERE date >= ? AND date <= ? AND is_transfer = 0
+           AND amount_out IS NOT NULL
+           AND (
+             description LIKE '%税金%'
+             OR description LIKE '%ｺｸｾﾞｲ%'
+             OR description LIKE '%ｹﾝﾐﾝ%'
+             OR description LIKE '%住民税%'
+             OR description LIKE '%所得税%'
+             OR description LIKE '%消費税%'
+             OR description LIKE '%ｼﾔｶｲﾎｹﾝ%'
+             OR description LIKE '%社会保険%'
+             OR description LIKE '%国民年金%'
+             OR description LIKE '%ｺｸﾐﾝﾈﾝｷﾝ%'
+             OR description LIKE '%国民健康保険%'
+             OR description LIKE '%ﾎｹﾝﾘﾖｳ%'
+             OR description LIKE '%ふるさと%'
+             OR description LIKE '%ｱｻｶｾﾞｲﾑｼﾖ%'
+             OR description LIKE '%ｾﾞｲﾑｼﾖ%'
+           )
+         GROUP BY label
+         ORDER BY amount DESC`,
+      )
+      .all(dateFrom, dateTo) as { label: string; amount: number; count: number }[];
+
     return c.json({
       range: { from, to },
       grand_total: grand,
       monthly,
       by_source: bySource,
       top_payees: topPayees,
+      tax_breakdown: taxRows,
     });
   });
 

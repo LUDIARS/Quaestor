@@ -26,6 +26,36 @@ const SECTION_LABEL: Record<string, string> = {
   bs_liabilities: "貸借対照表 — 負債・資本の部",
 };
 
+/** summary section をカテゴリ別 (収入 / 税金 / 社保 / 生活費 / 投資 / 貯蓄 / その他) にグルーピング */
+function groupSummary(rows: FsRow[]): Array<{ title: string; items: FsRow[] }> {
+  const income: FsRow[] = [];
+  const tax: FsRow[] = [];
+  const social: FsRow[] = [];
+  const living: FsRow[] = [];
+  const invest: FsRow[] = [];
+  const saving: FsRow[] = [];
+  const other: FsRow[] = [];
+  for (const r of rows) {
+    const l = r.label;
+    if (/貯蓄/.test(l)) saving.push(r);
+    else if (/売上|収入|配偶者|バンタン|児童手当|利息|世帯/.test(l)) income.push(r);
+    else if (/^税金|所得税|住民税|消費税|国税|ふるさと|国民健康保険/.test(l)) tax.push(r);
+    else if (/^社会保険|年金/.test(l)) social.push(r);
+    else if (/生活費|ATM|ガス|電話|保育園/.test(l)) living.push(r);
+    else if (/投資|SBI|外貨/.test(l)) invest.push(r);
+    else other.push(r);
+  }
+  const groups: Array<{ title: string; items: FsRow[] }> = [];
+  if (income.length) groups.push({ title: "収入", items: income });
+  if (tax.length) groups.push({ title: "税金内訳", items: tax });
+  if (social.length) groups.push({ title: "社会保険・年金", items: social });
+  if (living.length) groups.push({ title: "生活費内訳", items: living });
+  if (invest.length) groups.push({ title: "投資", items: invest });
+  if (saving.length) groups.push({ title: "貯蓄", items: saving });
+  if (other.length) groups.push({ title: "事業経費・支出合計・その他", items: other });
+  return groups;
+}
+
 export function FinancialStatement() {
   const [year, setYear] = useState(currentYear());
   const [data, setData] = useState<FsRes | null>(null);
@@ -79,7 +109,9 @@ export function FinancialStatement() {
               ? <MonthlySalesTable rows={rows} />
               : sec.startsWith("bs_")
                 ? <BsTable rows={rows} />
-                : <FlatLabeledTable rows={rows} highlightLabels={sec === "summary" ? ["差引残(純貯蓄)", "支出合計", "売上(収入)"] : undefined} />}
+                : sec === "summary"
+                  ? <SummaryGrouped rows={rows} />
+                  : <FlatLabeledTable rows={rows} />}
           </section>
         );
       })}
@@ -110,6 +142,36 @@ function FlatLabeledTable({ rows, highlightLabels }: { rows: FsRow[]; highlightL
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** summary section をカテゴリ別にサブセクション + 小計付きで表示 */
+function SummaryGrouped({ rows }: { rows: FsRow[] }) {
+  const groups = groupSummary(rows);
+  return (
+    <div className="grid gap-4 grid-cols-1 md:grid-cols-2">
+      {groups.map((g) => {
+        const subtotal = g.items.reduce((s, r) => s + (r.amount ?? 0), 0);
+        return (
+          <div key={g.title} className="fd-card">
+            <div className="text-sm font-semibold mb-1 flex justify-between items-baseline">
+              <span>{g.title}</span>
+              <span className="font-mono text-xs text-subtle">¥{subtotal.toLocaleString()}</span>
+            </div>
+            <table className="fd-table" style={{ fontSize: "0.8rem" }}>
+              <tbody>
+                {g.items.map((r) => (
+                  <tr key={r.id}>
+                    <td className="py-1">{r.label}</td>
+                    <td className="py-1 text-right font-mono">{r.amount != null ? `¥${r.amount.toLocaleString()}` : "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
