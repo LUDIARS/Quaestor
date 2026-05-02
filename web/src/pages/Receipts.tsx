@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ReceiptEditor } from "../components/ReceiptEditor.js";
 import { YearTabs, currentYear } from "../components/YearTabs.js";
+import { ReceiptQueue } from "../components/ReceiptQueue.js";
 
 interface ReceiptRow {
   id: string;
@@ -64,7 +65,8 @@ export function Receipts() {
   if (loading) return <p>loading…</p>;
   return (
     <div>
-      <h2>Receipts ({rows.length}) {ocrEnabled ? <small style={{ color: "var(--ok)" }}>OCR enabled</small> : <small style={{ color: "var(--muted)" }}>OCR disabled (ANTHROPIC_API_KEY 未設定)</small>}</h2>
+      <h2>Receipts ({rows.length}) {ocrEnabled ? <small style={{ color: "var(--ok)" }}>OCR enabled</small> : <small style={{ color: "var(--muted)" }}>OCR disabled (Claude Code で解析する想定)</small>}</h2>
+      <ReceiptQueue origin="receipts tab" />
       <YearTabs value={year} onChange={(y) => setYear(y)} />
       {loading && <p>loading…</p>}
       {err && <p className="error">{err} <button className="btn secondary" onClick={() => { setErr(null); void load(); }}>retry</button></p>}
