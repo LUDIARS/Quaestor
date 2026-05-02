@@ -54,26 +54,36 @@ v1.0 一気通貫実装済 (2026-05-02)。 詳細は `DESIGN.md`。
 
 ## 起動方法
 
-開発時は backend / web / Tauri を別ターミナルで:
+### 開発 (web ブラウザ)
+
+1 コマンドで backend + web を同時起動:
 
 ```powershell
-# backend (port 17400 loopback)
 cd E:\Document\Ars\Quaestor
 npm install
-npm run dev
-
-# web (port 5177、 Vite proxy で /v1/* と /health を 17400 に)
-cd E:\Document\Ars\Quaestor\web
-npm install
-npm run dev
-# → http://127.0.0.1:5177 で AR scanner / Imports / Transactions / Reconcile / Export
-
-# (任意) Tauri デスクトップで開く
-cd E:\Document\Ars\Quaestor
-npm run tauri:dev
+cd web; npm install; cd ..
+npm run dev:all     # backend (17400) + web vite (5177) を concurrently で同時起動
+# → http://127.0.0.1:5177
 ```
 
-OCR を有効化する場合は backend を起動する shell で `ANTHROPIC_API_KEY` を export 。
+OCR を有効化する場合は backend 起動 shell で `ANTHROPIC_API_KEY` を export。
+
+### 開発 (Tauri デスクトップ)
+
+```powershell
+npm run tauri:dev   # beforeDevCommand が dev:all を自動起動
+```
+
+### 本番ビルド
+
+```powershell
+npm run build:all   # tsc + vite build
+npm run tauri:build # exe を ./src-tauri/target/release/ に出力
+```
+
+production の Quaestor.exe は起動時に `node dist/server.js` を spawn するため、
+**Node 22+ が PATH に必要**。 Node を Tauri 同梱化するのは v1.0+ の課題
+(pkg / nexe / native rewrite のいずれか)。
 
 ## 個人データ取り扱い
 
