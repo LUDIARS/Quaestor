@@ -67,10 +67,8 @@ export function ReceiptQueue({
 
   async function runOcr(id: string) {
     try {
-      const res = await fetch(`/v1/receipts/${id}/ocr/run`, { method: "POST" });
-      if (res.status === 503) {
-        alert("OCR 無効 (ANTHROPIC_API_KEY 未設定)。 Claude Code で /v1/receipts/" + id + "/image を解析→PATCH してください。");
-      }
+      // OCR 無効時 (503) も silently 続行 — Claude Code 側で処理する想定なので alert 不要
+      await fetch(`/v1/receipts/${id}/ocr/run`, { method: "POST" });
       await load();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));

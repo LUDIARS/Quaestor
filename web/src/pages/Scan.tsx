@@ -50,6 +50,8 @@ export function Scan() {
   const debugRef = useRef<HTMLCanvasElement | null>(null);
   const arDebugRef = useRef<HTMLCanvasElement | null>(null);
   const [arDebugOn, setArDebugOn] = useState(true);
+  /** スキャン成功時のフラッシュ通知 (2 秒後に消える) */
+  const [scanToast, setScanToast] = useState<{ kind: "stable" | "speculative"; at: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionState>({
     candidate: null, stable: false, fps: 0, threshold: 180, parallelism: 0, textRow: 0, ledgerRow: 0,
@@ -70,6 +72,12 @@ export function Scan() {
   // detection loop の handle と tracker は ref で持つ (state にすると再 render で reset)
   const trackerRef = useRef(new StableDetectionTracker(5, 0.6, 0.55));
   const captureCooldownRef = useRef(0);
+  // 通知 toast の自動クリア
+  useEffect(() => {
+    if (!scanToast) return;
+    const id = window.setTimeout(() => setScanToast(null), 1800);
+    return () => window.clearTimeout(id);
+  }, [scanToast]);
   // 投機的実行: 白枠検出した瞬間に高解像度キャプチャ → POST。 サーバ側 dedupe で 2 回目以降は無視。
   const speculativeCooldownRef = useRef(0);
   const lastSpeculativeHashRef = useRef<string>("");
@@ -268,8 +276,8 @@ export function Scan() {
     try {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      // 投機実行は中解像度 (max 1024 辺) に縮めて転送量を抑える
-      const maxDim = kind === "speculative" ? 1024 : Math.max(vw, vh);
+      // 解像度: 普段は 640 max 辺 (元 HD の半分)、 これでも OCR 十分。 投機も同じで OK
+      const maxDim = kind === "speculative" ? 640 : 720;
       const scale = Math.min(1, maxDim / Math.max(vw, vh));
       const cw = Math.round(vw * scale);
       const ch = Math.round(vh * scale);
@@ -337,6 +345,10 @@ export function Scan() {
           image_url: `/v1/receipts/${j.receipt.id}/image`,
           size: j.stored_size,
         });
+        // 重複でなく実際に新規 insert された時だけ scan 通知
+        if (!j.deduped) {
+          setScanToast({ kind, at: Date.now() });
+        }
       }
     } finally {
       if (kind === "stable") setPosting(false);
@@ -369,6 +381,29 @@ export function Scan() {
             }}
           />
           <canvas ref={overlayRef} />
+          {/* scan 通知 toast (1.8s で fade out) */}
+          {scanToast && (
+            <div
+              key={scanToast.at}
+              style={{
+                position: "absolute",
+                top: "1rem",
+                left: "50%",
+                transform: "translateX(-50%)",
+                padding: "0.5rem 1rem",
+                background: scanToast.kind === "stable" ? "var(--c-ok)" : "var(--c-accent)",
+                color: "white",
+                fontWeight: 600,
+                fontSize: "0.95rem",
+                borderRadius: 999,
+                boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+                pointerEvents: "none",
+                animation: "scanToast 1.8s ease-out forwards",
+              }}
+            >
+              📸 スキャン {scanToast.kind === "stable" ? "確定" : "速報"}
+            </div>
+          )}
         </div>
         <div style={{ minWidth: 160 }}>
           <div className="flex items-center justify-between mb-1">
