@@ -6,6 +6,7 @@ import {
   type ReceiptCandidate,
 } from "../../../src/detection/receipt-detector.js";
 import { ReceiptQueue } from "../components/ReceiptQueue.js";
+import { KeywordOcr, type KeywordHit } from "../lib/keyword-ocr.js";
 
 interface DetectionState {
   candidate: ReceiptCandidate | null;
@@ -54,15 +55,29 @@ export function Scan() {
   const [scanToast, setScanToast] = useState<{ kind: "stable" | "speculative"; at: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionState>({
-    candidate: null, stable: false, fps: 0, threshold: 180, parallelism: 0, textRow: 0, ledgerRow: 0,
+    candidate: null, stable: false, fps: 0, threshold: 24, parallelism: 0, textRow: 0, ledgerRow: 0,
   });
   const [captureThreshold, setCaptureThreshold] = useState(loadCaptureThreshold());
   const captureThresholdRef = useRef(captureThreshold);
   useEffect(() => { captureThresholdRef.current = captureThreshold; saveCaptureThreshold(captureThreshold); }, [captureThreshold]);
-  // 白判定閾値: 180 スタート (gray 156 + α)、 1 秒に 1 ずつ下げて緩和、 floor 140、 stable で 180 にリセット。
-  // 180 で「明るめの白」 から拾い始め、 取れなければ徐々に広げて行く。
-  const whiteThresholdRef = useRef(180);
-  const lastDecayAtRef = useRef(performance.now());
+  // 動的に edge threshold を 1s 毎に -1 (検出無し時)、 floor 12、 stable で 24 にリセット
+  const edgeThresholdRef = useRef(24);
+  const lastEdgeDecayAtRef = useRef(performance.now());
+
+  // OCR worker (Tesseract): 「合計」 等のキーワード bbox を取り出して detector に渡す
+  const ocrRef = useRef<KeywordOcr | null>(null);
+  const ocrHitsRef = useRef<KeywordHit[]>([]);
+  const lastOcrAtRef = useRef(0);
+  const [ocrStatus, setOcrStatus] = useState<{ ready: boolean; progress: string }>({ ready: false, progress: "init…" });
+  useEffect(() => {
+    const o = new KeywordOcr();
+    ocrRef.current = o;
+    o.ensureReady((status, progress) => {
+      setOcrStatus({ ready: false, progress: `${status} ${(progress * 100).toFixed(0)}%` });
+    }).then(() => setOcrStatus({ ready: true, progress: "ready" }))
+      .catch((e) => setOcrStatus({ ready: false, progress: "error: " + (e as Error).message }));
+    return () => { void o.terminate(); };
+  }, []);
   const [running, setRunning] = useState(false);
   const [lastCapture, setLastCapture] = useState<CaptureState | null>(null);
   const [posting, setPosting] = useState(false);
@@ -127,22 +142,32 @@ export function Scan() {
       ctx.drawImage(video, 0, 0, targetW, targetH);
       const imgData = ctx.getImageData(0, 0, targetW, targetH);
 
-      // 1 秒毎に whiteThreshold を 1 ずつ下げる (検出無し時)。 stable 検出が出たら 180 にリセット
-      // floor 140 — それ以下にすると receipt と関係ない明るさのものまで拾い過ぎる
-      if (now - lastDecayAtRef.current > 1000) {
-        if (whiteThresholdRef.current > 140) whiteThresholdRef.current -= 1;
-        lastDecayAtRef.current = now;
+      // 1 秒毎に edgeThreshold を 1 ずつ下げる (検出無し時)。 stable 検出で 24 にリセット
+      // floor 12 — それ以下だとノイズエッジまで拾う
+      if (now - lastEdgeDecayAtRef.current > 1000) {
+        if (edgeThresholdRef.current > 12) edgeThresholdRef.current -= 1;
+        lastEdgeDecayAtRef.current = now;
+      }
+
+      // OCR を 2 秒に 1 回キック (busy 中なら skip)。 hit は ocr 入力 (= imgData) 座標。
+      if (ocrRef.current?.isReady() && !ocrRef.current.isBusy() && now - lastOcrAtRef.current > 2000) {
+        lastOcrAtRef.current = now;
+        const snapshot = imgData;
+        ocrRef.current.detect(snapshot).then((hits) => {
+          if (hits) ocrHitsRef.current = hits;
+        }).catch(() => { /* ignore */ });
       }
 
       const cands = detectReceiptCandidates(imgData.data as unknown as Uint8Array, targetW, targetH, {
-        maxDim: Math.max(targetW, targetH),  // 既に縮小済なので追加縮小なし
+        maxDim: Math.max(targetW, targetH),
         returnDebug: true,
-        whiteThreshold: whiteThresholdRef.current,
+        edgeThreshold: edgeThresholdRef.current,
+        keywordHits: ocrHitsRef.current,
       });
       const top = cands[0] ?? null;
       // 候補が出た瞬間に decay timer を緩める (大きく下げ過ぎないため)
       if (top && top.score >= 0.5) {
-        lastDecayAtRef.current = now;
+        lastEdgeDecayAtRef.current = now;
       }
 
       // debug プレビュー: white mask + text-row + ledger-row ハイライト
@@ -215,13 +240,25 @@ export function Scan() {
       const ox = overlay.getContext("2d");
       if (ox) {
         ox.clearRect(0, 0, vw, vh);
+        // OCR で検出された keyword bbox を青枠で薄く描画 (低解像度→native スケール)
+        const kSx = vw / targetW;
+        const kSy = vh / targetH;
+        for (const kh of ocrHitsRef.current) {
+          const isTotal = /合計/.test(kh.keyword);
+          ox.lineWidth = 2;
+          ox.strokeStyle = isTotal ? "rgba(255,200,80,0.95)" : "rgba(120,180,255,0.7)";
+          ox.strokeRect(kh.x * kSx, kh.y * kSy, kh.w * kSx, kh.h * kSy);
+          ox.fillStyle = ox.strokeStyle;
+          ox.font = `${Math.round(vw / 50)}px ui-monospace, monospace`;
+          ox.fillText(kh.keyword, kh.x * kSx, kh.y * kSy - 4);
+        }
         if (native) {
           ox.lineWidth = Math.max(2, Math.round(vw / 200));
           ox.strokeStyle = tres.stable ? "#51cf66" : "#4dabf7";
           ox.strokeRect(native.x, native.y, native.width, native.height);
           ox.font = `${Math.round(vw / 40)}px ui-monospace, monospace`;
           ox.fillStyle = ox.strokeStyle;
-          ox.fillText(`score ${native.score.toFixed(2)}`, native.x + 4, native.y - 6);
+          ox.fillText(`score ${native.score.toFixed(2)}${native.meta.containsTotal ? " 合計✓" : ""}`, native.x + 4, native.y - 6);
         }
       }
 
@@ -235,7 +272,7 @@ export function Scan() {
           candidate: native,
           stable: tres.stable,
           fps,
-          threshold: whiteThresholdRef.current,
+          threshold: edgeThresholdRef.current,
           parallelism: top?.meta.parallelismScore ?? 0,
           textRow: top?.meta.textRowRatio ?? 0,
           ledgerRow: top?.meta.ledgerRowRatio ?? 0,
@@ -255,7 +292,7 @@ export function Scan() {
       // stable 確定もそのまま保持: 確定キャプチャは 3 秒 cooldown で 1 件 + 閾値リセット
       if (tres.stable && tres.candidate && now > captureCooldownRef.current) {
         captureCooldownRef.current = now + 3000;
-        whiteThresholdRef.current = 180;  // reset on success
+        edgeThresholdRef.current = 24;  // reset on success
         captureAndUpload(video, tres.candidate, "stable").catch((e) => {
           setError(e instanceof Error ? e.message : String(e));
         });
@@ -458,11 +495,13 @@ export function Scan() {
         {!error && (
           <>
             running: {running ? "yes" : "no"} ｜ fps: {detection.fps.toFixed(1)} ｜
-            white≥<strong style={{ color: "var(--c-accent)" }}>{detection.threshold}</strong> (180→140) ｜
+            edge≥<strong style={{ color: "var(--c-accent)" }}>{detection.threshold}</strong> (24→12) ｜
             score: {detection.candidate ? detection.candidate.score.toFixed(2) : "-"} ｜
             ‖ {detection.parallelism.toFixed(2)} ｜
             text {(detection.textRow * 100).toFixed(0)}% ｜
             <span style={{ color: "magenta" }}>ledger {(detection.ledgerRow * 100).toFixed(0)}%</span> ｜
+            {detection.candidate?.meta.containsTotal && <span style={{ color: "var(--c-ok)", fontWeight: 600 }}>合計✓ </span>}
+            <span style={{ color: ocrStatus.ready ? "var(--c-ok)" : "var(--c-subtle)" }}>OCR {ocrStatus.progress}</span> ｜
             {detection.stable ? <span className="stable">STABLE</span> : "tracking"}
             {posting ? " ｜ posting…" : null}
           </>
