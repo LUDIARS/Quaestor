@@ -3,6 +3,8 @@ import { z } from "zod";
 import { Buffer } from "node:buffer";
 import type { ReceiptsRepo, OcrStatus } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
+import type { OcrClient } from "../services/ocr-client.js";
+import { runOcrFor } from "../services/ocr-runner.js";
 
 const GeoSchema = z.object({
   lat: z.number(),
@@ -45,6 +47,8 @@ const OcrResultSchema = z.object({
 export interface ReceiptsApiDeps {
   repo: ReceiptsRepo;
   storage: ReceiptStorage;
+  /** OCR が disabled な環境 (key 未設定 / テスト) では undefined */
+  ocr?: OcrClient;
 }
 
 export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
@@ -121,6 +125,15 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     if (!r) return c.json({ error: "not_found" }, 404);
     const ok = deps.repo.delete(c.req.param("id"));
     return c.json({ ok });
+  });
+
+  // POST /v1/receipts/:id/ocr/run — Anthropic vision に投げて構造化抽出
+  app.post("/:id/ocr/run", async (c) => {
+    if (!deps.ocr) return c.json({ error: "ocr_disabled", message: "ANTHROPIC_API_KEY 未設定" }, 503);
+    const id = c.req.param("id");
+    const result = await runOcrFor(id, { receipts: deps.repo, storage: deps.storage, client: deps.ocr });
+    if (!result.ok) return c.json({ ok: false, status: result.status, message: result.message }, 400);
+    return c.json({ ok: true, status: result.status, receipt: deps.repo.find(id) });
   });
 
   return app;
