@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "identifier": "io.ludiars.quaestor",
   "build": {
-    "beforeBuildCommand": "npm --prefix ../web run build",
-    "beforeDevCommand": "npm --prefix ../web run dev",
+    "beforeBuildCommand": "npm --prefix .. run build:all",
+    "beforeDevCommand": "npm --prefix .. run dev:all",
     "devUrl": "http://127.0.0.1:5177",
     "frontendDist": "../web/dist"
   },
