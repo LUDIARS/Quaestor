@@ -171,6 +171,9 @@ pre {
   inset: 0;
   width: 100%;
   height: 100%;
+  /* video の既定 object-fit (letterbox 気味) と canvas の単純 stretch がずれるので、
+     どちらも cover に統一して overlay と一致させる */
+  object-fit: cover;
 }
 .scan-stage canvas {
   pointer-events: none;
@@ -185,6 +188,14 @@ pre {
 .scan-meta .stable {
   color: var(--c-ok);
   font-weight: 600;
+}
+
+@keyframes scanToast {
+  0% { transform: translateX(-50%) scale(0.7); opacity: 0; }
+  10% { transform: translateX(-50%) scale(1.05); opacity: 1; }
+  20% { transform: translateX(-50%) scale(1); opacity: 1; }
+  80% { transform: translateX(-50%) scale(1); opacity: 1; }
+  100% { transform: translateX(-50%) scale(1); opacity: 0; }
 }
 
 .btn {
