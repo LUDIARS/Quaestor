@@ -34,6 +34,8 @@ export interface ReceiptCandidate {
     areaRatio: number;
     /** 0..1、 1 = 左右エッジが完全に縦平行 (低い分散) */
     parallelismScore: number;
+    /** 0..1、 候補内に text-like row (横線文字列の痕跡) が占める割合 */
+    textRowRatio: number;
   };
 }
 
@@ -66,8 +68,8 @@ export interface DetectorDebug {
   gray: Uint8Array;
   /** 二値化結果。 0=黒 / 1=白 (元) ですが flood fill 後は 2 (visited) になっている部分も含む */
   mask: Uint8Array;
-  /** Sobel 勾配強度 (0..255 にクランプ) — 色差分境界の可視化用 */
-  edge: Uint8Array;
+  /** 行ごとの text-like flag (0/1)。 length=h。 receipt 特有の横線文字列 row */
+  textRows: Uint8Array;
   /** 縮小幅・高さ (px) */
   width: number;
   height: number;
@@ -143,11 +145,12 @@ export function detectReceiptCandidates(
     }
   }
 
-  // 4.5. Sobel 勾配 = エッジ map (色差分境界)
-  const edge = sobel(gray, dw, dh);
+  // 4.5. Text-row 検出 (レシート特化): 横方向の白↔暗 transition 多 + 暗ピクセル割合中位 = 文字行
+  // flood fill 前に mask snapshot を取って計算する (flood fill は mask=2 で値を上書きしてしまう)
+  const maskSnapshot = new Uint8Array(mask);
+  const textRows = computeTextRows(maskSnapshot, dw, dh);
 
-  // 5. 連結成分 flood fill (4-連結)。 mask は破壊変更されるので保存用に copy
-  const maskCopy = new Uint8Array(mask);
+  // 5. 連結成分 flood fill (4-連結)
   const components = floodFill4(mask, dw, dh);
 
   // 6-7. scoring + filter
@@ -166,34 +169,50 @@ export function detectReceiptCandidates(
     const areaRatio = (ww * hh) / totalArea;
 
     if (areaRatio < o.minAreaRatio) continue;
-    if (aspectRatio < o.aspectMin || aspectRatio > o.aspectMax) continue;
-    if (fillRatio < o.minFillRatio) continue;
 
     // 平行性チェック: 左右エッジの x 座標 (各 row の最 left/right の visited pixel)
     // の std-dev が小さいほど縦平行 → score 高い
     const parallelism = parallelismScore(mask, dw, c);
     if (parallelism < o.minParallelism) continue;
 
-    // エッジ強度: bbox 周囲の Sobel 勾配 平均 (高 = 強い境界が見えている)
-    const edgeStrength = perimeterEdgeStrength(edge, dw, dh, c);
+    // 長レシート救済: 上 or 下が画像端に触れていて (=見切れ)、 左右が平行 (>0.6) なら
+    // aspectMax を 12.0 まで緩める。 とにかく縦長で平行な四角は receipt 扱いにする。
+    const cutOffVertical = c.touchesTop || c.touchesBottom;
+    const longReceiptOk = cutOffVertical && parallelism > 0.6;
+    const aspectMaxEffective = longReceiptOk ? 12.0 : o.aspectMax;
+    if (aspectRatio < o.aspectMin || aspectRatio > aspectMaxEffective) continue;
+    if (fillRatio < o.minFillRatio) continue;
 
-    // score = fillRatio + parallelism + areaRatio + center + edge
+    // text-row 比率: 候補内に「文字行らしい横ストリーク」がどれくらい占めるか
+    const textRatio = textRowsInBbox(textRows, c);
+
+    // score = fillRatio + parallelism + textRatio + center + areaRatio
     const cx = (c.minX + c.maxX) / 2 / dw;
     const cy = (c.minY + c.maxY) / 2 / dh;
     const centerness = 1 - Math.hypot(cx - 0.5, cy - 0.5);
+    // aspect bias: receipt は縦長 (1.5..4.0) を強く好む
+    // 長レシート救済時は 4.0+ でも 0.9 を返す (縦長 + 見切れ + 平行 はむしろ典型的レシート)
+    const aspectBias = aspectRatio >= 1.5 && aspectRatio <= 4.0 ? 1
+      : longReceiptOk && aspectRatio > 4.0 ? 0.9
+      : aspectRatio > 1 ? 0.6
+      : 0.3;
+
     const score = clamp01(
-      0.30 * fillRatio +
-      0.25 * parallelism +
-      0.20 * Math.min(1, edgeStrength / 80) +
-      0.15 * centerness +
-      0.10 * Math.min(1, areaRatio * 4),
+      0.25 * fillRatio +
+      0.20 * parallelism +
+      0.25 * textRatio +
+      0.15 * aspectBias +
+      0.10 * centerness +
+      0.05 * Math.min(1, areaRatio * 4),
     );
 
     candidates.push({
       x, y, width: ww, height: hh, score,
       meta: {
         downscaleW: dw, downscaleH: dh, threshold,
-        fillRatio, aspectRatio, areaRatio, parallelismScore: parallelism,
+        fillRatio, aspectRatio, areaRatio,
+        parallelismScore: parallelism,
+        textRowRatio: textRatio,
       },
     });
   }
@@ -203,7 +222,7 @@ export function detectReceiptCandidates(
 
   if (opts.returnDebug) {
     return Object.assign(top, {
-      __debug: { gray, mask, edge, width: dw, height: dh, threshold } as DetectorDebug,
+      __debug: { gray, mask, textRows, width: dw, height: dh, threshold } as DetectorDebug,
     });
   }
   return top;
@@ -245,6 +264,11 @@ interface Component {
   area: number;
   minX: number; maxX: number;
   minY: number; maxY: number;
+  /** 連結成分が画像端に触れているか (見切れ判定用) */
+  touchesTop: boolean;
+  touchesBottom: boolean;
+  touchesLeft: boolean;
+  touchesRight: boolean;
 }
 
 /**
@@ -275,7 +299,13 @@ function floodFill4(mask: Uint8Array, w: number, h: number): Component[] {
         if (y + 1 < h) stack.push(x, y + 1);
         if (y > 0) stack.push(x, y - 1);
       }
-      out.push({ area, minX, maxX, minY, maxY });
+      out.push({
+        area, minX, maxX, minY, maxY,
+        touchesTop: minY === 0,
+        touchesBottom: maxY === h - 1,
+        touchesLeft: minX === 0,
+        touchesRight: maxX === w - 1,
+      });
     }
   }
   return out;
@@ -286,25 +316,41 @@ function clamp01(v: number): number {
 }
 
 /**
- * Sobel-like 勾配強度 (|dx| + |dy|、 0..255 にクランプ) を返す。
- * 色差分の境界を強調する目的なので軽量実装。
+ * 行ごとに 「receipt の文字行 (text-like row)」 か判定して 0/1 を返す。
+ * receipt の特徴: 1 行に 4+ 回の白↔暗 遷移、 暗ピクセル比率 5-50%。
+ * これを満たす行が候補内に多いほど、 ただの白ボックスではなく「文字が並んだレシート」 と推定できる。
  */
-function sobel(gray: Uint8Array, w: number, h: number): Uint8Array {
-  const out = new Uint8Array(w * h);
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = y * w + x;
-      const dx =
-        -gray[i - w - 1]! - 2 * gray[i - 1]! - gray[i + w - 1]! +
-        gray[i - w + 1]! + 2 * gray[i + 1]! + gray[i + w + 1]!;
-      const dy =
-        -gray[i - w - 1]! - 2 * gray[i - w]! - gray[i - w + 1]! +
-        gray[i + w - 1]! + 2 * gray[i + w]! + gray[i + w + 1]!;
-      const m = (Math.abs(dx) + Math.abs(dy)) >> 2;  // 1/4 でクランプ範囲を 0..255 に収める
-      out[i] = m > 255 ? 255 : m;
+function computeTextRows(mask: Uint8Array, w: number, h: number): Uint8Array {
+  const rows = new Uint8Array(h);
+  for (let y = 0; y < h; y++) {
+    let transitions = 0;
+    let dark = 0;
+    let prev = mask[y * w] ?? 0;
+    if (prev === 0) dark++;
+    for (let x = 1; x < w; x++) {
+      const v = mask[y * w + x] ?? 0;
+      if (v !== prev) transitions++;
+      if (v === 0) dark++;
+      prev = v;
+    }
+    const ratio = dark / w;
+    if (transitions >= 4 && ratio >= 0.05 && ratio <= 0.5) {
+      rows[y] = 1;
     }
   }
-  return out;
+  return rows;
+}
+
+/**
+ * 候補連結成分の bbox 範囲内で text-like row が占める比率。
+ */
+function textRowsInBbox(textRows: Uint8Array, c: Component): number {
+  let count = 0;
+  for (let y = c.minY; y <= c.maxY; y++) {
+    if (textRows[y] === 1) count++;
+  }
+  const h = c.maxY - c.minY + 1;
+  return h > 0 ? count / h : 0;
 }
 
 /**
@@ -338,26 +384,6 @@ function parallelismScore(mask: Uint8Array, w: number, c: Component): number {
   return clamp01(1 - avg * 4); // 0.25 の sd で 0 にする調整
 }
 
-/**
- * 連結成分の bbox の 4 辺周辺 (内外 1px) で edge 勾配の平均強度を返す。
- * レシートの実エッジが映ってる場合、 周囲の edge map に高い値が並ぶ。
- */
-function perimeterEdgeStrength(edge: Uint8Array, w: number, h: number, c: Component): number {
-  let sum = 0, n = 0;
-  const top = Math.max(0, c.minY);
-  const bot = Math.min(h - 1, c.maxY);
-  const lft = Math.max(0, c.minX);
-  const rgt = Math.min(w - 1, c.maxX);
-  for (let x = lft; x <= rgt; x++) {
-    sum += edge[top * w + x] ?? 0; n++;
-    sum += edge[bot * w + x] ?? 0; n++;
-  }
-  for (let y = top; y <= bot; y++) {
-    sum += edge[y * w + lft] ?? 0; n++;
-    sum += edge[y * w + rgt] ?? 0; n++;
-  }
-  return n > 0 ? sum / n : 0;
-}
 
 /**
  * 候補が複数フレーム連続して安定したかチェックするための簡易 tracker。
