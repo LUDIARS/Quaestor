@@ -46,7 +46,8 @@ describe("detectReceiptCandidates", () => {
     expect(top.x).toBeLessThanOrEqual(260);
     expect(top.width).toBeGreaterThanOrEqual(140);
     expect(top.width).toBeLessThanOrEqual(180);
-    expect(top.score).toBeGreaterThan(0.5);
+    // text/ledger row 0% でも fill + parallelism + aspect bias で 0.4 以上は出る
+    expect(top.score).toBeGreaterThan(0.4);
   });
 
   it("rejects pure noise (no large rectangle)", () => {

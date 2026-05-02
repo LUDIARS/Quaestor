@@ -13,6 +13,22 @@ interface DetectionState {
   threshold: number;
   parallelism: number;
   textRow: number;
+  ledgerRow: number;
+}
+
+const SETTINGS_KEY = "quaestor.scan.captureThreshold";
+function loadCaptureThreshold(): number {
+  try {
+    const v = localStorage.getItem(SETTINGS_KEY);
+    if (v) {
+      const n = parseFloat(v);
+      if (Number.isFinite(n) && n >= 0.1 && n <= 1) return n;
+    }
+  } catch {}
+  return 0.6;
+}
+function saveCaptureThreshold(v: number) {
+  try { localStorage.setItem(SETTINGS_KEY, String(v)); } catch {}
 }
 
 interface CaptureState {
@@ -33,8 +49,11 @@ export function Scan() {
   const debugRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionState>({
-    candidate: null, stable: false, fps: 0, threshold: 180, parallelism: 0, textRow: 0,
+    candidate: null, stable: false, fps: 0, threshold: 180, parallelism: 0, textRow: 0, ledgerRow: 0,
   });
+  const [captureThreshold, setCaptureThreshold] = useState(loadCaptureThreshold());
+  const captureThresholdRef = useRef(captureThreshold);
+  useEffect(() => { captureThresholdRef.current = captureThreshold; saveCaptureThreshold(captureThreshold); }, [captureThreshold]);
   // 白判定閾値: 180 スタート (gray 156 + α)、 1 秒に 1 ずつ下げて緩和、 floor 140、 stable で 180 にリセット。
   // 180 で「明るめの白」 から拾い始め、 取れなければ徐々に広げて行く。
   const whiteThresholdRef = useRef(180);
@@ -128,6 +147,7 @@ export function Scan() {
           const out = dctx.createImageData(dbg.width, dbg.height);
           for (let y = 0; y < dbg.height; y++) {
             const isTextRow = dbg.textRows[y] === 1;
+            const isLedgerRow = dbg.ledgerRows[y] === 1;
             for (let x = 0; x < dbg.width; x++) {
               const i = y * dbg.width + x;
               const m = dbg.mask[i] ?? 0;
@@ -136,8 +156,12 @@ export function Scan() {
               if (m === 2) { r = 60; gr = 220; b = 100; }       // 検出された連結成分 (緑)
               else if (m === 1) { r = 100; gr = 160; b = 250; } // 白扱い (青)
               else { r = gr = b = Math.floor(g * 0.4); }        // 背景 (暗グレー)
-              // 文字行 (text-row) は黄/橙 で行全体を tint (薄く)
-              if (isTextRow) {
+              // ledger 行 (品目-金額レイアウト) は magenta、 通常 text 行は黄/橙
+              if (isLedgerRow) {
+                r = Math.min(255, r + 120);
+                gr = Math.max(0, gr - 30);
+                b = Math.min(255, b + 80);
+              } else if (isTextRow) {
                 r = Math.min(255, r + 80);
                 gr = Math.min(255, gr + 60);
                 b = Math.max(0, b - 40);
@@ -194,12 +218,14 @@ export function Scan() {
           threshold: whiteThresholdRef.current,
           parallelism: top?.meta.parallelismScore ?? 0,
           textRow: top?.meta.textRowRatio ?? 0,
+          ledgerRow: top?.meta.ledgerRowRatio ?? 0,
         });
       }
 
-      // 投機的実行: score >= 0.5 の白枠候補があれば 300ms 間隔で即キャプチャ → POST
-      // サーバ側で dedup hash により同じ画像は無視される (重複は 2 回目以降を捨てる)
-      if (native && native.score >= 0.5 && now > speculativeCooldownRef.current) {
+      // 投機的実行: score >= captureThreshold (設定値、 既定 0.6) で即キャプチャ → POST
+      // サーバ側 dedup hash で同一画像は無視 (2 回目以降を捨てる)
+      const capThr = captureThresholdRef.current;
+      if (native && native.score >= capThr && now > speculativeCooldownRef.current) {
         speculativeCooldownRef.current = now + 300;
         const bbox = native;
         captureAndUpload(video, bbox, "speculative").catch((e) => {
@@ -331,7 +357,21 @@ export function Scan() {
             }}
           />
           <div className="text-xs text-subtle mt-2 mb-1">検出スコア</div>
-          <ScoreGauge value={detection.candidate?.score ?? 0} stable={detection.stable} />
+          <ScoreGauge value={detection.candidate?.score ?? 0} stable={detection.stable} captureThreshold={captureThreshold} />
+          <div className="mt-3">
+            <label className="text-xs text-subtle block">
+              キャプチャ閾値: <strong className="text-text">{(captureThreshold * 100).toFixed(0)}%</strong>
+            </label>
+            <input
+              type="range"
+              min={0.3}
+              max={0.95}
+              step={0.05}
+              value={captureThreshold}
+              onChange={(e) => setCaptureThreshold(parseFloat(e.target.value))}
+              style={{ width: 192 }}
+            />
+          </div>
           <div className="text-xs text-subtle mt-3">
             投機キャプチャ:<br />
             送信 <strong className="text-text">{specStats.sent}</strong>{" "}
@@ -345,10 +385,11 @@ export function Scan() {
         {!error && (
           <>
             running: {running ? "yes" : "no"} ｜ fps: {detection.fps.toFixed(1)} ｜
-            white≥<strong style={{ color: "var(--c-accent)" }}>{detection.threshold}</strong> (180→140, 1s毎-1) ｜
+            white≥<strong style={{ color: "var(--c-accent)" }}>{detection.threshold}</strong> (180→140) ｜
             score: {detection.candidate ? detection.candidate.score.toFixed(2) : "-"} ｜
             ‖ {detection.parallelism.toFixed(2)} ｜
-            text-row {(detection.textRow * 100).toFixed(0)}% ｜
+            text {(detection.textRow * 100).toFixed(0)}% ｜
+            <span style={{ color: "magenta" }}>ledger {(detection.ledgerRow * 100).toFixed(0)}%</span> ｜
             {detection.stable ? <span className="stable">STABLE</span> : "tracking"}
             {posting ? " ｜ posting…" : null}
           </>
@@ -386,13 +427,13 @@ function ensureWorkCanvas(vw: number, vh: number): { canvas: HTMLCanvasElement; 
   return { canvas: work.canvas, targetW: tw, targetH: th };
 }
 
-function ScoreGauge({ value, stable }: { value: number; stable: boolean }) {
+function ScoreGauge({ value, stable, captureThreshold }: { value: number; stable: boolean; captureThreshold: number }) {
   const pct = Math.max(0, Math.min(1, value));
   const color = stable
     ? "var(--c-ok)"
-    : pct >= 0.55
+    : pct >= captureThreshold
       ? "var(--c-accent)"
-      : pct >= 0.35
+      : pct >= captureThreshold * 0.6
         ? "var(--c-warn)"
         : "var(--c-danger)";
   return (
@@ -422,10 +463,17 @@ function ScoreGauge({ value, stable }: { value: number; stable: boolean }) {
         </span>
         <span>100</span>
       </div>
-      {/* 0.5 と 0.85 の閾値ライン */}
+      {/* キャプチャ閾値ライン (動的) */}
       <div style={{ position: "relative", marginTop: -16, height: 14, pointerEvents: "none" }}>
-        <div style={{ position: "absolute", left: "50%", top: -14, height: 14, borderLeft: "1px dashed var(--c-warn)" }} />
-        <div style={{ position: "absolute", left: "85%", top: -14, height: 14, borderLeft: "1px dashed var(--c-ok)" }} />
+        <div
+          style={{
+            position: "absolute",
+            left: `${captureThreshold * 100}%`,
+            top: -14,
+            height: 14,
+            borderLeft: "1px solid var(--c-accent)",
+          }}
+        />
       </div>
     </div>
   );

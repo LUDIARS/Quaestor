@@ -36,6 +36,10 @@ export interface ReceiptCandidate {
     parallelismScore: number;
     /** 0..1、 候補内に text-like row (横線文字列の痕跡) が占める割合 */
     textRowRatio: number;
+    /** 0..1、 「左暗 + 中央白 + 右暗」 の品目-金額レイアウト row が占める割合。 receipt 特化 */
+    ledgerRowRatio: number;
+    /** 0..1、 連続 text-row の最長 run / 候補高さ。 文字行が clustering してれば高い */
+    textRunDensity: number;
   };
 }
 
@@ -70,6 +74,8 @@ export interface DetectorDebug {
   mask: Uint8Array;
   /** 行ごとの text-like flag (0/1)。 length=h。 receipt 特有の横線文字列 row */
   textRows: Uint8Array;
+  /** 行ごとの ledger-row flag (0/1)。 「品目: 金額」 レイアウトと判定された行 */
+  ledgerRows: Uint8Array;
   /** 縮小幅・高さ (px) */
   width: number;
   height: number;
@@ -146,9 +152,11 @@ export function detectReceiptCandidates(
   }
 
   // 4.5. Text-row 検出 (レシート特化): 横方向の白↔暗 transition 多 + 暗ピクセル割合中位 = 文字行
+  // 4.6. Ledger-row 検出: 文字行のうち「左暗 + 中央白 + 右暗」 = 品目-金額レイアウト
   // flood fill 前に mask snapshot を取って計算する (flood fill は mask=2 で値を上書きしてしまう)
   const maskSnapshot = new Uint8Array(mask);
   const textRows = computeTextRows(maskSnapshot, dw, dh);
+  const ledgerRows = computeLedgerRows(maskSnapshot, dw, dh, textRows);
 
   // 5. 連結成分 flood fill (4-連結)
   const components = floodFill4(mask, dw, dh);
@@ -183,27 +191,32 @@ export function detectReceiptCandidates(
     if (aspectRatio < o.aspectMin || aspectRatio > aspectMaxEffective) continue;
     if (fillRatio < o.minFillRatio) continue;
 
-    // text-row 比率: 候補内に「文字行らしい横ストリーク」がどれくらい占めるか
+    // text-row / ledger-row 比率 + 連続 run
     const textRatio = textRowsInBbox(textRows, c);
+    const ledgerRatio = ledgerRowsInBbox(ledgerRows, c);
+    const runDensity = textRowRunDensity(textRows, c);
 
-    // score = fillRatio + parallelism + textRatio + center + areaRatio
+    // score = fillRatio + parallelism + textRatio + ledgerRatio + runDensity + center + aspect + area
     const cx = (c.minX + c.maxX) / 2 / dw;
     const cy = (c.minY + c.maxY) / 2 / dh;
     const centerness = 1 - Math.hypot(cx - 0.5, cy - 0.5);
     // aspect bias: receipt は縦長 (1.5..4.0) を強く好む
-    // 長レシート救済時は 4.0+ でも 0.9 を返す (縦長 + 見切れ + 平行 はむしろ典型的レシート)
+    // 長レシート救済時は 4.0+ でも 0.9 を返す
     const aspectBias = aspectRatio >= 1.5 && aspectRatio <= 4.0 ? 1
       : longReceiptOk && aspectRatio > 4.0 ? 0.9
       : aspectRatio > 1 ? 0.6
       : 0.3;
 
+    // ledger は最も receipt 特化な signal なので 25% 配分。 textRow は 15%、 runDensity は 10%。
     const score = clamp01(
-      0.25 * fillRatio +
-      0.20 * parallelism +
-      0.25 * textRatio +
-      0.15 * aspectBias +
-      0.10 * centerness +
-      0.05 * Math.min(1, areaRatio * 4),
+      0.20 * fillRatio +
+      0.15 * parallelism +
+      0.15 * textRatio +
+      0.25 * ledgerRatio +
+      0.10 * runDensity +
+      0.10 * aspectBias +
+      0.03 * centerness +
+      0.02 * Math.min(1, areaRatio * 4),
     );
 
     candidates.push({
@@ -213,6 +226,8 @@ export function detectReceiptCandidates(
         fillRatio, aspectRatio, areaRatio,
         parallelismScore: parallelism,
         textRowRatio: textRatio,
+        ledgerRowRatio: ledgerRatio,
+        textRunDensity: runDensity,
       },
     });
   }
@@ -222,7 +237,7 @@ export function detectReceiptCandidates(
 
   if (opts.returnDebug) {
     return Object.assign(top, {
-      __debug: { gray, mask, textRows, width: dw, height: dh, threshold } as DetectorDebug,
+      __debug: { gray, mask, textRows, ledgerRows, width: dw, height: dh, threshold } as DetectorDebug,
     });
   }
   return top;
@@ -351,6 +366,64 @@ function textRowsInBbox(textRows: Uint8Array, c: Component): number {
   }
   const h = c.maxY - c.minY + 1;
   return h > 0 ? count / h : 0;
+}
+
+/**
+ * Ledger row 検出 — text-row のうち「左 1/3 暗 + 中央 1/3 明 + 右 1/3 暗」 の店舗レシート
+ * 特有の「品目 ¥金額」レイアウトに合致する行を抽出。
+ * 通常の白ボックス (看板や紙) には現れない、 receipt に強く特化した signal。
+ */
+function computeLedgerRows(mask: Uint8Array, w: number, h: number, textRows: Uint8Array): Uint8Array {
+  const rows = new Uint8Array(h);
+  const third = Math.max(1, Math.floor(w / 3));
+  for (let y = 0; y < h; y++) {
+    if (textRows[y] !== 1) continue;
+    let leftDark = 0, midDark = 0, rightDark = 0;
+    for (let x = 0; x < w; x++) {
+      const v = mask[y * w + x] ?? 0;
+      if (v === 0) {
+        if (x < third) leftDark++;
+        else if (x >= w - third) rightDark++;
+        else midDark++;
+      }
+    }
+    const leftR = leftDark / third;
+    const rightR = rightDark / third;
+    const midR = midDark / Math.max(1, w - 2 * third);
+    // 左暗 5%以上 + 右暗 5%以上 + 中央暗 50%未満 → 品目-金額 レイアウト
+    if (leftR > 0.05 && rightR > 0.05 && midR < 0.5) {
+      rows[y] = 1;
+    }
+  }
+  return rows;
+}
+
+function ledgerRowsInBbox(ledgerRows: Uint8Array, c: Component): number {
+  let count = 0;
+  for (let y = c.minY; y <= c.maxY; y++) {
+    if (ledgerRows[y] === 1) count++;
+  }
+  const h = c.maxY - c.minY + 1;
+  return h > 0 ? count / h : 0;
+}
+
+/**
+ * 連続 text-row の最長 run を候補高さで割った密度。
+ * 文字行が固まって出現する (= 表構造) なら高い、 散発的なら低い。
+ */
+function textRowRunDensity(textRows: Uint8Array, c: Component): number {
+  let maxRun = 0;
+  let curRun = 0;
+  for (let y = c.minY; y <= c.maxY; y++) {
+    if (textRows[y] === 1) {
+      curRun++;
+      if (curRun > maxRun) maxRun = curRun;
+    } else {
+      curRun = 0;
+    }
+  }
+  const h = c.maxY - c.minY + 1;
+  return h > 0 ? maxRun / h : 0;
 }
 
 /**
