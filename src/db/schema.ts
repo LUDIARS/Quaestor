@@ -70,6 +70,29 @@ const STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_rules_priority
      ON apportionment_rules(enabled, priority)`,
+
+  // receipts — AR スキャナで取得したレシート / 領収書
+  // OCR 結果は payee/date/total が確定したら入る (v0.4 で実装)
+  `CREATE TABLE IF NOT EXISTS receipts (
+    id           TEXT PRIMARY KEY,
+    captured_at  INTEGER NOT NULL,
+    image_path   TEXT,                                                    -- app_data/ からの相対 path
+    ocr_status   TEXT NOT NULL DEFAULT 'pending'
+                 CHECK (ocr_status IN ('pending','processing','done','failed','manual')),
+    date         TEXT,                                                    -- ISO yyyy-mm-dd (OCR 確定後)
+    payee        TEXT,
+    total        INTEGER,                                                 -- 合計金額 (円)
+    items        TEXT,                                                    -- JSON: [{name, price, qty?}]
+    geo          TEXT,                                                    -- JSON: {lat, lon, accuracy?}
+    ocr_raw      TEXT,                                                    -- LLM の生 response
+    metadata     TEXT,                                                    -- JSON: source_frame, capture meta etc
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(date)`,
+  `CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(ocr_status)`,
+  `CREATE INDEX IF NOT EXISTS idx_receipts_captured ON receipts(captured_at)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {

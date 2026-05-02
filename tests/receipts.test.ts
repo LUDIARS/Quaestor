@@ -1,0 +1,148 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import Database from "better-sqlite3";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Buffer } from "node:buffer";
+import { buildApp } from "../src/app.js";
+
+/**
+ * 1x1 px の最小 PNG (透過) を base64 で。 image_b64 入力テスト用 fixture。
+ */
+const PNG_1x1 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
+
+describe("API: /v1/receipts", () => {
+  let app: ReturnType<typeof buildApp>;
+  let receiptsRoot: string;
+
+  beforeEach(() => {
+    receiptsRoot = mkdtempSync(join(tmpdir(), "quaestor-receipts-"));
+    app = buildApp({ db: new Database(":memory:"), receiptsRoot });
+  });
+  afterEach(() => { rmSync(receiptsRoot, { recursive: true, force: true }); });
+
+  it("POST creates a pending receipt with image saved on disk", async () => {
+    const res = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        image_b64: PNG_1x1,
+        ext: "png",
+        captured_at: 1735689600,    // 2025-01-01 00:00:00 UTC
+        geo: { lat: 35.65, lon: 139.69 },
+        metadata: { source: "ar-scanner-test", bbox: { x: 100, y: 100, w: 200, h: 400 } },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const j = await res.json() as { receipt: { id: string; image_path: string; ocr_status: string }; stored_size: number };
+    expect(j.receipt.ocr_status).toBe("pending");
+    expect(j.receipt.image_path).toMatch(/^2025\/01\/[0-9a-f-]+\.png$/);
+    expect(j.stored_size).toBeGreaterThan(0);
+
+    // 画像が disk に出来てる
+    const abs = join(receiptsRoot, j.receipt.image_path);
+    expect(existsSync(abs)).toBe(true);
+  });
+
+  it("GET /:id and /:id/image", async () => {
+    const create = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+    });
+    const cj = await create.json() as { receipt: { id: string } };
+    const id = cj.receipt.id;
+
+    const get = await app.request(`/v1/receipts/${id}`);
+    expect(get.status).toBe(200);
+
+    const img = await app.request(`/v1/receipts/${id}/image`);
+    expect(img.status).toBe(200);
+    expect(img.headers.get("content-type")).toBe("image/png");
+    const buf = Buffer.from(await img.arrayBuffer());
+    expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it("PATCH /:id/ocr updates ocr fields and status", async () => {
+    const create = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+    });
+    const id = ((await create.json()) as { receipt: { id: string } }).receipt.id;
+
+    const patch = await app.request(`/v1/receipts/${id}/ocr`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ocr_status: "done",
+        date: "2025-04-15",
+        payee: "サイゼリヤ 中目黒店",
+        total: 1820,
+        items: [
+          { name: "ミラノ風ドリア", price: 460, qty: 1 },
+          { name: "ハンバーグ", price: 600, qty: 1 },
+        ],
+      }),
+    });
+    expect(patch.status).toBe(200);
+    const j = await patch.json() as { receipt: { ocr_status: string; payee: string; total: number; items: string } };
+    expect(j.receipt.ocr_status).toBe("done");
+    expect(j.receipt.payee).toBe("サイゼリヤ 中目黒店");
+    expect(j.receipt.total).toBe(1820);
+    expect(JSON.parse(j.receipt.items)).toHaveLength(2);
+  });
+
+  it("GET / lists with status filter", async () => {
+    // pending 1 件、 done 1 件作る
+    const r1 = await (await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+    })).json() as { receipt: { id: string } };
+    await app.request(`/v1/receipts/${r1.receipt.id}/ocr`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ocr_status: "done", payee: "test" }),
+    });
+    await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+    });
+
+    const all = await (await app.request("/v1/receipts")).json() as { total: number };
+    expect(all.total).toBe(2);
+
+    const pending = await (await app.request("/v1/receipts?status=pending")).json() as { total: number };
+    expect(pending.total).toBe(1);
+
+    const done = await (await app.request("/v1/receipts?status=done")).json() as { total: number };
+    expect(done.total).toBe(1);
+  });
+
+  it("rejects oversized image", async () => {
+    // 26MB の dummy buffer
+    const big = Buffer.alloc(26 * 1024 * 1024, 0).toString("base64");
+    const res = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: big }),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it("DELETE removes db row", async () => {
+    const create = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+    });
+    const id = ((await create.json()) as { receipt: { id: string } }).receipt.id;
+    const del = await app.request(`/v1/receipts/${id}`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+    const get = await app.request(`/v1/receipts/${id}`);
+    expect(get.status).toBe(404);
+  });
+});
