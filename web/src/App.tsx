@@ -5,20 +5,32 @@ import { Imports } from "./pages/Imports.js";
 import { Transactions } from "./pages/Transactions.js";
 import { Reconcile } from "./pages/Reconcile.js";
 import { ExportPage } from "./pages/ExportPage.js";
+import { Invoices } from "./pages/Invoices.js";
+import { Dashboard } from "./pages/Dashboard.js";
 
-type Page = "scan" | "receipts" | "imports" | "transactions" | "reconcile" | "export";
+type Page =
+  | "dashboard"
+  | "scan"
+  | "receipts"
+  | "imports"
+  | "transactions"
+  | "reconcile"
+  | "invoices"
+  | "export";
 
 const PAGES: { key: Page; label: string }[] = [
+  { key: "dashboard", label: "dashboard" },
   { key: "scan", label: "scan" },
   { key: "receipts", label: "receipts" },
   { key: "imports", label: "imports" },
   { key: "transactions", label: "transactions" },
   { key: "reconcile", label: "reconcile" },
+  { key: "invoices", label: "invoices" },
   { key: "export", label: "export" },
 ];
 
 export function App() {
-  const [page, setPage] = useState<Page>("scan");
+  const [page, setPage] = useState<Page>("dashboard");
   return (
     <div className="app">
       <header>
@@ -31,11 +43,13 @@ export function App() {
           ))}
         </nav>
       </header>
+      {page === "dashboard" && <Dashboard />}
       {page === "scan" && <Scan />}
       {page === "receipts" && <Receipts />}
       {page === "imports" && <Imports />}
       {page === "transactions" && <Transactions />}
       {page === "reconcile" && <Reconcile />}
+      {page === "invoices" && <Invoices />}
       {page === "export" && <ExportPage />}
     </div>
   );
