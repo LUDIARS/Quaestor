@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ReceiptEditor } from "../components/ReceiptEditor.js";
+import { YearTabs, currentYear } from "../components/YearTabs.js";
 
 interface ReceiptRow {
   id: string;
@@ -19,12 +20,18 @@ export function Receipts() {
   const [ocrEnabled, setOcrEnabled] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [year, setYear] = useState(currentYear());
 
   async function load() {
     setLoading(true);
     try {
+      const params = new URLSearchParams({ limit: "100" });
+      if (year !== "all") {
+        params.set("date_from", `${year}-01-01`);
+        params.set("date_to", `${year}-12-31`);
+      }
       const [list, health] = await Promise.all([
-        fetch("/v1/receipts?limit=50").then((r) => r.json() as Promise<{ items: ReceiptRow[] }>),
+        fetch(`/v1/receipts?${params}`).then((r) => r.json() as Promise<{ items: ReceiptRow[] }>),
         fetch("/health").then((r) => r.json() as Promise<{ ocr_enabled?: boolean }>),
       ]);
       setRows(list.items);
@@ -36,7 +43,7 @@ export function Receipts() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
 
   async function runOcr(id: string) {
     setRunning(id);
@@ -55,12 +62,13 @@ export function Receipts() {
   }
 
   if (loading) return <p>loading…</p>;
-  if (err) return <p className="error">{err} <button className="btn secondary" onClick={() => { setErr(null); void load(); }}>retry</button></p>;
-  if (rows.length === 0) return <p>まだレシートが無い。 scan ページから取り込んで。</p>;
-
   return (
     <div>
       <h2>Receipts ({rows.length}) {ocrEnabled ? <small style={{ color: "var(--ok)" }}>OCR enabled</small> : <small style={{ color: "var(--muted)" }}>OCR disabled (ANTHROPIC_API_KEY 未設定)</small>}</h2>
+      <YearTabs value={year} onChange={(y) => setYear(y)} />
+      {loading && <p>loading…</p>}
+      {err && <p className="error">{err} <button className="btn secondary" onClick={() => { setErr(null); void load(); }}>retry</button></p>}
+      {!loading && rows.length === 0 && <p className="text-subtle">{year === "all" ? "まだレシートが無い。 scan ページから取り込んで。" : `${year} 年のレシートは無し`}</p>}
       <ul style={{ display: "grid", gap: "0.5rem", listStyle: "none", padding: 0 }}>
         {rows.map((r) => (
           <li key={r.id} className="last-capture">

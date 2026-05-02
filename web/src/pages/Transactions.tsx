@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { YearTabs, currentYear } from "../components/YearTabs.js";
 
 interface TxRow {
   id: string;
@@ -29,8 +30,9 @@ export function Transactions() {
   const [data, setData] = useState<ListRes | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [year, setYear] = useState(currentYear());
+  const [from, setFrom] = useState(`${currentYear()}-01-01`);
+  const [to, setTo] = useState(`${currentYear()}-12-31`);
   const [payee, setPayee] = useState("");
   const [view, setView] = useState<ViewMode>("all");
   const [bankFilter, setBankFilter] = useState<BankFilter>("both");
@@ -53,7 +55,7 @@ export function Transactions() {
     }
   }
 
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view]);
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view, year]);
 
   const filteredItems = useMemo(() => {
     if (!data) return [];
@@ -68,18 +70,22 @@ export function Transactions() {
     <div>
       <h2>Transactions</h2>
 
-      <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.75rem", borderBottom: "1px solid var(--border)" }}>
+      <YearTabs
+        value={year}
+        onChange={(y, range) => {
+          setYear(y);
+          setFrom(range?.date_from ?? "");
+          setTo(range?.date_to ?? "");
+        }}
+      />
+
+      <div className="flex gap-1 mb-3 border-b border-border">
         {(["all", "credit-card", "bank", "amazon"] as ViewMode[]).map((m) => (
           <button
             key={m}
-            className="btn secondary"
+            className="fd-tab"
+            data-active={view === m}
             onClick={() => setView(m)}
-            style={{
-              borderRadius: "4px 4px 0 0",
-              borderBottom: view === m ? "2px solid var(--accent)" : "2px solid transparent",
-              padding: "0.4rem 0.8rem",
-              fontSize: "0.85rem",
-            }}
           >
             {m}
           </button>
