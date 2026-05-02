@@ -9,7 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "dev:all": "concurrently -n be,fe -c blue,magenta \"npm:dev\" \"npm --prefix web run dev\"",
+    "dev:all": "concurrently -n be,fe -c blue,magenta --restart-tries -1 --restart-after 500 \"npm:dev\" \"npm --prefix web run dev\"",
     "build": "tsc -p tsconfig.json",
     "build:all": "npm run build && npm --prefix web run build",
     "start": "node dist/server.js",

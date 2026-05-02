@@ -9,6 +9,8 @@ export default defineConfig({
   server: {
     port: 5177,
     strictPort: true,
+    host: true,
+    allowedHosts: ["quaestor.vtn-game.com", "localhost", "127.0.0.1"],
     proxy: {
       "/v1": "http://127.0.0.1:17400",
       "/health": "http://127.0.0.1:17400",
