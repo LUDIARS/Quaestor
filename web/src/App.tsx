@@ -7,9 +7,11 @@ import { Reconcile } from "./pages/Reconcile.js";
 import { ExportPage } from "./pages/ExportPage.js";
 import { Invoices } from "./pages/Invoices.js";
 import { Dashboard } from "./pages/Dashboard.js";
+import { FinancialStatement } from "./pages/FinancialStatement.js";
 
 type Page =
   | "dashboard"
+  | "financial"
   | "scan"
   | "receipts"
   | "imports"
@@ -20,6 +22,7 @@ type Page =
 
 const PAGES: { key: Page; label: string }[] = [
   { key: "dashboard", label: "dashboard" },
+  { key: "financial", label: "決算書" },
   { key: "scan", label: "scan" },
   { key: "receipts", label: "receipts" },
   { key: "imports", label: "imports" },
@@ -44,6 +47,7 @@ export function App() {
         </nav>
       </header>
       {page === "dashboard" && <Dashboard />}
+      {page === "financial" && <FinancialStatement />}
       {page === "scan" && <Scan />}
       {page === "receipts" && <Receipts />}
       {page === "imports" && <Imports />}

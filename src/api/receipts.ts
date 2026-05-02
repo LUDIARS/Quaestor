@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { ReceiptsRepo, OcrStatus } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import type { OcrClient } from "../services/ocr-client.js";
@@ -55,6 +56,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
   const app = new Hono();
 
   // POST /v1/receipts — captured frame を保存して pending エントリ作成
+  // 投機的実行用 server-side dedup: 直近 30 秒で同一画像 hash があれば既存 id を返す
   app.post("/", async (c) => {
     const body = await c.req.json().catch(() => null);
     const parsed = CreateSchema.safeParse(body);
@@ -64,12 +66,23 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     if (buf.length === 0) return c.json({ error: "empty image" }, 400);
     if (buf.length > 25 * 1024 * 1024) return c.json({ error: "image too large (>25MB)" }, 413);
 
+    const imageHash = createHash("sha1").update(buf).digest("hex");
+    const existing = deps.repo.findRecentByImageHash(imageHash, 30);
+    if (existing) {
+      return c.json({
+        receipt: existing,
+        stored_size: 0,
+        deduped: true,
+      });
+    }
+
     const ext = parsed.data.ext ?? "jpg";
     const capturedAt = parsed.data.captured_at ?? Math.floor(Date.now() / 1000);
+    const meta = { ...(parsed.data.metadata ?? {}), image_hash: imageHash };
     const id = deps.repo.insert({
       captured_at: capturedAt,
       geo: parsed.data.geo ?? null,
-      metadata: parsed.data.metadata ?? null,
+      metadata: meta,
     });
     const saved = deps.storage.save(id, buf, capturedAt, ext);
     deps.repo.setImagePath(id, saved.relativePath);
@@ -77,6 +90,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     return c.json({
       receipt: deps.repo.find(id),
       stored_size: saved.size,
+      deduped: false,
     }, 201);
   });
 

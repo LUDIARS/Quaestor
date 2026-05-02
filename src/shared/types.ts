@@ -32,6 +32,8 @@ export interface TransactionRow {
   account: string | null;     // 表示用 account ラベル (UFJクレカ, SMBC-3, UFJ普通預金 等)
   import_id: number | null;
   metadata: string | null;    // JSON, source-specific
+  /** 自分の口座間振り替え (カード支払引落 / ことら送金 等)。 集計から除外される */
+  is_transfer: number;        // 0 / 1
   created_at: number;         // unix sec
   updated_at: number;
 }
@@ -49,6 +51,8 @@ export interface ImportedTransaction {
   source_id: string;
   account: string;
   metadata: Record<string, unknown>;
+  /** 既知の振替 (口座間移動) として import 時にフラグ。 dashboard 集計から除外される */
+  is_transfer?: boolean;
 }
 
 export interface ImporterResult {

@@ -178,11 +178,35 @@ function importSmbcCard(sheetName, account, headerRows) {
  * 銀行明細(SMBC|UFJ) — row 1 header.
  * col A: date, col B: お引出し, col C: お預入れ, col D: 摘要, col E: 残高, col F: memo
  */
+/**
+ * 銀行明細の中で「振替 (口座間移動)」 と判別すべき pattern。
+ * これらは家計の income/expense ではないので is_transfer=1 で flag、 dashboard 集計から除外。
+ *  - クレカ引落: 「カード」 + ｺｸﾈｲ系のフリガナ (UFJ / SMBC)
+ *  - ことら送金 / 家族間振替: 「ことら送金」「振込１」自身名前等
+ *  - クレジット系の引落: 「クレジット」「ｸﾚｼﾞｯﾄ」「ｸﾚｼﾞｯﾄｼﾞﾄﾞｳｼﾞﾌﾞﾗｲ」 等
+ *  - ATM 入出金は 「カード ATM」 が多い (家計分析では別建てカウント)
+ */
+const TRANSFER_PATTERNS = [
+  /カード\s*ﾐﾂﾋﾞｼ/,           // UFJ クレジット引落
+  /カード\s*ﾐﾂｲｽﾐﾄﾓ/,         // SMBC クレジット引落
+  /カード\s*[Vｖ][Iiｉ][Sｓ][Aａ]/,  // VISA系
+  /^ｸﾚｼﾞｯﾄ/,                  // クレジット引落
+  /クレジット/,
+  /ことら送金/,                // 個人間/家族間 振替
+  /振替\s*[ＳS][ＢB][ＩI]/,    // SBI 証券への投資振替 (家計分析では「投資」別建て)
+];
+
+function isTransferRow(desc) {
+  if (!desc) return false;
+  return TRANSFER_PATTERNS.some((re) => re.test(desc));
+}
+
 function importBank(sheetName, account) {
   const sheet = wb.getWorksheet(sheetName);
-  if (!sheet) return { skipped: 0, inserted: 0, duplicates: 0, sheet: `${sheetName} (missing)` };
+  if (!sheet) return { skipped: 0, inserted: 0, duplicates: 0, transfers: 0, sheet: `${sheetName} (missing)` };
   const rows = [];
   let skipped = 0;
+  let transfers = 0;
   for (let i = 2; i <= sheet.rowCount; i++) {
     const r = sheet.getRow(i);
     const date = toIsoDate(r.getCell(1).value);
@@ -197,6 +221,8 @@ function importBank(sheetName, account) {
       skipped++;
       continue;
     }
+    const isTransfer = isTransferRow(desc);
+    if (isTransfer) transfers++;
     const sourceId = stableSourceId("bank", [account, date, payout ?? "", deposit ?? "", desc, i]);
     rows.push({
       date,
@@ -210,11 +236,12 @@ function importBank(sheetName, account) {
       source: "bank",
       source_id: sourceId,
       account,
+      is_transfer: isTransfer,
       metadata: { brand: account.includes("SMBC") ? "smbc-bank" : "ufj-bank", balance, memo, calc_row: i },
     });
   }
   const r = txs.insertBulk(rows);
-  return { sheet: sheetName, inserted: r.inserted, duplicates: r.duplicates, skipped };
+  return { sheet: sheetName, inserted: r.inserted, duplicates: r.duplicates, skipped, transfers };
 }
 
 /**

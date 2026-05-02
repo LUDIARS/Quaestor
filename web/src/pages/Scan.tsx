@@ -32,6 +32,9 @@ export function Scan() {
   // detection loop の handle と tracker は ref で持つ (state にすると再 render で reset)
   const trackerRef = useRef(new StableDetectionTracker(5, 0.6, 0.55));
   const captureCooldownRef = useRef(0);
+  // 投機的実行: 白枠検出した瞬間に高解像度キャプチャ → POST。 サーバ側 dedupe で 2 回目以降は無視。
+  const speculativeCooldownRef = useRef(0);
+  const lastSpeculativeHashRef = useRef<string>("");
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -125,10 +128,20 @@ export function Scan() {
         });
       }
 
-      // 安定確定 → HD キャプチャ + POST。 連続発火を防ぐため 3 秒 cooldown
+      // 投機的実行: score >= 0.55 の白枠候補があれば 1 秒間隔で即キャプチャ → POST
+      // サーバ側で dedup hash により同じ画像は無視される (重複は 2 回目以降を捨てる)
+      if (native && native.score >= 0.55 && now > speculativeCooldownRef.current) {
+        speculativeCooldownRef.current = now + 800;  // 0.8 秒間隔
+        const bbox = native;
+        captureAndUpload(video, bbox, "speculative").catch((e) => {
+          // 投機実行の失敗は控えめに通知
+          console.warn("[scan] speculative upload failed:", e);
+        });
+      }
+      // stable 確定もそのまま保持: 確定キャプチャは 3 秒 cooldown で 1 件
       if (tres.stable && tres.candidate && now > captureCooldownRef.current) {
         captureCooldownRef.current = now + 3000;
-        captureAndUpload(video, tres.candidate).catch((e) => {
+        captureAndUpload(video, tres.candidate, "stable").catch((e) => {
           setError(e instanceof Error ? e.message : String(e));
         });
       }
@@ -143,26 +156,35 @@ export function Scan() {
     };
   }, []);
 
-  async function captureAndUpload(video: HTMLVideoElement, candidate: ReceiptCandidate) {
-    setPosting(true);
+  async function captureAndUpload(video: HTMLVideoElement, candidate: ReceiptCandidate, kind: "stable" | "speculative") {
+    if (kind === "stable") setPosting(true);
     try {
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      // フル解像度 capture canvas
+      // 投機実行は中解像度 (max 1024 辺) に縮めて転送量を抑える
+      const maxDim = kind === "speculative" ? 1024 : Math.max(vw, vh);
+      const scale = Math.min(1, maxDim / Math.max(vw, vh));
+      const cw = Math.round(vw * scale);
+      const ch = Math.round(vh * scale);
+
       const cap = document.createElement("canvas");
-      cap.width = vw;
-      cap.height = vh;
+      cap.width = cw;
+      cap.height = ch;
       const cx = cap.getContext("2d");
       if (!cx) throw new Error("canvas 2d context unavailable");
-      cx.drawImage(video, 0, 0, vw, vh);
+      cx.drawImage(video, 0, 0, cw, ch);
       const blob = await new Promise<Blob | null>((resolve) =>
-        cap.toBlob((b) => resolve(b), "image/jpeg", 0.92),
+        cap.toBlob((b) => resolve(b), "image/jpeg", kind === "speculative" ? 0.7 : 0.92),
       );
       if (!blob) throw new Error("toBlob failed");
       const buf = new Uint8Array(await blob.arrayBuffer());
-      const b64 = btoa(String.fromCharCode(...buf));
+      // 簡易 hash (投機実行 局所 dedup): bbox + score quanta + フレーム特徴。 同フレーム再送防止
+      const hashSeed = `${candidate.x}|${candidate.y}|${Math.round(candidate.score * 20)}|${buf.length >> 8}`;
+      if (kind === "speculative" && hashSeed === lastSpeculativeHashRef.current) return;
+      lastSpeculativeHashRef.current = hashSeed;
 
-      const geo = await tryGetGeo();
+      const b64 = btoa(String.fromCharCode(...buf));
+      const geo = kind === "stable" ? await tryGetGeo() : null;
 
       const res = await fetch("/v1/receipts", {
         method: "POST",
@@ -174,23 +196,32 @@ export function Scan() {
           geo,
           metadata: {
             source: "ar-scanner",
+            kind,
             video_w: vw,
             video_h: vh,
+            captured_w: cw,
+            captured_h: ch,
             bbox: { x: candidate.x, y: candidate.y, w: candidate.width, h: candidate.height },
             score: candidate.score,
             detector_meta: candidate.meta,
+            client_hash: hashSeed,
           },
         }),
       });
       if (!res.ok) throw new Error(`POST /v1/receipts ${res.status}`);
-      const j = (await res.json()) as { receipt: { id: string }; stored_size: number };
+      const j = (await res.json()) as {
+        receipt: { id: string };
+        stored_size: number;
+        deduped?: boolean;
+      };
+      // server-side dedup によって既存 receipt が返ったら state 更新は最後勝ち
       setLastCapture({
         receipt_id: j.receipt.id,
         image_url: `/v1/receipts/${j.receipt.id}/image`,
         size: j.stored_size,
       });
     } finally {
-      setPosting(false);
+      if (kind === "stable") setPosting(false);
     }
   }
 

@@ -95,7 +95,10 @@ describe("API: /v1/receipts", () => {
   });
 
   it("GET / lists with status filter", async () => {
-    // pending 1 件、 done 1 件作る
+    // pending 1 件、 done 1 件作る (server-side dedup を回避するため別画像を渡す)
+    // PNG_1x1 と僅かに異なる別の 1×1 PNG (1bit RGB → 黒)
+    const PNG_1x1_BLACK =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==";
     const r1 = await (await app.request("/v1/receipts", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -109,7 +112,7 @@ describe("API: /v1/receipts", () => {
     await app.request("/v1/receipts", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+      body: JSON.stringify({ image_b64: PNG_1x1_BLACK, ext: "png" }),
     });
 
     const all = await (await app.request("/v1/receipts")).json() as { total: number };
