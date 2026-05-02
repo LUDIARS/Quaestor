@@ -14,6 +14,7 @@ import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
+import { SmartImporter } from "./services/smart-import.js";
 import { transactionsRouter } from "./api/transactions.js";
 import { importsRouter } from "./api/imports.js";
 import { accountCodesRouter } from "./api/account-codes.js";
@@ -46,6 +47,11 @@ export function buildApp(deps: AppDeps): Hono {
 
   const ocr = resolveOcr(deps.ocr);
   const ocrEnabled = !!ocr;
+  // smart importer は OCR と同じ key を共有
+  let smart: SmartImporter | undefined;
+  if (ocrEnabled) {
+    try { smart = new SmartImporter(); } catch { smart = undefined; }
+  }
 
   const app = new Hono();
 
@@ -57,7 +63,7 @@ export function buildApp(deps: AppDeps): Hono {
   }));
 
   app.route("/v1/transactions", transactionsRouter({ txs }));
-  app.route("/v1/imports", importsRouter({ imports, txs }));
+  app.route("/v1/imports", importsRouter({ imports, txs, smart }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr }));

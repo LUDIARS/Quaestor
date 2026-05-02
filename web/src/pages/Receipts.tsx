@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ReceiptEditor } from "../components/ReceiptEditor.js";
 
 interface ReceiptRow {
   id: string;
@@ -8,6 +9,7 @@ interface ReceiptRow {
   date: string | null;
   payee: string | null;
   total: number | null;
+  items: string | null;
 }
 
 export function Receipts() {
@@ -16,6 +18,7 @@ export function Receipts() {
   const [err, setErr] = useState<string | null>(null);
   const [ocrEnabled, setOcrEnabled] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
 
   async function load() {
     setLoading(true);
@@ -76,6 +79,20 @@ export function Receipts() {
                   {running === r.id ? "running…" : "OCR"}
                 </button>
               </>
+            )}
+            <button
+              className="btn secondary"
+              onClick={() => setEditing(editing === r.id ? null : r.id)}
+              style={{ marginLeft: "0.5rem", padding: "0.25rem 0.5rem", fontSize: "0.8rem" }}
+            >
+              {editing === r.id ? "閉じる" : "編集"}
+            </button>
+            {editing === r.id && (
+              <ReceiptEditor
+                receipt={r}
+                onSaved={() => void load()}
+                onClose={() => setEditing(null)}
+              />
             )}
             {r.image_path ? (
               <>
