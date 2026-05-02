@@ -1,0 +1,42 @@
+# Quaestor
+
+ラテン: Quaestor = 古代ローマの財務官。 個人会計を自動化する LUDIARS 兄弟の 1 サービス。
+
+## 目的
+
+家計簿管理 + 確定申告下準備の自動化。 入力源 (レシート / クレカ CSV / 銀行 PDF / Amazon 履歴) を 1 つの正規化レコードに統合し、 横断照合できるようにする。
+
+## 2 つの柱
+
+### 1. AR レシートスキャナ (WebUI)
+
+- Web カメラを `getUserMedia` で起動、 リアルタイムプレビュー
+- 各フレームを 128×256 程度に縮小し二値化、 「白っぽい矩形」 を高速検出
+- レシート候補を見つけたフレームで高解像度キャプチャ → OCR (Claude vision) に投げる
+- 抽出: 日付 / 店名 / 位置情報 / 商品ごとの品目+金額 / 合計
+
+### 2. 取引照合エンジン
+
+- クレカ / 銀行の CSV / PDF / Amazon 注文履歴を取り込み、 共通スキーマに正規化
+- フィールド: `date / 入金 / 出金 / 摘要 / 支払先 / 外貨額 (FX 決済時)`
+- 拡張可能な record schema (各 source 固有のフィールドは `metadata` で保持)
+- レシート (現物) ⇄ クレカ取引 のマッチング: 日付 ± N 日 + 金額 + 店名類似度で候補提示
+- 過去の `calc` (確定申告自動化) を参考にしつつ、 通年の家計把握にも使える設計
+
+## スタック (予定)
+
+- Backend: Node + Hono + better-sqlite3 (Concordia と同路線)
+- Frontend: React + Vite + Foundation UI
+- Desktop: Tauri 2 (CSV/PDF ファイル選択や永続データのため、 単独 PWA としても起動可)
+- OCR: Anthropic Claude vision (高解像度フレーム送信)
+- カメラ AR: 純 web (`getUserMedia` + Canvas + ImageData 二値解析)。 WebGL 化は性能が出なければ検討
+
+## 個人データの扱い
+
+- 会計データはすべて **ローカル SQLite** に保管
+- LUDIARS 全体ルール (個人データは Cernere 単一情報源、 自前 DB に持たない) との関係: Quaestor の取引データはそもそも外部 share 前提でない金銭情報なので、 Cernere 経由でなくローカル完結とする (AIFormat §5 の例外運用、 spec/data-model.md 参照)
+- Cloud sync は v0.x 以降に検討、 デフォルト OFF
+
+## 開発状況
+
+v0.0 (scaffold)。 詳細は `DESIGN.md` 参照。

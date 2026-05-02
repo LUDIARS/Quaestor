@@ -1,0 +1,11 @@
+{
+  "name": "quaestor",
+  "version": "0.0.0",
+  "description": "個人会計の自動化 — レシート OCR + 取引照合 (LUDIARS)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "license": "MIT"
+}
