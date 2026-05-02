@@ -1,8 +1,21 @@
 import { useState } from "react";
 import { Scan } from "./pages/Scan.js";
 import { Receipts } from "./pages/Receipts.js";
+import { Imports } from "./pages/Imports.js";
+import { Transactions } from "./pages/Transactions.js";
+import { Reconcile } from "./pages/Reconcile.js";
+import { ExportPage } from "./pages/ExportPage.js";
 
-type Page = "scan" | "receipts";
+type Page = "scan" | "receipts" | "imports" | "transactions" | "reconcile" | "export";
+
+const PAGES: { key: Page; label: string }[] = [
+  { key: "scan", label: "scan" },
+  { key: "receipts", label: "receipts" },
+  { key: "imports", label: "imports" },
+  { key: "transactions", label: "transactions" },
+  { key: "reconcile", label: "reconcile" },
+  { key: "export", label: "export" },
+];
 
 export function App() {
   const [page, setPage] = useState<Page>("scan");
@@ -11,12 +24,19 @@ export function App() {
       <header>
         <h1>Quaestor</h1>
         <nav>
-          <a href="#scan" onClick={(e) => { e.preventDefault(); setPage("scan"); }} aria-current={page === "scan"}>scan</a>
-          <a href="#receipts" onClick={(e) => { e.preventDefault(); setPage("receipts"); }} aria-current={page === "receipts"}>receipts</a>
+          {PAGES.map((p) => (
+            <a key={p.key} href={`#${p.key}`} onClick={(e) => { e.preventDefault(); setPage(p.key); }} aria-current={page === p.key}>
+              {p.label}
+            </a>
+          ))}
         </nav>
       </header>
       {page === "scan" && <Scan />}
       {page === "receipts" && <Receipts />}
+      {page === "imports" && <Imports />}
+      {page === "transactions" && <Transactions />}
+      {page === "reconcile" && <Reconcile />}
+      {page === "export" && <ExportPage />}
     </div>
   );
 }
