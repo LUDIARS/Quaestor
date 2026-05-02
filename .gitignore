@@ -1,0 +1,46 @@
+node_modules/
+dist/
+build/
+.cache/
+.next/
+.vite/
+.parcel-cache/
+.turbo/
+
+# Tauri
+src-tauri/target/
+src-tauri/Cargo.lock
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+
+# DB / runtime data
+app_data/
+*.db
+*.db-shm
+*.db-wal
+
+# Receipts (binary user data — never commit)
+receipts/
+imports/
+
+# Test
+coverage/
+.nyc_output/
