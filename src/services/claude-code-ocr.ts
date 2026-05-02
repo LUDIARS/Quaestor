@@ -10,7 +10,8 @@
  */
 
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve, dirname, join } from "node:path";
+import { mkdirSync, createWriteStream, readFileSync, existsSync } from "node:fs";
 
 export interface ClaudeCodeOcrOptions {
   backendBaseUrl: string;
@@ -20,19 +21,54 @@ export interface ClaudeCodeOcrOptions {
   workingDir?: string;
   /** 子プロセス kill タイムアウト (ms)。 既定 180_000 (3 分) */
   timeoutMs?: number;
+  /** ログ出力先ディレクトリ。 既定 app_data/claude-code-logs */
+  logDir?: string;
+}
+
+export interface CompleteEvent {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  logFile: string;
+  /** ログ末尾 4KB (要約用) */
+  tail: string;
+  durationMs: number;
 }
 
 export class ClaudeCodeOcr {
-  constructor(private readonly opts: ClaudeCodeOcrOptions) {}
+  private readonly logDir: string;
+
+  constructor(private readonly opts: ClaudeCodeOcrOptions) {
+    this.logDir = opts.logDir ?? resolve(opts.workingDir ?? process.cwd(), "app_data", "claude-code-logs");
+    mkdirSync(this.logDir, { recursive: true });
+  }
+
+  logPath(receiptId: string): string {
+    return join(this.logDir, `${receiptId}.log`);
+  }
 
   /**
-   * Fire-and-forget で claude を起動。 戻り値は spawn の成否のみ。
-   * 解析結果の反映は claude が PATCH で書き込むことに依存する。
+   * Fire-and-forget で claude を起動。 子プロセスの stdout/stderr は logFile に追記、
+   * exit 時に onComplete callback が呼ばれる (DB 反映等は呼び出し側の責務)。
    */
-  triggerAsync(receiptId: string): Promise<{ ok: boolean; pid: number | null; error?: string }> {
-    return new Promise((resolve) => {
+  triggerAsync(
+    receiptId: string,
+    onComplete?: (ev: CompleteEvent) => void,
+  ): Promise<{ ok: boolean; pid: number | null; logFile: string; error?: string }> {
+    return new Promise((resolveResult) => {
       const prompt = buildPrompt(receiptId, this.opts.backendBaseUrl);
+      const logFile = this.logPath(receiptId);
+      const startedAt = Date.now();
       let resolved = false;
+
+      // ログ準備 (常に append、 過去ログは履歴として残す)
+      mkdirSync(dirname(logFile), { recursive: true });
+      const logStream = createWriteStream(logFile, { flags: "a" });
+      const banner = `\n=== [${new Date().toISOString()}] claude code ocr start (receipt ${receiptId}) ===\n`;
+      logStream.write(banner);
+      logStream.write(`prompt length: ${prompt.length} chars\n`);
+      logStream.write(`backend: ${this.opts.backendBaseUrl}\n`);
+      logStream.write(`cwd: ${this.opts.workingDir ?? "(default)"}\n`);
+
       try {
         const env = { ...process.env };
         const bashPath = this.opts.bashPath ?? process.env.CLAUDE_CODE_GIT_BASH_PATH;
@@ -41,39 +77,76 @@ export class ClaudeCodeOcr {
         const child = spawn("claude", ["-p", "--dangerously-skip-permissions"], {
           env,
           cwd: this.opts.workingDir,
-          stdio: ["pipe", "ignore", "ignore"],
+          stdio: ["pipe", "pipe", "pipe"],
           shell: true,
-          detached: true,
         });
 
-        // process error は spawn 失敗で発火。 一度返却したら無視。
+        child.stdout?.on("data", (d) => logStream.write(d));
+        child.stderr?.on("data", (d) => {
+          logStream.write("[stderr] ");
+          logStream.write(d);
+        });
+
         child.once("error", (err) => {
-          if (resolved) return;
-          resolved = true;
-          resolve({ ok: false, pid: null, error: err.message });
+          logStream.write(`\n[spawn error] ${err.message}\n`);
+          logStream.end();
+          if (!resolved) {
+            resolved = true;
+            resolveResult({ ok: false, pid: null, logFile, error: err.message });
+          }
+          onComplete?.({
+            code: null, signal: null, logFile,
+            tail: `spawn error: ${err.message}`,
+            durationMs: Date.now() - startedAt,
+          });
         });
 
-        // 入力を流して unref (parent が終了しても子は走り続ける)
+        child.on("close", (code, signal) => {
+          const banner2 = `\n=== [${new Date().toISOString()}] exit code=${code} signal=${signal ?? "-"} duration=${Date.now() - startedAt}ms ===\n`;
+          logStream.write(banner2);
+          logStream.end();
+          // tail を読む (4KB)
+          let tail = "";
+          try {
+            if (existsSync(logFile)) {
+              const buf = readFileSync(logFile);
+              tail = buf.subarray(Math.max(0, buf.length - 4096)).toString("utf8");
+            }
+          } catch { /* ignore */ }
+          onComplete?.({
+            code, signal, logFile, tail,
+            durationMs: Date.now() - startedAt,
+          });
+        });
+
+        // 入力を流す
         child.stdin.end(prompt);
-        child.unref();
 
         // safety: timeout で kill
         const t = setTimeout(() => {
-          try { process.kill(-child.pid!, "SIGTERM"); } catch {}
+          try { child.kill("SIGTERM"); } catch {}
         }, this.opts.timeoutMs ?? 180_000);
         t.unref();
 
-        // spawn が即座に成功した場合は process error が来ないので
-        // 100ms 後に「成功」 とみなして返す
+        // 100ms 後に「spawn 成功」 とみなして即返却 (claude 自体は走らせ続ける)
         setTimeout(() => {
           if (resolved) return;
           resolved = true;
-          resolve({ ok: true, pid: child.pid ?? null });
+          resolveResult({ ok: true, pid: child.pid ?? null, logFile });
         }, 100);
       } catch (e: unknown) {
-        if (resolved) return;
-        resolved = true;
-        resolve({ ok: false, pid: null, error: e instanceof Error ? e.message : String(e) });
+        const msg = e instanceof Error ? e.message : String(e);
+        logStream.write(`\n[exception] ${msg}\n`);
+        logStream.end();
+        if (!resolved) {
+          resolved = true;
+          resolveResult({ ok: false, pid: null, logFile, error: msg });
+        }
+        onComplete?.({
+          code: null, signal: null, logFile,
+          tail: `exception: ${msg}`,
+          durationMs: Date.now() - startedAt,
+        });
       }
     });
   }

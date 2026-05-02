@@ -39,6 +39,7 @@ pnpm-debug.log*
 
 # DB / runtime data
 app_data/
+/claude-code-logs/
 *.db
 *.db-shm
 *.db-wal
