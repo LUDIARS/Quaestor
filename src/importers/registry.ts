@@ -6,9 +6,11 @@
 
 import type { Importer } from "../shared/types.js";
 import { ufjCsvImporter } from "./ufj-csv.js";
+import { amazonOrderHistoryImporter } from "./amazon-order-history.js";
 
 const IMPORTERS = new Map<string, Importer>([
   ["ufj", ufjCsvImporter],
+  ["amazon-order-history", amazonOrderHistoryImporter],
 ]);
 
 export function get(brand: string): Importer | undefined {
