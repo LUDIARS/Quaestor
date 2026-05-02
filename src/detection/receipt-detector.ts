@@ -47,9 +47,28 @@ export interface DetectorOptions {
   minFillRatio?: number;
   /** 上位何件返すか */
   topK?: number;
+  /** デバッグ用: 二値化 mask と縮小寸法を結果に同梱する */
+  returnDebug?: boolean;
 }
 
-export const DEFAULTS: Required<DetectorOptions> = {
+export interface DetectorDebug {
+  /** 縮小グレースケール画像 (length = w*h) */
+  gray: Uint8Array;
+  /** 二値化結果。 0=黒 / 1=白 (元) ですが flood fill 後は 2 (visited) になっている部分も含む */
+  mask: Uint8Array;
+  /** 縮小幅・高さ (px) */
+  width: number;
+  height: number;
+  /** Otsu 閾値 */
+  threshold: number;
+}
+
+export interface DetectionResult {
+  candidates: ReceiptCandidate[];
+  debug?: DetectorDebug;
+}
+
+export const DEFAULTS: Required<Omit<DetectorOptions, "returnDebug">> = {
   maxDim: 256,
   minAreaRatio: 0.04,    // 元画像面積の 4% 以上
   aspectMin: 0.25,       // 横長 (1:4) ~ 縦長 (4:1) を許容
@@ -137,7 +156,19 @@ export function detectReceiptCandidates(
   }
 
   candidates.sort((a, b) => b.score - a.score);
-  return candidates.slice(0, o.topK);
+  const top = candidates.slice(0, o.topK);
+
+  if (o.returnDebug) {
+    // mask の値: 0 / 1 / 2 (visited)。 表示用には 0 / 255 に正規化したコピーが欲しいが、
+    // 計算量を抑えるため呼び出し側で必要なら変換する。
+    return Object.assign(top, { __debug: { gray, mask, width: dw, height: dh, threshold } as DetectorDebug });
+  }
+  return top;
+}
+
+/** debug 同梱結果から mask + meta を取り出すヘルパ */
+export function extractDebug(candidates: ReceiptCandidate[] & { __debug?: DetectorDebug }): DetectorDebug | undefined {
+  return candidates.__debug;
 }
 
 /** Otsu's method — 256-bin histogram から自動閾値を計算 */
