@@ -4,12 +4,14 @@ import { YearTabs, currentYear } from "../components/YearTabs.js";
 interface Monthly { month: string; amount_in: number; amount_out: number; count: number }
 interface BySource { source: string; amount_in: number; amount_out: number; count: number }
 interface TopPayee { payee: string; total_out: number; count: number }
+interface TaxRow { label: string; amount: number; count: number }
 interface DashboardRes {
   range: { from: string; to: string };
   grand_total: { amount_in: number; amount_out: number; count: number };
   monthly: Monthly[];
   by_source: BySource[];
   top_payees: TopPayee[];
+  tax_breakdown?: TaxRow[];
 }
 
 export function Dashboard() {
@@ -136,6 +138,35 @@ export function Dashboard() {
           </table>
         </section>
       </div>
+
+      {data.tax_breakdown && data.tax_breakdown.length > 0 && (
+        <section className="last-capture" style={{ marginTop: "1rem" }}>
+          <h3 style={{ marginTop: 0, fontSize: "0.95rem" }}>
+            税金・社保 内訳
+            <span className="text-xs text-subtle ml-2">
+              合計 ¥{data.tax_breakdown.reduce((s, r) => s + r.amount, 0).toLocaleString()} ({data.tax_breakdown.length} 件)
+            </span>
+          </h3>
+          <table style={{ width: "100%", fontSize: "0.8rem", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                <th style={{ textAlign: "left", padding: "0.3rem" }}>摘要</th>
+                <th style={{ textAlign: "right", padding: "0.3rem" }}>件数</th>
+                <th style={{ textAlign: "right", padding: "0.3rem" }}>金額</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.tax_breakdown.map((t) => (
+                <tr key={t.label} style={{ borderBottom: "1px dotted var(--border)" }}>
+                  <td style={{ padding: "0.3rem" }}>{t.label}</td>
+                  <td style={{ padding: "0.3rem", textAlign: "right" }}>{t.count}</td>
+                  <td style={{ padding: "0.3rem", textAlign: "right", color: "var(--danger)" }}>¥{t.amount.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
     </div>
   );
 }
