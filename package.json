@@ -13,7 +13,10 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit -p tsconfig.json"
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "tauri": "cargo --manifest-path src-tauri/Cargo.toml",
+    "tauri:dev": "cargo run --manifest-path src-tauri/Cargo.toml",
+    "tauri:build": "cargo build --release --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
