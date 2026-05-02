@@ -32,6 +32,8 @@ export interface ReceiptCandidate {
     fillRatio: number;
     aspectRatio: number;
     areaRatio: number;
+    /** 0..1、 1 = 左右エッジが完全に縦平行 (低い分散) */
+    parallelismScore: number;
   };
 }
 
@@ -49,6 +51,14 @@ export interface DetectorOptions {
   topK?: number;
   /** デバッグ用: 二値化 mask と縮小寸法を結果に同梱する */
   returnDebug?: boolean;
+  /**
+   * 白判定の固定閾値 (0..255)。 指定時は Otsu を使わず R/G/B が全部 this 以上のピクセルを「白」 にする。
+   * レシートは大体白いので、 適応閾値 (Otsu) より固定閾値の方が安定して取れることが多い。
+   * Scan UI 側で 1 秒毎に -1 する想定 (初期値 234)。
+   */
+  whiteThreshold?: number;
+  /** 平行性 (左右エッジ分散) の最低値。 既定 0.3 */
+  minParallelism?: number;
 }
 
 export interface DetectorDebug {
@@ -56,10 +66,12 @@ export interface DetectorDebug {
   gray: Uint8Array;
   /** 二値化結果。 0=黒 / 1=白 (元) ですが flood fill 後は 2 (visited) になっている部分も含む */
   mask: Uint8Array;
+  /** Sobel 勾配強度 (0..255 にクランプ) — 色差分境界の可視化用 */
+  edge: Uint8Array;
   /** 縮小幅・高さ (px) */
   width: number;
   height: number;
-  /** Otsu 閾値 */
+  /** 白判定 / Otsu 閾値 */
   threshold: number;
 }
 
@@ -68,13 +80,14 @@ export interface DetectionResult {
   debug?: DetectorDebug;
 }
 
-export const DEFAULTS: Required<Omit<DetectorOptions, "returnDebug">> = {
+export const DEFAULTS: Required<Omit<DetectorOptions, "returnDebug" | "whiteThreshold">> = {
   maxDim: 256,
   minAreaRatio: 0.04,    // 元画像面積の 4% 以上
   aspectMin: 0.25,       // 横長 (1:4) ~ 縦長 (4:1) を許容
   aspectMax: 4.0,
   minFillRatio: 0.6,     // 連結成分の bbox 充填率 60% 以上 = ほぼ矩形
   topK: 3,
+  minParallelism: 0.3,
 };
 
 /**
@@ -97,8 +110,11 @@ export function detectReceiptCandidates(
   const dw = Math.max(8, Math.round(width * scale));
   const dh = Math.max(8, Math.round(height * scale));
 
-  // 2-3. Nearest neighbor で縮小 + グレースケール化
+  // 2. Nearest neighbor で縮小 + グレースケール化 + RGB ベース白判定 mask 同時生成
   const gray = new Uint8Array(dw * dh);
+  const mask = new Uint8Array(dw * dh);
+  const useWhite = typeof opts.whiteThreshold === "number";
+  const wT = opts.whiteThreshold ?? 0;
   const sx = width / dw;
   const sy = height / dh;
   for (let y = 0; y < dh; y++) {
@@ -106,22 +122,32 @@ export function detectReceiptCandidates(
     for (let x = 0; x < dw; x++) {
       const srcX = Math.floor(x * sx);
       const i = (srcY * width + srcX) * 4;
-      // Rec.601 加重輝度
       const r = rgba[i] ?? 0;
       const g = rgba[i + 1] ?? 0;
       const b = rgba[i + 2] ?? 0;
       gray[y * dw + x] = (0.299 * r + 0.587 * g + 0.114 * b) | 0;
+      if (useWhite) {
+        mask[y * dw + x] = (r >= wT && g >= wT && b >= wT) ? 1 : 0;
+      }
     }
   }
 
-  // 4. Otsu 閾値
-  const threshold = otsu(gray);
-  const mask = new Uint8Array(dw * dh);
-  for (let i = 0; i < gray.length; i++) {
-    mask[i] = gray[i]! >= threshold ? 1 : 0;
+  // 3. mask 確定: whiteThreshold 指定時はもう生成済、 そうでなければ Otsu
+  let threshold: number;
+  if (useWhite) {
+    threshold = wT;
+  } else {
+    threshold = otsu(gray);
+    for (let i = 0; i < gray.length; i++) {
+      mask[i] = gray[i]! >= threshold ? 1 : 0;
+    }
   }
 
-  // 5. 連結成分 flood fill (4-連結)
+  // 4.5. Sobel 勾配 = エッジ map (色差分境界)
+  const edge = sobel(gray, dw, dh);
+
+  // 5. 連結成分 flood fill (4-連結)。 mask は破壊変更されるので保存用に copy
+  const maskCopy = new Uint8Array(mask);
   const components = floodFill4(mask, dw, dh);
 
   // 6-7. scoring + filter
@@ -143,25 +169,42 @@ export function detectReceiptCandidates(
     if (aspectRatio < o.aspectMin || aspectRatio > o.aspectMax) continue;
     if (fillRatio < o.minFillRatio) continue;
 
-    // score = 占有率 × 矩形性 × 中心バイアス
+    // 平行性チェック: 左右エッジの x 座標 (各 row の最 left/right の visited pixel)
+    // の std-dev が小さいほど縦平行 → score 高い
+    const parallelism = parallelismScore(mask, dw, c);
+    if (parallelism < o.minParallelism) continue;
+
+    // エッジ強度: bbox 周囲の Sobel 勾配 平均 (高 = 強い境界が見えている)
+    const edgeStrength = perimeterEdgeStrength(edge, dw, dh, c);
+
+    // score = fillRatio + parallelism + areaRatio + center + edge
     const cx = (c.minX + c.maxX) / 2 / dw;
     const cy = (c.minY + c.maxY) / 2 / dh;
     const centerness = 1 - Math.hypot(cx - 0.5, cy - 0.5);
-    const score = clamp01(0.5 * fillRatio + 0.3 * centerness + 0.2 * Math.min(1, areaRatio * 4));
+    const score = clamp01(
+      0.30 * fillRatio +
+      0.25 * parallelism +
+      0.20 * Math.min(1, edgeStrength / 80) +
+      0.15 * centerness +
+      0.10 * Math.min(1, areaRatio * 4),
+    );
 
     candidates.push({
       x, y, width: ww, height: hh, score,
-      meta: { downscaleW: dw, downscaleH: dh, threshold, fillRatio, aspectRatio, areaRatio },
+      meta: {
+        downscaleW: dw, downscaleH: dh, threshold,
+        fillRatio, aspectRatio, areaRatio, parallelismScore: parallelism,
+      },
     });
   }
 
   candidates.sort((a, b) => b.score - a.score);
   const top = candidates.slice(0, o.topK);
 
-  if (o.returnDebug) {
-    // mask の値: 0 / 1 / 2 (visited)。 表示用には 0 / 255 に正規化したコピーが欲しいが、
-    // 計算量を抑えるため呼び出し側で必要なら変換する。
-    return Object.assign(top, { __debug: { gray, mask, width: dw, height: dh, threshold } as DetectorDebug });
+  if (opts.returnDebug) {
+    return Object.assign(top, {
+      __debug: { gray, mask, edge, width: dw, height: dh, threshold } as DetectorDebug,
+    });
   }
   return top;
 }
@@ -240,6 +283,80 @@ function floodFill4(mask: Uint8Array, w: number, h: number): Component[] {
 
 function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/**
+ * Sobel-like 勾配強度 (|dx| + |dy|、 0..255 にクランプ) を返す。
+ * 色差分の境界を強調する目的なので軽量実装。
+ */
+function sobel(gray: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const dx =
+        -gray[i - w - 1]! - 2 * gray[i - 1]! - gray[i + w - 1]! +
+        gray[i - w + 1]! + 2 * gray[i + 1]! + gray[i + w + 1]!;
+      const dy =
+        -gray[i - w - 1]! - 2 * gray[i - w]! - gray[i - w + 1]! +
+        gray[i + w - 1]! + 2 * gray[i + w]! + gray[i + w + 1]!;
+      const m = (Math.abs(dx) + Math.abs(dy)) >> 2;  // 1/4 でクランプ範囲を 0..255 に収める
+      out[i] = m > 255 ? 255 : m;
+    }
+  }
+  return out;
+}
+
+/**
+ * 連結成分の左右エッジ x 座標を行ごとに取得 → 標準偏差 (相対) で平行性を測る。
+ * 完全な縦平行な矩形なら left/right が定数 → std-dev=0 → score=1。
+ */
+function parallelismScore(mask: Uint8Array, w: number, c: Component): number {
+  const lefts: number[] = [];
+  const rights: number[] = [];
+  for (let y = c.minY; y <= c.maxY; y++) {
+    let l = -1, r = -1;
+    for (let x = c.minX; x <= c.maxX; x++) {
+      if (mask[y * w + x] === 2) {
+        if (l < 0) l = x;
+        r = x;
+      }
+    }
+    if (l >= 0) { lefts.push(l); rights.push(r); }
+  }
+  if (lefts.length < 4) return 0;
+  const sd = (arr: number[]) => {
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const v = arr.reduce((a, b) => a + (b - mean) ** 2, 0) / arr.length;
+    return Math.sqrt(v);
+  };
+  const compW = c.maxX - c.minX + 1;
+  // sd を component 幅で正規化 → 0 が完全平行、 0.3+ で大きく揺れている
+  const left = sd(lefts) / compW;
+  const right = sd(rights) / compW;
+  const avg = (left + right) / 2;
+  return clamp01(1 - avg * 4); // 0.25 の sd で 0 にする調整
+}
+
+/**
+ * 連結成分の bbox の 4 辺周辺 (内外 1px) で edge 勾配の平均強度を返す。
+ * レシートの実エッジが映ってる場合、 周囲の edge map に高い値が並ぶ。
+ */
+function perimeterEdgeStrength(edge: Uint8Array, w: number, h: number, c: Component): number {
+  let sum = 0, n = 0;
+  const top = Math.max(0, c.minY);
+  const bot = Math.min(h - 1, c.maxY);
+  const lft = Math.max(0, c.minX);
+  const rgt = Math.min(w - 1, c.maxX);
+  for (let x = lft; x <= rgt; x++) {
+    sum += edge[top * w + x] ?? 0; n++;
+    sum += edge[bot * w + x] ?? 0; n++;
+  }
+  for (let y = top; y <= bot; y++) {
+    sum += edge[y * w + lft] ?? 0; n++;
+    sum += edge[y * w + rgt] ?? 0; n++;
+  }
+  return n > 0 ? sum / n : 0;
 }
 
 /**

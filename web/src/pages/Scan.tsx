@@ -11,6 +11,7 @@ interface DetectionState {
   stable: boolean;
   fps: number;
   threshold: number;
+  parallelism: number;
 }
 
 interface CaptureState {
@@ -31,8 +32,11 @@ export function Scan() {
   const debugRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionState>({
-    candidate: null, stable: false, fps: 0, threshold: 0,
+    candidate: null, stable: false, fps: 0, threshold: 234, parallelism: 0,
   });
+  // 白判定閾値: 1 秒に 1 ずつ下げる、 floor 180、 stable で 234 にリセット
+  const whiteThresholdRef = useRef(234);
+  const lastDecayAtRef = useRef(performance.now());
   const [running, setRunning] = useState(false);
   const [lastCapture, setLastCapture] = useState<CaptureState | null>(null);
   const [posting, setPosting] = useState(false);
@@ -80,6 +84,7 @@ export function Scan() {
 
       const vw = video.videoWidth;
       const vh = video.videoHeight;
+      const now = performance.now();
 
       // 検出用 low-res canvas (毎ループ作り直すのは無駄なので持ち回す)
       const low = ensureWorkCanvas(vw, vh);
@@ -90,13 +95,24 @@ export function Scan() {
       ctx.drawImage(video, 0, 0, targetW, targetH);
       const imgData = ctx.getImageData(0, 0, targetW, targetH);
 
+      // 1 秒毎に whiteThreshold を 1 ずつ下げる (検出無し時)。 stable 検出が出たら 234 にリセット
+      if (now - lastDecayAtRef.current > 1000) {
+        if (whiteThresholdRef.current > 180) whiteThresholdRef.current -= 1;
+        lastDecayAtRef.current = now;
+      }
+
       const cands = detectReceiptCandidates(imgData.data as unknown as Uint8Array, targetW, targetH, {
         maxDim: Math.max(targetW, targetH),  // 既に縮小済なので追加縮小なし
         returnDebug: true,
+        whiteThreshold: whiteThresholdRef.current,
       });
       const top = cands[0] ?? null;
+      // 候補が出た瞬間に decay timer を緩める (大きく下げ過ぎないため)
+      if (top && top.score >= 0.5) {
+        lastDecayAtRef.current = now;
+      }
 
-      // debug プレビュー: mask を別 canvas に描画
+      // debug プレビュー: white mask + edge map を別 canvas に合成描画
       const dbg = extractDebug(cands as ReceiptCandidate[] & { __debug?: import("../../../src/detection/receipt-detector.js").DetectorDebug });
       const debugCanvas = debugRef.current;
       if (dbg && debugCanvas) {
@@ -109,12 +125,19 @@ export function Scan() {
           const out = dctx.createImageData(dbg.width, dbg.height);
           for (let i = 0; i < dbg.gray.length; i++) {
             const m = dbg.mask[i] ?? 0;
-            // mask=1 (元の白) は明るい青、 mask=2 (検出された連結成分) は緑、 0 は元のグレー
+            const e = dbg.edge[i] ?? 0;
             const g = dbg.gray[i] ?? 0;
             let r = 0, gr = 0, b = 0;
-            if (m === 2) { r = 60; gr = 220; b = 100; }       // detected component
-            else if (m === 1) { r = 100; gr = 160; b = 250; } // bright but not in component
-            else { r = gr = b = Math.floor(g * 0.5); }        // dim background
+            if (m === 2) { r = 60; gr = 220; b = 100; }       // detected component (緑)
+            else if (m === 1) { r = 100; gr = 160; b = 250; } // 白 (青)
+            else { r = gr = b = Math.floor(g * 0.4); }        // 背景 (暗グレー)
+            // edge 強度を赤 channel に上乗せ (色差分境界が ハイライトされる)
+            if (e > 50) {
+              const boost = Math.min(255, e * 2);
+              r = Math.min(255, r + boost);
+              gr = Math.max(0, gr - 30);
+              b = Math.max(0, b - 30);
+            }
             const j = i * 4;
             out.data[j] = r;
             out.data[j + 1] = gr;
@@ -155,7 +178,6 @@ export function Scan() {
 
       // FPS 計測
       frameCount++;
-      const now = performance.now();
       if (now - fpsSampleAt > 500) {
         const fps = (frameCount * 1000) / (now - fpsSampleAt);
         frameCount = 0;
@@ -164,7 +186,8 @@ export function Scan() {
           candidate: native,
           stable: tres.stable,
           fps,
-          threshold: top?.meta.threshold ?? 0,
+          threshold: whiteThresholdRef.current,
+          parallelism: top?.meta.parallelismScore ?? 0,
         });
       }
 
@@ -177,9 +200,10 @@ export function Scan() {
           console.warn("[scan] speculative upload failed:", e);
         });
       }
-      // stable 確定もそのまま保持: 確定キャプチャは 3 秒 cooldown で 1 件
+      // stable 確定もそのまま保持: 確定キャプチャは 3 秒 cooldown で 1 件 + 閾値リセット
       if (tres.stable && tres.candidate && now > captureCooldownRef.current) {
         captureCooldownRef.current = now + 3000;
+        whiteThresholdRef.current = 234;  // reset on success
         captureAndUpload(video, tres.candidate, "stable").catch((e) => {
           setError(e instanceof Error ? e.message : String(e));
         });
@@ -314,8 +338,10 @@ export function Scan() {
         {error ? <span className="error">{error}</span> : null}
         {!error && (
           <>
-            running: {running ? "yes" : "no"} ｜ fps: {detection.fps.toFixed(1)} ｜ otsu: {detection.threshold} ｜
+            running: {running ? "yes" : "no"} ｜ fps: {detection.fps.toFixed(1)} ｜
+            white≥<strong style={{ color: "var(--c-accent)" }}>{detection.threshold}</strong> (1s毎-1) ｜
             score: {detection.candidate ? detection.candidate.score.toFixed(2) : "-"} ｜
+            ‖ {detection.parallelism.toFixed(2)} ｜
             {detection.stable ? <span className="stable">STABLE</span> : "tracking"}
             {posting ? " ｜ posting…" : null}
           </>
