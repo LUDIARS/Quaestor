@@ -35,10 +35,10 @@ export class TransactionsRepo {
           `INSERT INTO transactions
            (id, date, amount_in, amount_out, currency, fx_amount, fx_currency,
             description, payee, source, source_id, account, import_id, metadata,
-            created_at, updated_at)
+            is_transfer, created_at, updated_at)
            VALUES (@id,@date,@amount_in,@amount_out,@currency,@fx_amount,@fx_currency,
                    @description,@payee,@source,@source_id,@account,@import_id,@metadata,
-                   @created_at,@updated_at)`,
+                   @is_transfer,@created_at,@updated_at)`,
         )
         .run({
           id,
@@ -55,6 +55,7 @@ export class TransactionsRepo {
           account: input.account,
           import_id: input.import_id ?? null,
           metadata: JSON.stringify(input.metadata),
+          is_transfer: input.is_transfer ? 1 : 0,
           created_at: now,
           updated_at: now,
         });

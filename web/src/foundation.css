@@ -60,7 +60,7 @@ pre {
     @apply bg-surface border border-border rounded-md p-3;
   }
   .fd-section {
-    @apply bg-surface/40 border border-border rounded-md p-4;
+    @apply bg-surface border border-border rounded-md p-4;
   }
   .fd-btn {
     @apply inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-medium
@@ -92,14 +92,14 @@ pre {
     @apply text-left font-medium text-subtle p-2 border-b border-border;
   }
   .fd-table td {
-    @apply p-2 border-b border-border/50;
+    @apply p-2 border-b border-border;
   }
   .fd-badge {
     @apply inline-block px-1.5 py-0.5 rounded text-xs font-medium;
   }
-  .fd-badge-ok { @apply bg-ok/20 text-ok; }
-  .fd-badge-warn { @apply bg-warn/20 text-warn; }
-  .fd-badge-danger { @apply bg-danger/20 text-danger; }
+  .fd-badge-ok { @apply bg-muted text-ok border border-ok; }
+  .fd-badge-warn { @apply bg-muted text-warn border border-warn; }
+  .fd-badge-danger { @apply bg-muted text-danger border border-danger; }
   .fd-badge-muted { @apply bg-muted text-subtle; }
 }
 

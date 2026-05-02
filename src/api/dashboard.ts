@@ -52,7 +52,7 @@ export function dashboardRouter(deps: { db: Database.Database }): Hono {
                 COALESCE(SUM(amount_out), 0) AS amount_out,
                 COUNT(*) AS count
          FROM transactions
-         WHERE date >= ? AND date <= ?
+         WHERE date >= ? AND date <= ? AND is_transfer = 0
          GROUP BY month
          ORDER BY month ASC`,
       )
@@ -66,7 +66,7 @@ export function dashboardRouter(deps: { db: Database.Database }): Hono {
                 COALESCE(SUM(amount_out), 0) AS amount_out,
                 COUNT(*) AS count
          FROM transactions
-         WHERE date >= ? AND date <= ?
+         WHERE date >= ? AND date <= ? AND is_transfer = 0
          GROUP BY source
          ORDER BY amount_out DESC`,
       )
@@ -79,7 +79,7 @@ export function dashboardRouter(deps: { db: Database.Database }): Hono {
                 COALESCE(SUM(amount_out), 0) AS total_out,
                 COUNT(*) AS count
          FROM transactions
-         WHERE date >= ? AND date <= ?
+         WHERE date >= ? AND date <= ? AND is_transfer = 0
            AND payee IS NOT NULL AND amount_out IS NOT NULL
          GROUP BY payee
          ORDER BY total_out DESC
@@ -94,7 +94,7 @@ export function dashboardRouter(deps: { db: Database.Database }): Hono {
                 COALESCE(SUM(amount_out), 0) AS amount_out,
                 COUNT(*) AS count
          FROM transactions
-         WHERE date >= ? AND date <= ?`,
+         WHERE date >= ? AND date <= ? AND is_transfer = 0`,
       )
       .get(dateFrom, dateTo) as { amount_in: number; amount_out: number; count: number };
 

@@ -81,6 +81,23 @@ export class ReceiptsRepo {
     return r.changes > 0;
   }
 
+  /**
+   * 直近 windowSec 秒以内に同じ image_hash を持つ receipt を返す。
+   * Scanner の投機的実行で同じフレームを連続送信した場合の dedup 用。
+   */
+  findRecentByImageHash(imageHash: string, windowSec: number = 30): ReceiptRow | undefined {
+    const cutoff = nowSec() - windowSec;
+    return this.db
+      .prepare(
+        `SELECT * FROM receipts
+         WHERE captured_at >= ?
+           AND json_extract(metadata, '$.image_hash') = ?
+         ORDER BY captured_at DESC
+         LIMIT 1`,
+      )
+      .get(cutoff, imageHash) as ReceiptRow | undefined;
+  }
+
   find(id: string): ReceiptRow | undefined {
     return this.db.prepare(`SELECT * FROM receipts WHERE id = ?`).get(id) as ReceiptRow | undefined;
   }

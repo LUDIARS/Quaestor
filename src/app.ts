@@ -12,6 +12,7 @@ import { ApportionmentRulesRepo } from "./db/apportionment-rules-repo.js";
 import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { InvoicesRepo } from "./db/invoices-repo.js";
+import { FinancialStatementsRepo } from "./db/financial-statements-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
@@ -25,6 +26,7 @@ import { reconciliationsRouter } from "./api/reconciliations.js";
 import { exportsRouter } from "./api/exports.js";
 import { invoicesRouter } from "./api/invoices.js";
 import { dashboardRouter } from "./api/dashboard.js";
+import { financialStatementsRouter } from "./api/financial-statements.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -43,6 +45,7 @@ export function buildApp(deps: AppDeps): Hono {
   const receipts = new ReceiptsRepo(deps.db);
   const reconciliations = new ReconciliationsRepo(deps.db);
   const invoices = new InvoicesRepo(deps.db);
+  const fs = new FinancialStatementsRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
 
   // 初回起動時の seed (account_codes が先、 apportionment_rules は account_codes に FK 依存)
@@ -75,6 +78,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
   app.route("/v1/invoices", invoicesRouter({ repo: invoices }));
   app.route("/v1/dashboard", dashboardRouter({ db: deps.db }));
+  app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));
 
   return app;
 }

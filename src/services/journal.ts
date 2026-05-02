@@ -67,11 +67,11 @@ export function buildJournal(
   rules: ApportionmentRulesRepo,
   opts: BuildJournalOptions,
 ): JournalEntry[] {
-  const where: string[] = [];
+  const where: string[] = ["is_transfer = 0"];
   const params: unknown[] = [];
   if (opts.date_from) { where.push("date >= ?"); params.push(opts.date_from); }
   if (opts.date_to) { where.push("date <= ?"); params.push(opts.date_to); }
-  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const whereSql = `WHERE ${where.join(" AND ")}`;
   const txs = db
     .prepare(`SELECT * FROM transactions ${whereSql} ORDER BY date ASC, created_at ASC`)
     .all(...params) as TransactionRow[];

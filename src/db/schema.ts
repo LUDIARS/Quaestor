@@ -131,6 +131,24 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status, issued_at)`,
   `CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client)`,
   `CREATE INDEX IF NOT EXISTS idx_invoices_tx ON invoices(transaction_id)`,
+
+  // financial_statements — 年次決算書 (損益計算書 P&L、 貸借対照表 BS、 月別売上、 控除等)
+  // 2025 のような実値はxlsx取込で source='imported' として入る。 他年度は計算 ('computed') 。
+  `CREATE TABLE IF NOT EXISTS financial_statements (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    year          INTEGER NOT NULL,
+    section       TEXT NOT NULL,
+    label         TEXT NOT NULL,
+    amount        INTEGER,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    metadata      TEXT,
+    source        TEXT NOT NULL DEFAULT 'manual',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    UNIQUE(year, section, label)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_fs_year ON financial_statements(year, section, display_order)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -139,5 +157,15 @@ export function applyMigrations(db: Database.Database): void {
   db.transaction(() => {
     for (const sql of STATEMENTS) db.exec(sql);
   })();
-  db.pragma("user_version = 1");
+  // 追加カラム (冪等的に追加)
+  ensureColumn(db, "transactions", "is_transfer", "INTEGER NOT NULL DEFAULT 0");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_tx_transfer ON transactions(is_transfer)");
+  db.pragma("user_version = 2");
+}
+
+/** 既に column が存在する DB に対しても安全な ADD COLUMN */
+function ensureColumn(db: Database.Database, table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
 }
