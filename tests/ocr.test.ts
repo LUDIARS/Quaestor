@@ -154,6 +154,31 @@ describe("API: POST /v1/receipts/:id/ocr/run", () => {
     expect(j.receipt.total).toBe(1820);
   });
 
+  it("/ocr/run は 2 秒以内の連続呼び出しを throttle する", async () => {
+    app = buildApp({
+      db: new Database(":memory:"),
+      receiptsRoot,
+      ocr: new FakeOcrClient(HIGH_CONFIDENCE_RESULT),
+    });
+    const create = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: PNG_1x1, ext: "png" }),
+    });
+    const id = ((await create.json()) as { receipt: { id: string } }).receipt.id;
+
+    const r1 = await app.request(`/v1/receipts/${id}/ocr/run`, { method: "POST" });
+    expect(r1.status).toBe(200);
+    const j1 = await r1.json() as { throttled?: boolean };
+    expect(j1.throttled).toBeFalsy();
+
+    // 即座の 2 回目は throttle される
+    const r2 = await app.request(`/v1/receipts/${id}/ocr/run`, { method: "POST" });
+    expect(r2.status).toBe(200);
+    const j2 = await r2.json() as { throttled?: boolean };
+    expect(j2.throttled).toBe(true);
+  });
+
   it("health endpoint reports ocr_enabled flag", async () => {
     const enabledApp = buildApp({
       db: new Database(":memory:"),
