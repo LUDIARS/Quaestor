@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   detectReceiptCandidates,
+  extractDebug,
   StableDetectionTracker,
   type ReceiptCandidate,
 } from "../../../src/detection/receipt-detector.js";
@@ -18,9 +19,16 @@ interface CaptureState {
   size: number;
 }
 
+interface SpecStats {
+  sent: number;
+  deduped: number;
+  inserted: number;
+}
+
 export function Scan() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const debugRef = useRef<HTMLCanvasElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionState>({
     candidate: null, stable: false, fps: 0, threshold: 0,
@@ -28,6 +36,8 @@ export function Scan() {
   const [running, setRunning] = useState(false);
   const [lastCapture, setLastCapture] = useState<CaptureState | null>(null);
   const [posting, setPosting] = useState(false);
+  const [specStats, setSpecStats] = useState<SpecStats>({ sent: 0, deduped: 0, inserted: 0 });
+  const specStatsRef = useRef<SpecStats>({ sent: 0, deduped: 0, inserted: 0 });
 
   // detection loop の handle と tracker は ref で持つ (state にすると再 render で reset)
   const trackerRef = useRef(new StableDetectionTracker(5, 0.6, 0.55));
@@ -82,8 +92,38 @@ export function Scan() {
 
       const cands = detectReceiptCandidates(imgData.data as unknown as Uint8Array, targetW, targetH, {
         maxDim: Math.max(targetW, targetH),  // 既に縮小済なので追加縮小なし
+        returnDebug: true,
       });
       const top = cands[0] ?? null;
+
+      // debug プレビュー: mask を別 canvas に描画
+      const dbg = extractDebug(cands as ReceiptCandidate[] & { __debug?: import("../../../src/detection/receipt-detector.js").DetectorDebug });
+      const debugCanvas = debugRef.current;
+      if (dbg && debugCanvas) {
+        if (debugCanvas.width !== dbg.width || debugCanvas.height !== dbg.height) {
+          debugCanvas.width = dbg.width;
+          debugCanvas.height = dbg.height;
+        }
+        const dctx = debugCanvas.getContext("2d");
+        if (dctx) {
+          const out = dctx.createImageData(dbg.width, dbg.height);
+          for (let i = 0; i < dbg.gray.length; i++) {
+            const m = dbg.mask[i] ?? 0;
+            // mask=1 (元の白) は明るい青、 mask=2 (検出された連結成分) は緑、 0 は元のグレー
+            const g = dbg.gray[i] ?? 0;
+            let r = 0, gr = 0, b = 0;
+            if (m === 2) { r = 60; gr = 220; b = 100; }       // detected component
+            else if (m === 1) { r = 100; gr = 160; b = 250; } // bright but not in component
+            else { r = gr = b = Math.floor(g * 0.5); }        // dim background
+            const j = i * 4;
+            out.data[j] = r;
+            out.data[j + 1] = gr;
+            out.data[j + 2] = b;
+            out.data[j + 3] = 255;
+          }
+          dctx.putImageData(out, 0, 0);
+        }
+      }
 
       // tracker (元画像 native 解像度に合わせて bbox を返却するよう candidate を補正)
       const native = top
@@ -128,13 +168,12 @@ export function Scan() {
         });
       }
 
-      // 投機的実行: score >= 0.55 の白枠候補があれば 1 秒間隔で即キャプチャ → POST
+      // 投機的実行: score >= 0.5 の白枠候補があれば 300ms 間隔で即キャプチャ → POST
       // サーバ側で dedup hash により同じ画像は無視される (重複は 2 回目以降を捨てる)
-      if (native && native.score >= 0.55 && now > speculativeCooldownRef.current) {
-        speculativeCooldownRef.current = now + 800;  // 0.8 秒間隔
+      if (native && native.score >= 0.5 && now > speculativeCooldownRef.current) {
+        speculativeCooldownRef.current = now + 300;
         const bbox = native;
         captureAndUpload(video, bbox, "speculative").catch((e) => {
-          // 投機実行の失敗は控えめに通知
           console.warn("[scan] speculative upload failed:", e);
         });
       }
@@ -186,6 +225,9 @@ export function Scan() {
       const b64 = btoa(String.fromCharCode(...buf));
       const geo = kind === "stable" ? await tryGetGeo() : null;
 
+      if (kind === "speculative") {
+        specStatsRef.current.sent++;
+      }
       const res = await fetch("/v1/receipts", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -214,12 +256,20 @@ export function Scan() {
         stored_size: number;
         deduped?: boolean;
       };
+      if (kind === "speculative") {
+        if (j.deduped) specStatsRef.current.deduped++;
+        else specStatsRef.current.inserted++;
+        setSpecStats({ ...specStatsRef.current });
+      }
       // server-side dedup によって既存 receipt が返ったら state 更新は最後勝ち
-      setLastCapture({
-        receipt_id: j.receipt.id,
-        image_url: `/v1/receipts/${j.receipt.id}/image`,
-        size: j.stored_size,
-      });
+      // 但し investitive (kind=stable) でない speculative の dedup 結果は state 上書きしない
+      if (kind === "stable" || !j.deduped) {
+        setLastCapture({
+          receipt_id: j.receipt.id,
+          image_url: `/v1/receipts/${j.receipt.id}/image`,
+          size: j.stored_size,
+        });
+      }
     } finally {
       if (kind === "stable") setPosting(false);
     }
@@ -232,9 +282,33 @@ export function Scan() {
         カメラを許可して、 レシート (白い縦長矩形) をプレビュー枠の中央に映してください。
         <strong> 緑枠</strong> になったら自動キャプチャ → backend に POST 。
       </p>
-      <div className="scan-stage">
-        <video ref={videoRef} muted playsInline />
-        <canvas ref={overlayRef} />
+      <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div className="scan-stage">
+          <video ref={videoRef} muted playsInline />
+          <canvas ref={overlayRef} />
+        </div>
+        <div style={{ minWidth: 160 }}>
+          <div className="text-xs text-subtle mb-1">検出ビュー (二値化 + 連結成分)</div>
+          <canvas
+            ref={debugRef}
+            style={{
+              width: 192,
+              height: 384,
+              imageRendering: "pixelated",
+              border: "1px solid var(--c-border)",
+              borderRadius: 4,
+              background: "var(--c-bg)",
+            }}
+          />
+          <div className="text-xs text-subtle mt-2 mb-1">検出スコア</div>
+          <ScoreGauge value={detection.candidate?.score ?? 0} stable={detection.stable} />
+          <div className="text-xs text-subtle mt-3">
+            投機キャプチャ:<br />
+            送信 <strong className="text-text">{specStats.sent}</strong>{" "}
+            / 採用 <strong className="text-ok">{specStats.inserted}</strong>{" "}
+            / 重複 <strong className="text-subtle">{specStats.deduped}</strong>
+          </div>
+        </div>
       </div>
       <div className="scan-meta">
         {error ? <span className="error">{error}</span> : null}
@@ -277,6 +351,51 @@ function ensureWorkCanvas(vw: number, vh: number): { canvas: HTMLCanvasElement; 
   work.targetW = tw;
   work.targetH = th;
   return { canvas: work.canvas, targetW: tw, targetH: th };
+}
+
+function ScoreGauge({ value, stable }: { value: number; stable: boolean }) {
+  const pct = Math.max(0, Math.min(1, value));
+  const color = stable
+    ? "var(--c-ok)"
+    : pct >= 0.55
+      ? "var(--c-accent)"
+      : pct >= 0.35
+        ? "var(--c-warn)"
+        : "var(--c-danger)";
+  return (
+    <div style={{ width: 192 }}>
+      <div
+        style={{
+          height: 14,
+          background: "var(--c-muted)",
+          borderRadius: 7,
+          overflow: "hidden",
+          border: "1px solid var(--c-border)",
+        }}
+      >
+        <div
+          style={{
+            width: `${pct * 100}%`,
+            height: "100%",
+            background: color,
+            transition: "width 80ms linear, background 200ms",
+          }}
+        />
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "var(--c-subtle)", marginTop: 2 }}>
+        <span>0</span>
+        <span style={{ fontFamily: "ui-monospace, monospace", color: "var(--c-text)" }}>
+          {(pct * 100).toFixed(0)}%
+        </span>
+        <span>100</span>
+      </div>
+      {/* 0.5 と 0.85 の閾値ライン */}
+      <div style={{ position: "relative", marginTop: -16, height: 14, pointerEvents: "none" }}>
+        <div style={{ position: "absolute", left: "50%", top: -14, height: 14, borderLeft: "1px dashed var(--c-warn)" }} />
+        <div style={{ position: "absolute", left: "85%", top: -14, height: 14, borderLeft: "1px dashed var(--c-ok)" }} />
+      </div>
+    </div>
+  );
 }
 
 async function tryGetGeo(): Promise<{ lat: number; lon: number; accuracy?: number } | null> {
