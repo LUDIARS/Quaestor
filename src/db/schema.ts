@@ -93,6 +93,22 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(date)`,
   `CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(ocr_status)`,
   `CREATE INDEX IF NOT EXISTS idx_receipts_captured ON receipts(captured_at)`,
+
+  // reconciliations — receipt と transaction の確定リンク
+  `CREATE TABLE IF NOT EXISTS reconciliations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    receipt_id      TEXT NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+    transaction_id  TEXT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    matched_by      TEXT NOT NULL CHECK (matched_by IN ('auto','manual')),
+    confidence      REAL NOT NULL,
+    notes           TEXT,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL,
+    UNIQUE (receipt_id, transaction_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_recon_receipt ON reconciliations(receipt_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_recon_tx ON reconciliations(transaction_id)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
