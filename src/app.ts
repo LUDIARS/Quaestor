@@ -69,7 +69,7 @@ export function buildApp(deps: AppDeps): Hono {
     ocr_enabled: ocrEnabled,
   }));
 
-  app.route("/v1/transactions", transactionsRouter({ txs }));
+  app.route("/v1/transactions", transactionsRouter({ txs, db: deps.db }));
   app.route("/v1/imports", importsRouter({ imports, txs, smart }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));

@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import type Database from "better-sqlite3";
 import type { TransactionsRepo, ListFilter } from "../db/transactions-repo.js";
+import { findAmazonLink } from "../services/amazon-link.js";
 
 const ListQuerySchema = z.object({
   source: z.enum(["credit-card", "bank", "amazon", "receipt", "manual"]).optional(),
@@ -14,6 +16,7 @@ const ListQuerySchema = z.object({
 
 export interface TransactionsApiDeps {
   txs: TransactionsRepo;
+  db: Database.Database;
 }
 
 export function transactionsRouter(deps: TransactionsApiDeps): Hono {
@@ -32,6 +35,14 @@ export function transactionsRouter(deps: TransactionsApiDeps): Hono {
     const t = deps.txs.find(c.req.param("id"));
     if (!t) return c.json({ error: "not_found" }, 404);
     return c.json({ transaction: t });
+  });
+
+  // GET /v1/transactions/:id/amazon-link — クレカ Amazon 取引から Amazon Order History を逆引き
+  app.get("/:id/amazon-link", (c) => {
+    const t = deps.txs.find(c.req.param("id"));
+    if (!t) return c.json({ error: "not_found" }, 404);
+    const candidates = findAmazonLink(deps.db, t);
+    return c.json({ transaction_id: t.id, candidates });
   });
 
   return app;
