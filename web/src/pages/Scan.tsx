@@ -5,6 +5,7 @@ import {
   StableDetectionTracker,
   type ReceiptCandidate,
 } from "../../../src/detection/receipt-detector.js";
+import { ReceiptQueue } from "../components/ReceiptQueue.js";
 
 interface DetectionState {
   candidate: ReceiptCandidate | null;
@@ -47,6 +48,8 @@ export function Scan() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const debugRef = useRef<HTMLCanvasElement | null>(null);
+  const arDebugRef = useRef<HTMLCanvasElement | null>(null);
+  const [arDebugOn, setArDebugOn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [detection, setDetection] = useState<DetectionState>({
     candidate: null, stable: false, fps: 0, threshold: 180, parallelism: 0, textRow: 0, ledgerRow: 0,
@@ -134,15 +137,22 @@ export function Scan() {
         lastDecayAtRef.current = now;
       }
 
-      // debug プレビュー: white mask + text-row ハイライト
+      // debug プレビュー: white mask + text-row + ledger-row ハイライト
+      // 1 回 ImageData を組み立てて、 サイドパネル debugRef と AR オーバーレイ arDebugRef に
+      // 同じ ImageData を putImageData する (描画コスト 1 回分節約)
       const dbg = extractDebug(cands as ReceiptCandidate[] & { __debug?: import("../../../src/detection/receipt-detector.js").DetectorDebug });
       const debugCanvas = debugRef.current;
-      if (dbg && debugCanvas) {
-        if (debugCanvas.width !== dbg.width || debugCanvas.height !== dbg.height) {
-          debugCanvas.width = dbg.width;
-          debugCanvas.height = dbg.height;
+      const arDebugCanvas = arDebugRef.current;
+      if (dbg && (debugCanvas || arDebugCanvas)) {
+        // サイズ合わせ
+        for (const cv of [debugCanvas, arDebugCanvas]) {
+          if (!cv) continue;
+          if (cv.width !== dbg.width || cv.height !== dbg.height) {
+            cv.width = dbg.width;
+            cv.height = dbg.height;
+          }
         }
-        const dctx = debugCanvas.getContext("2d");
+        const dctx = (debugCanvas ?? arDebugCanvas)?.getContext("2d");
         if (dctx) {
           const out = dctx.createImageData(dbg.width, dbg.height);
           for (let y = 0; y < dbg.height; y++) {
@@ -173,7 +183,9 @@ export function Scan() {
               out.data[j + 3] = 255;
             }
           }
-          dctx.putImageData(out, 0, 0);
+          // 同じ ImageData を 2 つの canvas に流す
+          if (debugCanvas) debugCanvas.getContext("2d")?.putImageData(out, 0, 0);
+          if (arDebugCanvas && arDebugOn) arDebugCanvas.getContext("2d")?.putImageData(out, 0, 0);
         }
       }
 
@@ -341,10 +353,36 @@ export function Scan() {
       <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", flexWrap: "wrap" }}>
         <div className="scan-stage">
           <video ref={videoRef} muted playsInline />
+          {/* 検知用画像オーバーレイ (低解像度を CSS で拡大、 30% 透過) */}
+          <canvas
+            ref={arDebugRef}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              opacity: arDebugOn ? 0.3 : 0,
+              imageRendering: "pixelated",
+              mixBlendMode: "screen",
+              pointerEvents: "none",
+              transition: "opacity 200ms",
+            }}
+          />
           <canvas ref={overlayRef} />
         </div>
         <div style={{ minWidth: 160 }}>
-          <div className="text-xs text-subtle mb-1">検出ビュー (二値化 + 連結成分)</div>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs text-subtle">検出ビュー (二値化 + 連結成分)</span>
+            <label className="text-xs flex items-center gap-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={arDebugOn}
+                onChange={(e) => setArDebugOn(e.target.checked)}
+                style={{ margin: 0 }}
+              />
+              AR
+            </label>
+          </div>
           <canvas
             ref={debugRef}
             style={{
@@ -402,6 +440,8 @@ export function Scan() {
           <img src={lastCapture.image_url} alt="captured receipt" />
         </div>
       )}
+
+      <ReceiptQueue origin="scan tab" />
     </div>
   );
 }
