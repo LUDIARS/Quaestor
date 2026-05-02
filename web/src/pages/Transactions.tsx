@@ -178,6 +178,19 @@ function CreditCardView({ items }: { items: TxRow[] }) {
   );
 }
 
+interface AmazonLinkResponse {
+  transaction_id: string;
+  candidates: {
+    transaction: TxRow;
+    items: { product: string; total_owed: number; qty: number }[];
+    order_id: string | null;
+    ship_date: string | null;
+    confidence: number;
+    date_diff_days: number;
+    amount_diff: number;
+  }[];
+}
+
 function TxDetailList({ rows }: { rows: TxRow[] }) {
   return (
     <table style={{ width: "100%", marginTop: "0.5rem", fontSize: "0.8rem", borderCollapse: "collapse" }}>
@@ -190,22 +203,91 @@ function TxDetailList({ rows }: { rows: TxRow[] }) {
         </tr>
       </thead>
       <tbody>
-        {rows.map((t) => (
-          <tr key={t.id} style={{ borderBottom: "1px dotted var(--border)" }}>
-            <td style={{ padding: "0.3rem" }}>{t.payee ?? "-"}</td>
-            <td style={{ padding: "0.3rem", textAlign: "right", color: "var(--danger)" }}>
-              ¥{t.amount_out?.toLocaleString() ?? "-"}
-            </td>
-            <td style={{ padding: "0.3rem", color: "var(--muted)" }}>
-              {t.fx_amount && t.fx_currency ? `${t.fx_amount} ${t.fx_currency}` : ""}
-            </td>
-            <td style={{ padding: "0.3rem", color: "var(--muted)", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {t.description}
-            </td>
-          </tr>
-        ))}
+        {rows.map((t) => <CcDetailRow key={t.id} t={t} />)}
       </tbody>
     </table>
+  );
+}
+
+function CcDetailRow({ t }: { t: TxRow }) {
+  const isAmazon = /AMAZON|ＡＭＡＺＯＮ|Ａｍａｚｏｎ/i.test(t.payee ?? "") || /AMAZON|ＡＭＡＺＯＮ/i.test(t.description);
+  const [open, setOpen] = useState(false);
+  const [link, setLink] = useState<AmazonLinkResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function fetchLink() {
+    if (link) return;
+    setLoading(true);
+    try {
+      const j = await (await fetch(`/v1/transactions/${t.id}/amazon-link`)).json() as AmazonLinkResponse;
+      setLink(j);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && isAmazon && !link) void fetchLink();
+  }
+
+  return (
+    <>
+      <tr
+        style={{ borderBottom: "1px dotted var(--border)", cursor: isAmazon ? "pointer" : "default" }}
+        onClick={isAmazon ? toggle : undefined}
+        title={isAmazon ? "クリックで Amazon Order を展開" : ""}
+      >
+        <td style={{ padding: "0.3rem" }}>
+          {isAmazon && <span style={{ marginRight: 4, color: "var(--c-accent)" }}>{open ? "▾" : "▸"}</span>}
+          {t.payee ?? "-"}
+        </td>
+        <td style={{ padding: "0.3rem", textAlign: "right", color: "var(--danger)" }}>
+          ¥{t.amount_out?.toLocaleString() ?? "-"}
+        </td>
+        <td style={{ padding: "0.3rem", color: "var(--muted)" }}>
+          {t.fx_amount && t.fx_currency ? `${t.fx_amount} ${t.fx_currency}` : ""}
+        </td>
+        <td style={{ padding: "0.3rem", color: "var(--muted)", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis" }}>
+          {t.description}
+        </td>
+      </tr>
+      {open && isAmazon && (
+        <tr>
+          <td colSpan={4} style={{ padding: "0.5rem 1.5rem", background: "var(--c-bg)" }}>
+            {loading && <span className="text-subtle">loading…</span>}
+            {!loading && link && link.candidates.length === 0 && (
+              <span className="text-subtle">対応する Amazon Order が見つからない (前後 3 日 / 金額 ±3%)</span>
+            )}
+            {!loading && link && link.candidates.length > 0 && (
+              <div>
+                {link.candidates.map((c, idx) => (
+                  <div key={c.transaction.id} style={{ marginBottom: "0.5rem", paddingBottom: "0.4rem", borderBottom: idx < link.candidates.length - 1 ? "1px dashed var(--border)" : "none" }}>
+                    <div className="text-xs text-subtle" style={{ marginBottom: 3 }}>
+                      <span className={`fd-badge ${c.confidence >= 0.85 ? "fd-badge-ok" : c.confidence >= 0.5 ? "fd-badge-warn" : "fd-badge-muted"}`}>
+                        {(c.confidence * 100).toFixed(0)}%
+                      </span>
+                      {" "} order: <code>{c.order_id ?? "-"}</code> | ship: {c.ship_date ?? "-"} |
+                      Δ {c.date_diff_days}日 ¥{c.amount_diff.toLocaleString()}
+                    </div>
+                    <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                      {c.items.map((it, i) => (
+                        <li key={i} style={{ display: "flex", gap: "0.5rem", padding: "0.15rem 0" }}>
+                          <span style={{ flex: 1 }}>{it.product}</span>
+                          {it.qty > 1 && <span className="text-subtle">×{it.qty}</span>}
+                          <span className="font-mono">¥{it.total_owed.toLocaleString()}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
