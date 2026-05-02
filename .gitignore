@@ -6,6 +6,11 @@ build/
 .vite/
 .parcel-cache/
 .turbo/
+*.tsbuildinfo
+
+# vite.config の TS コンパイル副産物 (project references で出る)
+web/vite.config.d.ts
+web/vite.config.js
 
 # Tauri
 src-tauri/target/
