@@ -67,8 +67,12 @@ export function ReceiptQueue({
 
   async function runOcr(id: string) {
     try {
-      // OCR 無効時 (503) も silently 続行 — Claude Code 側で処理する想定なので alert 不要
-      await fetch(`/v1/receipts/${id}/ocr/run`, { method: "POST" });
+      // 1) Anthropic SDK 経路を先に試す (sync、 fast)
+      const res = await fetch(`/v1/receipts/${id}/ocr/run`, { method: "POST" });
+      if (res.status === 503) {
+        // 2) Anthropic 不可 → Claude Code CLI を spawn して非同期解析
+        await fetch(`/v1/receipts/${id}/ocr/claude-code`, { method: "POST" });
+      }
       await load();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));

@@ -6,6 +6,7 @@ import type { ReceiptsRepo, OcrStatus } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import type { OcrClient } from "../services/ocr-client.js";
 import { runOcrFor } from "../services/ocr-runner.js";
+import { ClaudeCodeOcr, detectClaudeCli, projectRoot } from "../services/claude-code-ocr.js";
 
 const GeoSchema = z.object({
   lat: z.number(),
@@ -87,10 +88,25 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const saved = deps.storage.save(id, buf, capturedAt, ext);
     deps.repo.setImagePath(id, saved.relativePath);
 
+    // stable capture (確定スキャン) は自動で Claude Code OCR を spawn する。
+    // speculative は spawn しない (頻度多くて claude 起動が間に合わないため、 queue 経由で手動)。
+    const kind = (meta as { kind?: string }).kind;
+    let autoTriggered = false;
+    if (kind === "stable" && !deps.ocr && detectClaudeCli()) {
+      const port = Number(process.env.QUAESTOR_PORT ?? 17400);
+      const baseUrl = `http://127.0.0.1:${port}`;
+      const cco = new ClaudeCodeOcr({ backendBaseUrl: baseUrl, workingDir: projectRoot() });
+      cco.triggerAsync(id).then((t) => {
+        if (t.ok) deps.repo.setOcrResult(id, { ocr_status: "processing" });
+      });
+      autoTriggered = true;
+    }
+
     return c.json({
       receipt: deps.repo.find(id),
       stored_size: saved.size,
       deduped: false,
+      auto_triggered: autoTriggered,
     }, 201);
   });
 
@@ -141,13 +157,50 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     return c.json({ ok });
   });
 
-  // POST /v1/receipts/:id/ocr/run — Anthropic vision に投げて構造化抽出
+  // POST /v1/receipts/:id/ocr/run — Anthropic vision に投げて構造化抽出 (sync)
   app.post("/:id/ocr/run", async (c) => {
     if (!deps.ocr) return c.json({ error: "ocr_disabled", message: "ANTHROPIC_API_KEY 未設定" }, 503);
     const id = c.req.param("id");
     const result = await runOcrFor(id, { receipts: deps.repo, storage: deps.storage, client: deps.ocr });
     if (!result.ok) return c.json({ ok: false, status: result.status, message: result.message }, 400);
     return c.json({ ok: true, status: result.status, receipt: deps.repo.find(id) });
+  });
+
+  // POST /v1/receipts/:id/ocr/claude-code — claude CLI を spawn して fire-and-forget で解析
+  // 解析完了後、 claude 自身が PATCH /v1/receipts/:id/ocr で結果を書き戻す
+  app.post("/:id/ocr/claude-code", async (c) => {
+    const id = c.req.param("id");
+    const r = deps.repo.find(id);
+    if (!r) return c.json({ error: "not_found" }, 404);
+    if (!detectClaudeCli()) {
+      return c.json({ error: "claude_cli_disabled", message: "CLAUDE_CODE_OCR_DISABLE=1" }, 503);
+    }
+
+    // status=processing に遷移
+    deps.repo.setOcrResult(id, { ocr_status: "processing" });
+
+    const port = Number(process.env.QUAESTOR_PORT ?? 17400);
+    const baseUrl = `http://127.0.0.1:${port}`;
+    const ocr = new ClaudeCodeOcr({
+      backendBaseUrl: baseUrl,
+      workingDir: projectRoot(),
+    });
+    const triggered = await ocr.triggerAsync(id);
+    if (!triggered.ok) {
+      // spawn 失敗 → failed に戻す
+      deps.repo.setOcrResult(id, {
+        ocr_status: "failed",
+        ocr_raw: JSON.stringify({ error: triggered.error ?? "spawn failed" }),
+      });
+      return c.json({ ok: false, error: triggered.error ?? "spawn failed" }, 500);
+    }
+
+    return c.json({
+      ok: true,
+      status: "processing",
+      pid: triggered.pid,
+      message: "claude CLI で解析中、 完了後に PATCH で結果書き戻し",
+    }, 202);
   });
 
   return app;
