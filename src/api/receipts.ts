@@ -8,6 +8,26 @@ import type { OcrClient } from "../services/ocr-client.js";
 import { runOcrFor } from "../services/ocr-runner.js";
 import { ClaudeCodeOcr, detectClaudeCli, projectRoot } from "../services/claude-code-ocr.js";
 
+/**
+ * 同一 receipt への OCR 起動 throttle。 2 秒内の再起動 (auto + 手動 + claude-code) は skip。
+ * Anthropic / Claude CLI 共通でカウント。
+ */
+const OCR_THROTTLE_MS = 2000;
+const lastOcrTriggerAt = new Map<string, number>();
+function takeThrottleSlot(id: string): boolean {
+  const now = Date.now();
+  const last = lastOcrTriggerAt.get(id);
+  if (last != null && now - last < OCR_THROTTLE_MS) return false;
+  lastOcrTriggerAt.set(id, now);
+  // 古い entry を gc (1 時間以上前)
+  if (lastOcrTriggerAt.size > 200) {
+    for (const [k, v] of lastOcrTriggerAt) {
+      if (now - v > 3_600_000) lastOcrTriggerAt.delete(k);
+    }
+  }
+  return true;
+}
+
 const GeoSchema = z.object({
   lat: z.number(),
   lon: z.number(),
@@ -90,9 +110,10 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
 
     // stable capture (確定スキャン) は自動で Claude Code OCR を spawn する。
     // speculative は spawn しない (頻度多くて claude 起動が間に合わないため、 queue 経由で手動)。
+    // 2 秒 throttle が走っていれば skip (連続スキャンや手動 OCR との被りを防ぐ)
     const kind = (meta as { kind?: string }).kind;
     let autoTriggered = false;
-    if (kind === "stable" && !deps.ocr && detectClaudeCli()) {
+    if (kind === "stable" && !deps.ocr && detectClaudeCli() && takeThrottleSlot(id)) {
       const port = Number(process.env.QUAESTOR_PORT ?? 17400);
       const baseUrl = `http://127.0.0.1:${port}`;
       const cco = new ClaudeCodeOcr({ backendBaseUrl: baseUrl, workingDir: projectRoot() });
@@ -161,6 +182,9 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
   app.post("/:id/ocr/run", async (c) => {
     if (!deps.ocr) return c.json({ error: "ocr_disabled", message: "ANTHROPIC_API_KEY 未設定" }, 503);
     const id = c.req.param("id");
+    if (!takeThrottleSlot(id)) {
+      return c.json({ ok: true, throttled: true, message: "2 秒内に既に起動済 — skip" }, 200);
+    }
     const result = await runOcrFor(id, { receipts: deps.repo, storage: deps.storage, client: deps.ocr });
     if (!result.ok) return c.json({ ok: false, status: result.status, message: result.message }, 400);
     return c.json({ ok: true, status: result.status, receipt: deps.repo.find(id) });
@@ -174,6 +198,9 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     if (!r) return c.json({ error: "not_found" }, 404);
     if (!detectClaudeCli()) {
       return c.json({ error: "claude_cli_disabled", message: "CLAUDE_CODE_OCR_DISABLE=1" }, 503);
+    }
+    if (!takeThrottleSlot(id)) {
+      return c.json({ ok: true, throttled: true, message: "2 秒内に既に起動済 — skip" }, 200);
     }
 
     // status=processing に遷移
