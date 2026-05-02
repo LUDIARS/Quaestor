@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { YearTabs, currentYear } from "../components/YearTabs.js";
 
 interface InvoiceRow {
   id: number;
@@ -32,6 +33,7 @@ export function Invoices() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [year, setYear] = useState(currentYear());
   const [form, setForm] = useState({
     issued_at: new Date().toISOString().slice(0, 10),
     due_date: "",
@@ -45,8 +47,13 @@ export function Invoices() {
   async function load() {
     setLoading(true);
     try {
+      const params = new URLSearchParams();
+      if (year !== "all") {
+        params.set("date_from", `${year}-01-01`);
+        params.set("date_to", `${year}-12-31`);
+      }
       const [listJ, sumJ] = await Promise.all([
-        fetch("/v1/invoices").then((r) => r.json() as Promise<{ items: InvoiceRow[] }>),
+        fetch(`/v1/invoices?${params}`).then((r) => r.json() as Promise<{ items: InvoiceRow[] }>),
         fetch("/v1/invoices/summary").then((r) => r.json() as Promise<SummaryRes>),
       ]);
       setList(listJ.items);
@@ -57,7 +64,7 @@ export function Invoices() {
       setLoading(false);
     }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
 
   async function create() {
     setErr(null);
@@ -99,6 +106,8 @@ export function Invoices() {
   return (
     <div>
       <h2>Invoices (請求書)</h2>
+
+      <YearTabs value={year} onChange={(y) => setYear(y)} />
 
       {summary && (
         <section style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem", fontSize: "0.85rem" }}>

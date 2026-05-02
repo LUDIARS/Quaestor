@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { YearTabs, currentYear } from "../components/YearTabs.js";
 
 interface Monthly { month: string; amount_in: number; amount_out: number; count: number }
 interface BySource { source: string; amount_in: number; amount_out: number; count: number }
@@ -13,8 +14,7 @@ interface DashboardRes {
 
 export function Dashboard() {
   const [data, setData] = useState<DashboardRes | null>(null);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [year, setYear] = useState(currentYear());
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -22,8 +22,10 @@ export function Dashboard() {
     setLoading(true);
     try {
       const params = new URLSearchParams();
-      if (from) params.set("from", from);
-      if (to) params.set("to", to);
+      if (year !== "all") {
+        params.set("from", `${year}-01`);
+        params.set("to", `${year}-12`);
+      }
       params.set("top_payees", "10");
       const j = await (await fetch(`/v1/dashboard/summary?${params}`)).json() as DashboardRes;
       setData(j);
@@ -33,7 +35,7 @@ export function Dashboard() {
       setLoading(false);
     }
   }
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
 
   if (loading) return <p>loading…</p>;
   if (err) return <p className="error">{err}</p>;
@@ -47,13 +49,8 @@ export function Dashboard() {
   return (
     <div>
       <h2>Dashboard</h2>
-
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginBottom: "1rem", fontSize: "0.85rem" }}>
-        <label>from <input type="month" value={from} onChange={(e) => setFrom(e.target.value)} placeholder={data.range.from} /></label>
-        <label>to <input type="month" value={to} onChange={(e) => setTo(e.target.value)} placeholder={data.range.to} /></label>
-        <button className="btn secondary" onClick={() => void load()}>更新</button>
-        <span style={{ color: "var(--muted)", marginLeft: "0.5rem" }}>{data.range.from} 〜 {data.range.to}</span>
-      </div>
+      <YearTabs value={year} onChange={(y) => setYear(y)} />
+      <p className="text-xs text-subtle mb-3">{data.range.from} 〜 {data.range.to}</p>
 
       <section className="last-capture" style={{ marginBottom: "1rem" }}>
         <h3 style={{ marginTop: 0, fontSize: "0.95rem" }}>期間合計</h3>

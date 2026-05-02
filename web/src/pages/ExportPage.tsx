@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { YearTabs, currentYear } from "../components/YearTabs.js";
 
 interface JournalEntry {
   no: number;
@@ -15,8 +16,9 @@ interface JournalEntry {
 }
 
 export function ExportPage() {
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [year, setYear] = useState(currentYear());
+  const [from, setFrom] = useState(`${currentYear()}-01-01`);
+  const [to, setTo] = useState(`${currentYear()}-12-31`);
   const [startNo, setStartNo] = useState(1);
   const [preview, setPreview] = useState<JournalEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,9 +52,18 @@ export function ExportPage() {
   return (
     <div>
       <h2>仕訳帳 Export</h2>
-      <p style={{ color: "var(--muted)", fontSize: "0.85rem" }}>
+      <p className="text-sm text-subtle mb-3">
         transactions + apportionment_rules の resolve 結果を仕訳帳 (calc 互換 .xlsx) として書き出す。
       </p>
+
+      <YearTabs
+        value={year}
+        onChange={(y, range) => {
+          setYear(y);
+          setFrom(range?.date_from ?? "");
+          setTo(range?.date_to ?? "");
+        }}
+      />
 
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "1rem", fontSize: "0.85rem" }}>
         <label>from <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>

@@ -18,6 +18,23 @@ const QuerySchema = z.object({
 export function dashboardRouter(deps: { db: Database.Database }): Hono {
   const app = new Hono();
 
+  // GET /v1/dashboard/years — transactions / receipts / invoices に存在する年一覧
+  app.get("/years", (c) => {
+    const rows = deps.db
+      .prepare(
+        `SELECT DISTINCT substr(date, 1, 4) AS year FROM (
+            SELECT date FROM transactions WHERE date IS NOT NULL
+            UNION ALL
+            SELECT date FROM receipts WHERE date IS NOT NULL
+            UNION ALL
+            SELECT issued_at AS date FROM invoices
+         )
+         ORDER BY year DESC`,
+      )
+      .all() as { year: string }[];
+    return c.json({ years: rows.map((r) => r.year).filter((y) => /^\d{4}$/.test(y)) });
+  });
+
   app.get("/summary", (c) => {
     const parsed = QuerySchema.safeParse(c.req.query());
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
