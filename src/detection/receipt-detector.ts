@@ -40,6 +40,10 @@ export interface ReceiptCandidate {
     ledgerRowRatio: number;
     /** 0..1、 連続 text-row の最長 run / 候補高さ。 文字行が clustering してれば高い */
     textRunDensity: number;
+    /** OCR で「合計」 が候補内に検出されたか。 検出されれば最強 signal */
+    containsTotal: boolean;
+    /** その他 受領書 keyword (小計 / 領収 / レシート) が候補内に検出された数 */
+    otherKeywordHits: number;
   };
 }
 
@@ -58,13 +62,20 @@ export interface DetectorOptions {
   /** デバッグ用: 二値化 mask と縮小寸法を結果に同梱する */
   returnDebug?: boolean;
   /**
-   * 白判定の固定閾値 (0..255)。 指定時は Otsu を使わず R/G/B が全部 this 以上のピクセルを「白」 にする。
-   * レシートは大体白いので、 適応閾値 (Otsu) より固定閾値の方が安定して取れることが多い。
-   * Scan UI 側で 1 秒毎に -1 する想定 (初期値 234)。
+   * Edge 二値化の閾値 (0..255)。 |Sobel dx| + |dy| がこの値以上のピクセルを「edge」 にする。
+   * 既定 24。 受領書の枠線・文字エッジを拾い、 後段で dilate して 1 つの blob に。
    */
-  whiteThreshold?: number;
+  edgeThreshold?: number;
+  /** Edge mask の dilate 半径 (px)。 既定 2。 受領書枠 + 内部テキストを 1 つの連結成分にまとめる */
+  dilateRadius?: number;
   /** 平行性 (左右エッジ分散) の最低値。 既定 0.3 */
   minParallelism?: number;
+  /**
+   * (オプション) OCR で検出された「合計」 等のキーワード bbox。
+   * 与えられた場合、 その bbox を内包する edge 連結成分を探して優先候補にする。
+   * 座標は元画像 (= rgba) 系。
+   */
+  keywordHits?: Array<{ keyword: string; x: number; y: number; w: number; h: number; conf?: number }>;
 }
 
 export interface DetectorDebug {
@@ -88,14 +99,16 @@ export interface DetectionResult {
   debug?: DetectorDebug;
 }
 
-export const DEFAULTS: Required<Omit<DetectorOptions, "returnDebug" | "whiteThreshold">> = {
+export const DEFAULTS: Required<Omit<DetectorOptions, "returnDebug" | "keywordHits">> = {
   maxDim: 256,
-  minAreaRatio: 0.04,    // 元画像面積の 4% 以上
-  aspectMin: 0.25,       // 横長 (1:4) ~ 縦長 (4:1) を許容
+  minAreaRatio: 0.04,
+  aspectMin: 0.25,
   aspectMax: 4.0,
-  minFillRatio: 0.6,     // 連結成分の bbox 充填率 60% 以上 = ほぼ矩形
+  minFillRatio: 0.02,    // edge mask は枠 hollow なので低め (実質無効化)
   topK: 3,
-  minParallelism: 0.3,
+  minParallelism: 0.15,
+  edgeThreshold: 24,
+  dilateRadius: 2,
 };
 
 /**
@@ -118,11 +131,8 @@ export function detectReceiptCandidates(
   const dw = Math.max(8, Math.round(width * scale));
   const dh = Math.max(8, Math.round(height * scale));
 
-  // 2. Nearest neighbor で縮小 + グレースケール化 + RGB ベース白判定 mask 同時生成
+  // 2. グレースケール化
   const gray = new Uint8Array(dw * dh);
-  const mask = new Uint8Array(dw * dh);
-  const useWhite = typeof opts.whiteThreshold === "number";
-  const wT = opts.whiteThreshold ?? 0;
   const sx = width / dw;
   const sy = height / dh;
   for (let y = 0; y < dh; y++) {
@@ -134,22 +144,17 @@ export function detectReceiptCandidates(
       const g = rgba[i + 1] ?? 0;
       const b = rgba[i + 2] ?? 0;
       gray[y * dw + x] = (0.299 * r + 0.587 * g + 0.114 * b) | 0;
-      if (useWhite) {
-        mask[y * dw + x] = (r >= wT && g >= wT && b >= wT) ? 1 : 0;
-      }
     }
   }
 
-  // 3. mask 確定: whiteThreshold 指定時はもう生成済、 そうでなければ Otsu
-  let threshold: number;
-  if (useWhite) {
-    threshold = wT;
-  } else {
-    threshold = otsu(gray);
-    for (let i = 0; i < gray.length; i++) {
-      mask[i] = gray[i]! >= threshold ? 1 : 0;
-    }
+  // 3. Sobel edge map → 閾値 → dilate で受領書枠 + テキスト群を一つの blob に統合
+  const edge = sobelMap(gray, dw, dh);
+  const rawMask = new Uint8Array(dw * dh);
+  for (let i = 0; i < edge.length; i++) {
+    rawMask[i] = (edge[i]! >= o.edgeThreshold) ? 1 : 0;
   }
+  const mask = dilate(rawMask, dw, dh, o.dilateRadius);
+  const threshold = o.edgeThreshold;
 
   // 4.5. Text-row 検出 (レシート特化): 横方向の白↔暗 transition 多 + 暗ピクセル割合中位 = 文字行
   // 4.6. Ledger-row 検出: 文字行のうち「左暗 + 中央白 + 右暗」 = 品目-金額レイアウト
@@ -196,28 +201,44 @@ export function detectReceiptCandidates(
     const ledgerRatio = ledgerRowsInBbox(ledgerRows, c);
     const runDensity = textRowRunDensity(textRows, c);
 
+    // OCR keyword: 候補 bbox 内に「合計」 等が検出されたか
+    let containsTotal = false;
+    let otherKeywordHits = 0;
+    if (opts.keywordHits && opts.keywordHits.length > 0) {
+      for (const kh of opts.keywordHits) {
+        // keyword の中心点が候補の元画像 bbox に入っているか
+        const kcx = kh.x + kh.w / 2;
+        const kcy = kh.y + kh.h / 2;
+        if (kcx >= x && kcx <= x + ww && kcy >= y && kcy <= y + hh) {
+          if (/合計/.test(kh.keyword)) containsTotal = true;
+          else otherKeywordHits++;
+        }
+      }
+    }
+
     // score = fillRatio + parallelism + textRatio + ledgerRatio + runDensity + center + aspect + area
     const cx = (c.minX + c.maxX) / 2 / dw;
     const cy = (c.minY + c.maxY) / 2 / dh;
     const centerness = 1 - Math.hypot(cx - 0.5, cy - 0.5);
-    // aspect bias: receipt は縦長 (1.5..4.0) を強く好む
-    // 長レシート救済時は 4.0+ でも 0.9 を返す
     const aspectBias = aspectRatio >= 1.5 && aspectRatio <= 4.0 ? 1
       : longReceiptOk && aspectRatio > 4.0 ? 0.9
       : aspectRatio > 1 ? 0.6
       : 0.3;
 
-    // ledger は最も receipt 特化な signal なので 25% 配分。 textRow は 15%、 runDensity は 10%。
-    const score = clamp01(
-      0.20 * fillRatio +
-      0.15 * parallelism +
-      0.15 * textRatio +
-      0.25 * ledgerRatio +
+    // 「合計」 が候補内に検出されたら最強 signal (+0.3)、 他 keyword は 1 件 +0.03 (cap 0.1)
+    // edge mask では fillRatio は枠 hollow で低くなるので score 配分から外し、
+    // 構造的 signal (parallelism, aspect, area, center, text-row, ledger-row) を主軸に。
+    const ocrBoost = (containsTotal ? 0.3 : 0) + Math.min(0.1, otherKeywordHits * 0.03);
+    const structural = clamp01(
+      0.20 * parallelism +
+      0.10 * textRatio +
+      0.20 * ledgerRatio +
       0.10 * runDensity +
-      0.10 * aspectBias +
-      0.03 * centerness +
-      0.02 * Math.min(1, areaRatio * 4),
+      0.20 * aspectBias +
+      0.10 * Math.min(1, areaRatio * 4) +
+      0.10 * centerness,
     );
+    const score = clamp01(structural + ocrBoost);
 
     candidates.push({
       x, y, width: ww, height: hh, score,
@@ -228,6 +249,8 @@ export function detectReceiptCandidates(
         textRowRatio: textRatio,
         ledgerRowRatio: ledgerRatio,
         textRunDensity: runDensity,
+        containsTotal,
+        otherKeywordHits,
       },
     });
   }
@@ -246,6 +269,48 @@ export function detectReceiptCandidates(
 /** debug 同梱結果から mask + meta を取り出すヘルパ */
 export function extractDebug(candidates: ReceiptCandidate[] & { __debug?: DetectorDebug }): DetectorDebug | undefined {
   return candidates.__debug;
+}
+
+/** Sobel-like 勾配 (|dx|+|dy| を 0..255 にクランプ) */
+function sobelMap(gray: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const dx =
+        -gray[i - w - 1]! - 2 * gray[i - 1]! - gray[i + w - 1]! +
+        gray[i - w + 1]! + 2 * gray[i + 1]! + gray[i + w + 1]!;
+      const dy =
+        -gray[i - w - 1]! - 2 * gray[i - w]! - gray[i - w + 1]! +
+        gray[i + w - 1]! + 2 * gray[i + w]! + gray[i + w + 1]!;
+      const m = (Math.abs(dx) + Math.abs(dy)) >> 2;
+      out[i] = m > 255 ? 255 : m;
+    }
+  }
+  return out;
+}
+
+/** 3x3 (radius=1) など、 max filter で 1 pixel mask を膨張 */
+function dilate(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius <= 0) return new Uint8Array(mask);
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let v = 0;
+      for (let dy = -radius; dy <= radius; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          if (mask[yy * w + xx] === 1) { v = 1; break; }
+        }
+        if (v) break;
+      }
+      out[y * w + x] = v;
+    }
+  }
+  return out;
 }
 
 /** Otsu's method — 256-bin histogram から自動閾値を計算 */
