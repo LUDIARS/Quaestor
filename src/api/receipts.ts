@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import type { ReceiptsRepo, OcrStatus } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import type { OcrClient } from "../services/ocr-client.js";
@@ -117,7 +118,19 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
       const port = Number(process.env.QUAESTOR_PORT ?? 17400);
       const baseUrl = `http://127.0.0.1:${port}`;
       const cco = new ClaudeCodeOcr({ backendBaseUrl: baseUrl, workingDir: projectRoot() });
-      cco.triggerAsync(id).then((t) => {
+      cco.triggerAsync(id, (ev) => {
+        const cur = deps.repo.find(id);
+        if (cur && cur.ocr_status === "processing") {
+          deps.repo.setOcrResult(id, {
+            ocr_status: "failed",
+            ocr_raw: JSON.stringify({
+              claude_exit: { code: ev.code, signal: ev.signal, durationMs: ev.durationMs },
+              log_tail: ev.tail.slice(-2000),
+              log_file: ev.logFile,
+            }),
+          });
+        }
+      }).then((t) => {
         if (t.ok) deps.repo.setOcrResult(id, { ocr_status: "processing" });
       });
       autoTriggered = true;
@@ -212,22 +225,55 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
       backendBaseUrl: baseUrl,
       workingDir: projectRoot(),
     });
-    const triggered = await ocr.triggerAsync(id);
+    const triggered = await ocr.triggerAsync(id, (ev) => {
+      // claude exit 時の自動 fail-safe: PATCH しないまま終了 (= 依然 processing) なら failed に
+      const cur = deps.repo.find(id);
+      if (cur && cur.ocr_status === "processing") {
+        deps.repo.setOcrResult(id, {
+          ocr_status: "failed",
+          ocr_raw: JSON.stringify({
+            claude_exit: { code: ev.code, signal: ev.signal, durationMs: ev.durationMs },
+            log_tail: ev.tail.slice(-2000),
+            log_file: ev.logFile,
+          }),
+        });
+      }
+    });
     if (!triggered.ok) {
-      // spawn 失敗 → failed に戻す
       deps.repo.setOcrResult(id, {
         ocr_status: "failed",
-        ocr_raw: JSON.stringify({ error: triggered.error ?? "spawn failed" }),
+        ocr_raw: JSON.stringify({ spawn_error: triggered.error, log_file: triggered.logFile }),
       });
-      return c.json({ ok: false, error: triggered.error ?? "spawn failed" }, 500);
+      return c.json({ ok: false, error: triggered.error ?? "spawn failed", log_file: triggered.logFile }, 500);
     }
 
     return c.json({
       ok: true,
       status: "processing",
       pid: triggered.pid,
+      log_file: triggered.logFile,
       message: "claude CLI で解析中、 完了後に PATCH で結果書き戻し",
     }, 202);
+  });
+
+  // GET /v1/receipts/:id/claude-code-log — debug 用に log file の内容を返す
+  app.get("/:id/claude-code-log", (c) => {
+    const id = c.req.param("id");
+    if (!deps.repo.find(id)) return c.json({ error: "not_found" }, 404);
+    const ocr = new ClaudeCodeOcr({
+      backendBaseUrl: `http://127.0.0.1:${process.env.QUAESTOR_PORT ?? 17400}`,
+      workingDir: projectRoot(),
+    });
+    const path = ocr.logPath(id);
+    try {
+      if (!existsSync(path)) return c.json({ log: "(no log yet)", path });
+      const buf = readFileSync(path, "utf8");
+      // 最大 64KB に制限
+      const trimmed = buf.length > 65536 ? "...(head truncated)..." + buf.slice(-65536) : buf;
+      return c.json({ log: trimmed, path, size: buf.length });
+    } catch (e: unknown) {
+      return c.json({ error: e instanceof Error ? e.message : String(e), path }, 500);
+    }
   });
 
   return app;

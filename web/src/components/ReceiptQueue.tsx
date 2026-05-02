@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+// useState is used in QueueCard for log modal too
 
 interface QueueRow {
   id: string;
@@ -123,6 +124,18 @@ export function ReceiptQueue({
 }
 
 function QueueCard({ row, onRunOcr }: { row: QueueRow; onRunOcr: () => void }) {
+  const [showLog, setShowLog] = useState(false);
+  const [logText, setLogText] = useState<string | null>(null);
+  async function fetchLog() {
+    try {
+      const j = await (await fetch(`/v1/receipts/${row.id}/claude-code-log`)).json() as { log?: string; path?: string };
+      setLogText(j.log ?? "(empty)");
+      setShowLog(true);
+    } catch (e: unknown) {
+      setLogText("error: " + (e instanceof Error ? e.message : String(e)));
+      setShowLog(true);
+    }
+  }
   const statusColor =
     row.ocr_status === "pending"
       ? "var(--c-warn)"
@@ -180,6 +193,41 @@ function QueueCard({ row, onRunOcr }: { row: QueueRow; onRunOcr: () => void }) {
         >
           OCR
         </button>
+      )}
+      {(row.ocr_status === "failed" || row.ocr_status === "processing") && (
+        <button
+          className="fd-btn-ghost"
+          style={{ marginTop: 2, padding: "0.1rem 0.3rem", fontSize: "0.65rem", width: "100%" }}
+          onClick={() => void fetchLog()}
+        >
+          log
+        </button>
+      )}
+      {showLog && (
+        <div
+          onClick={() => setShowLog(false)}
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
+            zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "pointer",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: "90vw", maxHeight: "85vh", overflow: "auto",
+              background: "var(--c-surface)", border: "1px solid var(--c-border)",
+              borderRadius: 8, padding: "1rem", cursor: "default",
+              fontFamily: "ui-monospace, monospace", fontSize: "0.75rem",
+              whiteSpace: "pre-wrap", wordBreak: "break-all",
+            }}
+          >
+            <div style={{ marginBottom: "0.5rem", color: "var(--c-subtle)" }}>
+              receipt {row.id.slice(0, 8)} — claude code log (click outside to close)
+            </div>
+            {logText ?? "loading..."}
+          </div>
+        </div>
       )}
     </div>
   );
