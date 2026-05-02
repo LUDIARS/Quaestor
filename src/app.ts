@@ -11,6 +11,8 @@ import { AccountCodesRepo } from "./db/account-codes-repo.js";
 import { ApportionmentRulesRepo } from "./db/apportionment-rules-repo.js";
 import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
+import type { OcrClient } from "./services/ocr-client.js";
+import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { transactionsRouter } from "./api/transactions.js";
 import { importsRouter } from "./api/imports.js";
 import { accountCodesRouter } from "./api/account-codes.js";
@@ -21,6 +23,8 @@ export interface AppDeps {
   db: Database.Database;
   /** 画像保存ルート。 既定 './app_data/receipts' */
   receiptsRoot?: string;
+  /** OCR client。 省略時は ANTHROPIC_API_KEY があれば AnthropicOcrClient、 無ければ undefined */
+  ocr?: OcrClient | "auto" | "disabled";
 }
 
 export function buildApp(deps: AppDeps): Hono {
@@ -36,15 +40,35 @@ export function buildApp(deps: AppDeps): Hono {
   accounts.seedIfEmpty();
   rules.seedIfEmpty();
 
+  const ocr = resolveOcr(deps.ocr);
+  const ocrEnabled = !!ocr;
+
   const app = new Hono();
 
-  app.get("/health", (c) => c.json({ ok: true, service: "quaestor", version: "0.3.0" }));
+  app.get("/health", (c) => c.json({
+    ok: true,
+    service: "quaestor",
+    version: "0.4.0",
+    ocr_enabled: ocrEnabled,
+  }));
 
   app.route("/v1/transactions", transactionsRouter({ txs }));
   app.route("/v1/imports", importsRouter({ imports, txs }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
-  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage }));
+  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr }));
 
   return app;
+}
+
+function resolveOcr(opt: OcrClient | "auto" | "disabled" | undefined): OcrClient | undefined {
+  if (opt === "disabled") return undefined;
+  if (opt && typeof opt === "object") return opt;     // 明示注入
+  // "auto" or undefined: env を見る
+  if (!process.env.ANTHROPIC_API_KEY) return undefined;
+  try {
+    return new AnthropicOcrClient();
+  } catch {
+    return undefined;
+  }
 }
