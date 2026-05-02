@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Quaestor",
+  "version": "1.0.0",
+  "identifier": "io.ludiars.quaestor",
+  "build": {
+    "beforeBuildCommand": "npm --prefix ../web run build",
+    "beforeDevCommand": "npm --prefix ../web run dev",
+    "devUrl": "http://127.0.0.1:5177",
+    "frontendDist": "../web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Quaestor",
+        "width": 1100,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png", "icons/icon.ico"]
+  }
+}

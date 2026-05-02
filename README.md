@@ -39,4 +39,44 @@
 
 ## 開発状況
 
-v0.0 (scaffold)。 詳細は `DESIGN.md` 参照。
+v1.0 一気通貫実装済 (2026-05-02)。 詳細は `DESIGN.md`。
+
+機能完成度:
+- ✅ AR レシートスキャナ (camera + 二値検出 + 安定検知 + HD キャプチャ)
+- ✅ Anthropic vision OCR (構造化抽出 + low confidence は manual review)
+- ✅ クレカ CSV importer (UFJ / SMBC、 SJIS auto-detect)
+- ✅ 銀行 PDF importer (SMBC、 pdf-parse)
+- ✅ Amazon Order History importer (shipment grouping)
+- ✅ 按分率 + 科目コード CRUD (calc 互換 seed) + payee resolver
+- ✅ receipt × transaction 照合 (auto + manual + suggestion bands)
+- ✅ 仕訳帳 Excel export (calc 互換、 SerialDate / 借方貸方 / 按分行展開)
+- ✅ Tauri 2 wrap scaffold (dev mode、 backend は別 process)
+
+## 起動方法
+
+開発時は backend / web / Tauri を別ターミナルで:
+
+```powershell
+# backend (port 17400 loopback)
+cd E:\Document\Ars\Quaestor
+npm install
+npm run dev
+
+# web (port 5177、 Vite proxy で /v1/* と /health を 17400 に)
+cd E:\Document\Ars\Quaestor\web
+npm install
+npm run dev
+# → http://127.0.0.1:5177 で AR scanner / Imports / Transactions / Reconcile / Export
+
+# (任意) Tauri デスクトップで開く
+cd E:\Document\Ars\Quaestor
+npm run tauri:dev
+```
+
+OCR を有効化する場合は backend を起動する shell で `ANTHROPIC_API_KEY` を export 。
+
+## 個人データ取り扱い
+
+- DB ファイル `app_data/quaestor.db` および `app_data/receipts/` 配下は `.gitignore` で除外
+- リポジトリの test fixture は合成データのみ。 実 CSV / レシート画像は git に乗らない
+- OCR は API key 設定時のみ Anthropic に画像を送信、 既定は OFF
