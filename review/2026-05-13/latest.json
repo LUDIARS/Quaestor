@@ -1,0 +1,63 @@
+{
+  "repo": "LUDIARS/Quaestor",
+  "review_date": "2026-05-13",
+  "reviewer": "claude-opus-4-7-1m",
+  "commit": "d4d5404",
+  "branch": "main",
+  "ratings": {
+    "design": "B",
+    "vulnerability": "C",
+    "implementation": "B",
+    "missing_features": "C",
+    "quality": "B"
+  },
+  "weighted_score": 72,
+  "weighted_score_basis": "A=90,B=75,C=55,D=30; design 20% + vulnerability 30% + implementation 20% + missing 15% + quality 15%",
+  "findings_count": {
+    "design": 5,
+    "vulnerability": 8,
+    "implementation": 8,
+    "missing_features": 8,
+    "quality": 10
+  },
+  "findings_total": 39,
+  "high_priority_findings": [
+    {
+      "id": "V1",
+      "severity": "C",
+      "title": "--dangerously-skip-permissions で claude CLI を fire-and-forget",
+      "file": "src/services/claude-code-ocr.ts:77"
+    },
+    {
+      "id": "V2",
+      "severity": "C",
+      "title": "ANTHROPIC_API_KEY 設定だけで OCR 自動転送が始まる (DESIGN.md の明示 enable 契約と乖離)",
+      "file": "src/server.ts:36"
+    },
+    {
+      "id": "I4",
+      "severity": "C",
+      "title": "UFJ クレカ CSV の fx 列がハードコード row[10]/row[11]、 layout 変動で沈黙",
+      "file": "src/importers/ufj-csv.ts:58"
+    },
+    {
+      "id": "M1",
+      "severity": "C",
+      "title": "AIFormat §5 への Quaestor 例外追記が未着手",
+      "file": "README.md:37"
+    }
+  ],
+  "autofix_count": 0,
+  "autofix_applied": false,
+  "files": [
+    "review/2026-05-13/REVIEW.md",
+    "review/2026-05-13/REVIEW_DESIGN.md",
+    "review/2026-05-13/REVIEW_VULNERABILITY.md",
+    "review/2026-05-13/REVIEW_IMPLEMENTATION.md",
+    "review/2026-05-13/REVIEW_MISSING_FEATURES.md",
+    "review/2026-05-13/REVIEW_QUALITY.md",
+    "review/2026-05-13/AUTOFIX.md",
+    "review/2026-05-13/latest.json"
+  ],
+  "notes": "個人金融データ保管境界 / 銀行クレデンシャル管理に着目。 銀行 OAuth は持たず CSV/PDF 入力のみで credential 管理リスクは無い (V7=A)。 一方で OCR 経路で外部 API/CLI に画像が出る境界が default-on (V1/V2) になっており C 評価の主因。 ソース未修正、 AUTOFIX は提案列挙のみ。"
+}
