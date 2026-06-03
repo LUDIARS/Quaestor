@@ -149,3 +149,91 @@ describe("API: /v1/receipts", () => {
     expect(get.status).toBe(404);
   });
 });
+
+describe("API: /v1/receipts/:id/commit — 投入 (date-place-amount unique)", () => {
+  let app: ReturnType<typeof buildApp>;
+  let receiptsRoot: string;
+
+  // 別画像 (image-hash dedup を避ける)
+  const PNG_BLACK =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABh6FO1AAAAABJRU5ErkJggg==";
+
+  beforeEach(() => {
+    receiptsRoot = mkdtempSync(join(tmpdir(), "quaestor-commit-"));
+    app = buildApp({ db: new Database(":memory:"), receiptsRoot });
+  });
+  afterEach(() => { rmSync(receiptsRoot, { recursive: true, force: true }); });
+
+  async function createReceipt(b64: string): Promise<string> {
+    const res = await app.request("/v1/receipts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ image_b64: b64, ext: "png" }),
+    });
+    return ((await res.json()) as { receipt: { id: string } }).receipt.id;
+  }
+
+  async function setOcr(id: string, fields: Record<string, unknown>): Promise<void> {
+    await app.request(`/v1/receipts/${id}/ocr`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ocr_status: "done", ...fields }),
+    });
+  }
+
+  it("rejects commit when date/payee/total incomplete (422)", async () => {
+    const id = await createReceipt(PNG_1x1);
+    await setOcr(id, { payee: "サイゼリヤ", total: 1820 }); // date 欠落
+    const res = await app.request(`/v1/receipts/${id}/commit`, { method: "POST" });
+    expect(res.status).toBe(422);
+    const j = await res.json() as { error: string; missing: string[] };
+    expect(j.error).toBe("incomplete");
+    expect(j.missing).toContain("date");
+  });
+
+  it("commits when complete and sets committed_at", async () => {
+    const id = await createReceipt(PNG_1x1);
+    await setOcr(id, { date: "2025-04-15", payee: "サイゼリヤ 中目黒店", total: 1820 });
+    const res = await app.request(`/v1/receipts/${id}/commit`, { method: "POST" });
+    expect(res.status).toBe(200);
+    const j = await res.json() as { ok: boolean; receipt: { committed_at: number | null } };
+    expect(j.ok).toBe(true);
+    expect(j.receipt.committed_at).toBeGreaterThan(0);
+  });
+
+  it("rejects duplicate by (date-place-amount) with 409", async () => {
+    const a = await createReceipt(PNG_1x1);
+    await setOcr(a, { date: "2025-04-15", payee: "サイゼリヤ 中目黒店", total: 1820 });
+    expect((await app.request(`/v1/receipts/${a}/commit`, { method: "POST" })).status).toBe(200);
+
+    const b = await createReceipt(PNG_BLACK);
+    await setOcr(b, { date: "2025-04-15", payee: "サイゼリヤ 中目黒店", total: 1820 });
+    const res = await app.request(`/v1/receipts/${b}/commit`, { method: "POST" });
+    expect(res.status).toBe(409);
+    const j = await res.json() as { error: string; existing_id: string };
+    expect(j.error).toBe("duplicate");
+    expect(j.existing_id).toBe(a);
+  });
+
+  it("payee 正規化で重複判定 (全角/空白/大小)", async () => {
+    const a = await createReceipt(PNG_1x1);
+    await setOcr(a, { date: "2025-05-01", payee: "ABC Store", total: 500 });
+    expect((await app.request(`/v1/receipts/${a}/commit`, { method: "POST" })).status).toBe(200);
+
+    const b = await createReceipt(PNG_BLACK);
+    // 全角英字 + 余分な空白 → 正規化すると "ABC STORE" で一致
+    await setOcr(b, { date: "2025-05-01", payee: "ＡＢＣ　　Store", total: 500 });
+    const res = await app.request(`/v1/receipts/${b}/commit`, { method: "POST" });
+    expect(res.status).toBe(409);
+  });
+
+  it("commit は冪等 (再投入は already:true)", async () => {
+    const id = await createReceipt(PNG_1x1);
+    await setOcr(id, { date: "2025-06-01", payee: "X", total: 100 });
+    expect((await app.request(`/v1/receipts/${id}/commit`, { method: "POST" })).status).toBe(200);
+    const res2 = await app.request(`/v1/receipts/${id}/commit`, { method: "POST" });
+    expect(res2.status).toBe(200);
+    const j = await res2.json() as { ok: boolean; already: boolean };
+    expect(j.already).toBe(true);
+  });
+});
