@@ -5,7 +5,7 @@
 ```
 ┌─────────────────────────────────┐    ┌──────────────────┐
 │ React UI (Vite + Foundation UI) │◄──►│ Backend (Hono)   │
-│  - AR Scanner page              │    │  - REST + WS     │
+│  - Scan page (手動/AR 撮影)     │    │  - REST + WS     │
 │  - Ledger / Reconcile pages     │    │  - SQLite (better│
 │  - Importer wizards             │    │    -sqlite3)     │
 └────────────┬────────────────────┘    └────────┬─────────┘
@@ -78,6 +78,7 @@ type Receipt = {
   geo?: { lat: number; lon: number; accuracy?: number };
   image_path: string;          // local file (originals/yyyy/mm/<id>.jpg)
   ocr_raw: string;             // Claude vision の raw response 保持
+  committed_at: number | null; // 「投入」 済 unix ts。 null = 未投入 (撮影/OCR 待ち or 要編集)
   metadata: Record<string, unknown>;
 };
 
@@ -94,19 +95,44 @@ type Reconciliation = {
 
 `metadata` を持たせることで extension が DB schema 変更なしに追加できる。
 
-## AR receipt scanner — 内部 flow
+## レシート撮影 — 2 モード
 
-1. `<video>` に getUserMedia stream を流す (環境カメラ優先)
-2. 30 fps の `requestVideoFrameCallback` で各フレームを `<canvas>` に縮小描画 (128×256)
-3. グレースケール → 適応的二値化 (Otsu or 単純 threshold)
-4. 連結成分から大きな白矩形 (傾き許容) を抽出
-5. アスペクト比 (縦長) + 占有率 + コーナー安定度の 3 指標で receipt らしさを score
-6. score が閾値超えで N フレーム連続安定したら、 `ImageCapture.takePhoto` で高解像度フレームを grab
-7. 矩形座標で warp / crop → backend に POST
-8. backend は Claude vision に「レシート構造化抽出」プロンプトで投げて結果保存
-9. UI に結果カードを表示、 ユーザが OK → DB へ insert
+撮影は **手動シャッター (既定)** と **AR 自動検出 (opt-in)** の 2 モード。 Scan ページ上部で
+切替し、選択は localStorage に保持する。 どちらも backend の `POST /v1/receipts` に画像を投げる点は共通で、
+違いは「いつシャッターを切るか」 だけ。 OCR / 保存 / キュー / 照合は検知方式に依存しない。
 
-性能目標: 検出ループは 30 fps を保ち、 OCR レイテンシは 2-5 秒許容。
+### 手動シャッター (manual) — 既定
+
+端で受領書を自動検出する必要は実運用上なかったため、 普通にパシャパシャ撮る方式を既定とする。
+
+1. `<video>` に getUserMedia stream を流す (環境カメラ優先)。 検知ループは回さない
+2. ユーザがシャッターボタンを押すたびに現フレームを jpeg 化 (最大辺 1080px) → `POST /v1/receipts`
+   (`metadata.kind = "manual"`)。 何枚でも連写できる
+3. backend は画像を保存 + **image-hash で直近 30 秒の同一フレーム連投を dedup** (二度押し対策) し、
+   pending receipt を作る。 `kind=manual` は自動で OCR を起動する (Anthropic SDK or Claude Code CLI)
+4. フロントは「このセッションの撮影」 リストで各 receipt の OCR 進捗を poll 表示
+5. **投入ゲート**: 日付・場所 (payee)・金額 (total) が揃ったら「投入」 ボタンが活性化。 欠けていれば
+   `ReceiptEditor` で補完してから投入
+6. 投入 = `POST /v1/receipts/:id/commit`。 server が完備チェック + 重複判定の上で `committed_at` をセット
+
+### AR 自動検出 (ar) — opt-in (旧来方式)
+
+1. 30 fps で各フレームを `<canvas>` に縮小描画 (最大辺 256) → グレースケール + 適応的二値化
+2. 連結成分から大きな白矩形を抽出、 アスペクト比 + 占有率 + Tesseract キーワード (合計 等) で score
+3. score が閾値超えで N フレーム連続安定したら高解像度フレームを grab (`kind=stable`) → `POST /v1/receipts`
+4. 以降は manual と同じ (OCR → 投入)
+
+性能目標: AR 検出ループは 30 fps を保ち、 OCR レイテンシは 2-5 秒許容。
+
+## ユニーク判定 (投入時の dedup)
+
+撮影直後の image-hash dedup は「同じ 1 フレームの連投」 を弾くだけ。 **会計上の重複判定は
+(日付 - 場所 - 金額) の組** で行う (`POST /v1/receipts/:id/commit`)。
+
+- 完備チェック: `date` / `payee` / `total` のいずれか欠落 → 422 `incomplete` (投入不可)
+- 重複判定: 既に投入済 (`committed_at IS NOT NULL`) の中に同じ (date, payee, total) があれば 409 `duplicate`。
+  payee は `normalizePayee` (全角→半角・空白圧縮・大小無視) で正規化突合
+- 投入は冪等 (再投入は `already:true` を返すだけ)
 
 ## 取引取り込み (Importers)
 

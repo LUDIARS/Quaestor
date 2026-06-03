@@ -157,10 +157,16 @@ export function applyMigrations(db: Database.Database): void {
   db.transaction(() => {
     for (const sql of STATEMENTS) db.exec(sql);
   })();
-  // 追加カラム (冪等的に追加)
+  // 追加カラム (冪等的に追加) — INDEX は ALTER の後に発行する
   ensureColumn(db, "transactions", "is_transfer", "INTEGER NOT NULL DEFAULT 0");
   db.exec("CREATE INDEX IF NOT EXISTS idx_tx_transfer ON transactions(is_transfer)");
-  db.pragma("user_version = 2");
+  // receipts.committed_at: 「投入」 済タイムスタンプ (NULL = 未投入)。
+  // 手動シャッター flow で OCR 後にデータ完備を確認 → 投入する際にセットする。
+  ensureColumn(db, "receipts", "committed_at", "INTEGER");
+  // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
+  // ここでは date + total の絞り込みに使う。
+  db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
+  db.pragma("user_version = 3");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */
