@@ -109,12 +109,13 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const saved = deps.storage.save(id, buf, capturedAt, ext);
     deps.repo.setImagePath(id, saved.relativePath);
 
-    // stable capture (確定スキャン) は自動で Claude Code OCR を spawn する。
+    // stable capture (確定スキャン) と manual (手動シャッター) は自動で Claude Code OCR を spawn する。
     // speculative は spawn しない (頻度多くて claude 起動が間に合わないため、 queue 経由で手動)。
     // 2 秒 throttle が走っていれば skip (連続スキャンや手動 OCR との被りを防ぐ)
     const kind = (meta as { kind?: string }).kind;
+    const autoOcr = kind === "stable" || kind === "manual";
     let autoTriggered = false;
-    if (kind === "stable" && !deps.ocr && detectClaudeCli() && takeThrottleSlot(id)) {
+    if (autoOcr && !deps.ocr && detectClaudeCli() && takeThrottleSlot(id)) {
       const port = Number(process.env.QUAESTOR_PORT ?? 17400);
       const baseUrl = `http://127.0.0.1:${port}`;
       const cco = new ClaudeCodeOcr({ backendBaseUrl: baseUrl, workingDir: projectRoot() });
@@ -181,6 +182,40 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     deps.repo.setOcrResult(id, parsed.data as Parameters<typeof deps.repo.setOcrResult>[1]);
     return c.json({ receipt: deps.repo.find(id) });
+  });
+
+  // POST /v1/receipts/:id/commit — 「投入」: データ完備チェック + (日付-場所-金額) 重複判定 → 確定
+  //  422 incomplete  : date / payee / total のいずれか欠落 (OCR 未完 or 要編集)
+  //  409 duplicate   : 既に投入済の中に同じ (日付-場所-金額) がある
+  app.post("/:id/commit", (c) => {
+    const id = c.req.param("id");
+    const r = deps.repo.find(id);
+    if (!r) return c.json({ error: "not_found" }, 404);
+
+    if (r.committed_at != null) {
+      // 冪等: 既に投入済ならそのまま返す
+      return c.json({ ok: true, already: true, receipt: r });
+    }
+
+    const missing: string[] = [];
+    if (!r.date) missing.push("date");
+    if (!r.payee || !r.payee.trim()) missing.push("payee");
+    if (r.total == null) missing.push("total");
+    if (missing.length > 0) {
+      return c.json({ error: "incomplete", missing, message: "日付・場所・金額が揃っていません" }, 422);
+    }
+
+    const dup = deps.repo.findCommittedDuplicate(r.date!, r.payee!, r.total!, id);
+    if (dup) {
+      return c.json({
+        error: "duplicate",
+        existing_id: dup.id,
+        message: `同じ (日付-場所-金額) が投入済: ${r.date} / ${r.payee} / ¥${r.total}`,
+      }, 409);
+    }
+
+    deps.repo.commit(id);
+    return c.json({ ok: true, receipt: deps.repo.find(id) });
   });
 
   // DELETE /v1/receipts/:id

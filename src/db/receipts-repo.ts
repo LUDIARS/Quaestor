@@ -1,5 +1,6 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
+import { normalizePayee } from "../shared/text.js";
 
 export type OcrStatus = "pending" | "processing" | "done" | "failed" | "manual";
 
@@ -15,6 +16,8 @@ export interface ReceiptRow {
   geo: string | null;
   ocr_raw: string | null;
   metadata: string | null;
+  /** 「投入」 済タイムスタンプ (unix sec)。 NULL = 未投入 (撮影 + OCR 待ち / 要編集) */
+  committed_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -143,6 +146,41 @@ export class ReceiptsRepo {
     }
     if (input.ocr_raw !== undefined) { sets.push("ocr_raw = @ocr_raw"); params.ocr_raw = input.ocr_raw; }
     const r = this.db.prepare(`UPDATE receipts SET ${sets.join(", ")} WHERE id = @id`).run(params);
+    return r.changes > 0;
+  }
+
+  /**
+   * 投入済 (committed_at IS NOT NULL) の中から、 同じ (日付-場所-金額) を持つ
+   * receipt を返す。 ユニーク判定の正本。 payee は表記揺れに強いよう正規化比較する。
+   * date + total で SQL 絞り込み → payee を JS で正規化突合 (投入済は少数前提)。
+   *
+   * @param excludeId 自分自身を除外したい時の id (再投入チェック用)
+   */
+  findCommittedDuplicate(
+    date: string,
+    payee: string,
+    total: number,
+    excludeId?: string,
+  ): ReceiptRow | undefined {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM receipts
+         WHERE committed_at IS NOT NULL AND date = ? AND total = ?`,
+      )
+      .all(date, total) as ReceiptRow[];
+    const target = normalizePayee(payee);
+    return rows.find((r) => r.id !== excludeId && normalizePayee(r.payee) === target);
+  }
+
+  /** receipt を投入済にする (committed_at をセット)。 既に投入済なら false。 */
+  commit(id: string): boolean {
+    const now = nowSec();
+    const r = this.db
+      .prepare(
+        `UPDATE receipts SET committed_at = ?, updated_at = ?
+         WHERE id = ? AND committed_at IS NULL`,
+      )
+      .run(now, now, id);
     return r.changes > 0;
   }
 
