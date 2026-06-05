@@ -8,6 +8,7 @@ import { ExportPage } from "./pages/ExportPage.js";
 import { Invoices } from "./pages/Invoices.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { FinancialStatement } from "./pages/FinancialStatement.js";
+import { Invest } from "./pages/Invest.js";
 
 type Page =
   | "dashboard"
@@ -18,6 +19,7 @@ type Page =
   | "transactions"
   | "reconcile"
   | "invoices"
+  | "invest"
   | "export";
 
 const PAGES: { key: Page; label: string }[] = [
@@ -29,6 +31,7 @@ const PAGES: { key: Page; label: string }[] = [
   { key: "transactions", label: "transactions" },
   { key: "reconcile", label: "reconcile" },
   { key: "invoices", label: "invoices" },
+  { key: "invest", label: "投資/優待" },
   { key: "export", label: "export" },
 ];
 
@@ -54,6 +57,7 @@ export function App() {
       {page === "transactions" && <Transactions />}
       {page === "reconcile" && <Reconcile />}
       {page === "invoices" && <Invoices />}
+      {page === "invest" && <Invest />}
       {page === "export" && <ExportPage />}
     </div>
   );
