@@ -136,6 +136,12 @@ type Reconciliation = {
 
 ## 取引取り込み (Importers)
 
+### 明細プロファイル (外部登録 importer)
+
+UFJ/SMBC は bespoke importer を維持しつつ、 他社カードは `statement_profiles` に列マッピングを
+登録するだけで取り込める (詳細: [`spec/feature/statement-profiles.md`](./spec/feature/statement-profiles.md))。
+brand 明示 → built-in → profile、 auto-detect は built-in detect → profile の detect_keywords の順。
+
 ### Credit card CSV
 
 各社カードでフォーマットがブレるので、 importer は **header sniff + field mapping config** で解決。 `importers/credit-card-csv/<brand>.json` に header → field の写像を持つ。 未対応 brand はユーザが GUI で mapping 作成 → 保存して再利用可能。

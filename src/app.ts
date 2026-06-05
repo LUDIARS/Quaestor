@@ -17,6 +17,7 @@ import { SecuritiesRepo } from "./db/securities-repo.js";
 import { PayeeSecuritiesRepo } from "./db/payee-securities-repo.js";
 import { StockQuotesRepo } from "./db/stock-quotes-repo.js";
 import { ShareholderPerksRepo } from "./db/shareholder-perks-repo.js";
+import { StatementProfilesRepo } from "./db/statement-profiles-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
@@ -36,6 +37,7 @@ import { invoicesRouter } from "./api/invoices.js";
 import { dashboardRouter } from "./api/dashboard.js";
 import { financialStatementsRouter } from "./api/financial-statements.js";
 import { investRouter } from "./api/invest.js";
+import { statementProfilesRouter } from "./api/statement-profiles.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -65,6 +67,7 @@ export function buildApp(deps: AppDeps): Hono {
   const payeeSecurities = new PayeeSecuritiesRepo(deps.db);
   const stockQuotes = new StockQuotesRepo(deps.db);
   const perks = new ShareholderPerksRepo(deps.db);
+  const statementProfiles = new StatementProfilesRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
 
   // 初回起動時の seed (account_codes が先、 apportionment_rules は account_codes に FK 依存)
@@ -105,7 +108,7 @@ export function buildApp(deps: AppDeps): Hono {
   }));
 
   app.route("/v1/transactions", transactionsRouter({ txs, db: deps.db }));
-  app.route("/v1/imports", importsRouter({ imports, txs, smart }));
+  app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr }));
@@ -115,6 +118,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/dashboard", dashboardRouter({ db: deps.db }));
   app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
+  app.route("/v1/statement-profiles", statementProfilesRouter({ repo: statementProfiles }));
 
   return app;
 }

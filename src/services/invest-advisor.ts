@@ -7,7 +7,16 @@
  */
 
 import type Database from "better-sqlite3";
-import { analyzeBehavior, type BehaviorEntry, type BehaviorFilter } from "./behavior-analysis.js";
+import {
+  analyzeBehavior,
+  dataCoverage,
+  resolveRange,
+  type BehaviorEntry,
+  type BehaviorFilter,
+  type DataCoverage,
+  type ResolvedRange,
+} from "./behavior-analysis.js";
+import type { SourceKind } from "../shared/types.js";
 import { summarizeQuote, type StockClient } from "./stock-client.js";
 import type { SecurityMapper } from "./security-mapper.js";
 import type { PerkClient } from "./perk-client.js";
@@ -69,6 +78,16 @@ export class InvestAdvisor {
 
   behavior(filter: BehaviorFilter = {}): BehaviorEntry[] {
     return analyzeBehavior(this.deps.db, filter);
+  }
+
+  /** データのある月 (既定窓の算出根拠)。 source で絞れる。 */
+  coverage(source?: SourceKind | SourceKind[]): DataCoverage {
+    return dataCoverage(this.deps.db, source);
+  }
+
+  /** filter から実際に集計に使う期間を解決する (UI の期間表示用)。 */
+  resolvedRange(filter: BehaviorFilter = {}): ResolvedRange {
+    return resolveRange(this.deps.db, filter);
   }
 
   /** 上位 payee のうち未マッピングを Claude で解析しキャッシュする。 */
