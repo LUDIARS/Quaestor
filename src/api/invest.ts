@@ -15,20 +15,44 @@ import {
 } from "../services/invest-advisor.js";
 import type { SecuritiesRepo } from "../db/securities-repo.js";
 import type { PayeeSecuritiesRepo, SecurityRelation } from "../db/payee-securities-repo.js";
+import type { SourceKind } from "../shared/types.js";
+import type { BehaviorFilter } from "../services/behavior-analysis.js";
+
+const SOURCE_KINDS = ["credit-card", "bank", "amazon", "receipt", "manual"] as const;
 
 const BehaviorQuery = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
   min_visits: z.coerce.number().int().min(1).max(1000).optional(),
+  /** カンマ区切りの source (例 "credit-card,bank")。 既定は全 source */
+  source: z.string().optional(),
+  /** from/to 未指定時の既定窓 (直近 N 完了月)。 既定 6、 0 で全期間 */
+  months: z.coerce.number().int().min(0).max(60).optional(),
 });
 
-const MapBody = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-  min_visits: z.coerce.number().int().min(1).max(1000).optional(),
-});
+/** "credit-card,bank" → SourceKind[] (不正値は無視)。 空なら undefined */
+function parseSources(raw: string | undefined): SourceKind[] | undefined {
+  if (!raw) return undefined;
+  const list = raw.split(",").map((s) => s.trim()).filter((s): s is SourceKind =>
+    (SOURCE_KINDS as readonly string[]).includes(s),
+  );
+  return list.length ? list : undefined;
+}
+
+/** BehaviorQuery のパース結果を BehaviorFilter に変換 */
+function toFilter(d: z.infer<typeof BehaviorQuery>): BehaviorFilter {
+  return {
+    from: d.from,
+    to: d.to,
+    limit: d.limit,
+    minVisits: d.min_visits,
+    source: parseSources(d.source),
+    months: d.months,
+  };
+}
+
+const MapBody = BehaviorQuery;
 
 const ManualMapBody = z.object({
   ticker: z.string().regex(/^\d{4}$/).nullable(),
@@ -50,12 +74,22 @@ export function investRouter(deps: {
 }): Hono {
   const app = new Hono();
 
-  // GET /behavior — 行動解析ランキング
+  // GET /behavior — 行動解析ランキング (+ 適用期間 / データ被覆メタ)
   app.get("/behavior", (c) => {
     const parsed = BehaviorQuery.safeParse(c.req.query());
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { from, to, limit, min_visits } = parsed.data;
-    return c.json({ items: deps.advisor.behavior({ from, to, limit, minVisits: min_visits }) });
+    const filter = toFilter(parsed.data);
+    return c.json({
+      items: deps.advisor.behavior(filter),
+      range: deps.advisor.resolvedRange(filter),
+      coverage: deps.advisor.coverage(filter.source),
+    });
+  });
+
+  // GET /coverage — データのある月 (UI の期間表示用)
+  app.get("/coverage", (c) => {
+    const sources = parseSources(c.req.query("source"));
+    return c.json({ coverage: deps.advisor.coverage(sources) });
   });
 
   // GET /securities — マッピング済の店名→銘柄リンク一覧
@@ -73,9 +107,8 @@ export function investRouter(deps: {
     const body = await safeJson(c);
     const parsed = MapBody.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { from, to, limit, min_visits } = parsed.data;
     try {
-      const summary = await deps.advisor.mapTopPayees({ from, to, limit, minVisits: min_visits });
+      const summary = await deps.advisor.mapTopPayees(toFilter(parsed.data));
       return c.json({ summary });
     } catch (e) {
       if (e instanceof MapperUnavailable) return c.json({ error: e.message }, 503);
@@ -141,12 +174,16 @@ export function investRouter(deps: {
     }
   });
 
-  // GET /suggestions — 統合提案
+  // GET /suggestions — 統合提案 (+ 適用期間 / データ被覆メタ)
   app.get("/suggestions", (c) => {
     const parsed = BehaviorQuery.safeParse(c.req.query());
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const { from, to, limit, min_visits } = parsed.data;
-    return c.json({ items: deps.advisor.suggestions({ from, to, limit, minVisits: min_visits }) });
+    const filter = toFilter(parsed.data);
+    return c.json({
+      items: deps.advisor.suggestions(filter),
+      range: deps.advisor.resolvedRange(filter),
+      coverage: deps.advisor.coverage(filter.source),
+    });
   });
 
   return app;

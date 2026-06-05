@@ -43,38 +43,69 @@ const RELATION_LABEL: Record<string, string> = {
   none: "該当なし",
 };
 
+interface RangeMeta { from?: string; to?: string }
+interface CoverageMeta { months: string[]; latest: string | null; earliest: string | null }
+
+const SOURCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "credit-card", label: "クレカ" },
+  { value: "", label: "全ソース" },
+  { value: "bank", label: "銀行" },
+  { value: "credit-card,bank", label: "クレカ+銀行" },
+];
+
 export function Invest() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [behavior, setBehavior] = useState<BehaviorEntry[]>([]);
+  const [range, setRange] = useState<RangeMeta>({});
+  const [coverage, setCoverage] = useState<CoverageMeta | null>(null);
+  const [source, setSource] = useState("credit-card");
+  const [months, setMonths] = useState(6);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  /** source/months を共通クエリにする */
+  function query(extra: Record<string, string | number> = {}): string {
+    const p = new URLSearchParams();
+    if (source) p.set("source", source);
+    p.set("months", String(months));
+    for (const [k, v] of Object.entries(extra)) p.set(k, String(v));
+    return p.toString();
+  }
+
   async function load() {
     setLoading(true);
     try {
       const [sg, bh] = await Promise.all([
-        fetch("/v1/invest/suggestions").then((r) => r.json() as Promise<{ items: Suggestion[] }>),
-        fetch("/v1/invest/behavior?limit=30").then((r) => r.json() as Promise<{ items: BehaviorEntry[] }>),
+        fetch(`/v1/invest/suggestions?${query()}`).then(
+          (r) => r.json() as Promise<{ items: Suggestion[]; range: RangeMeta; coverage: CoverageMeta }>,
+        ),
+        fetch(`/v1/invest/behavior?${query({ limit: 30 })}`).then(
+          (r) => r.json() as Promise<{ items: BehaviorEntry[] }>,
+        ),
       ]);
       setSuggestions(sg.items);
       setBehavior(bh.items);
+      setRange(sg.range ?? {});
+      setCoverage(sg.coverage ?? null);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [source, months]);
 
-  async function run(label: string, path: string, body: unknown = {}) {
+  async function run(label: string, path: string, body: Record<string, unknown> = {}) {
     setBusy(label); setErr(null); setMsg(null);
     try {
+      // マッピングは行動分析と同じ source/months 窓を対象にする
+      const merged = path.endsWith("/map") ? { ...body, source: source || undefined, months } : body;
       const res = await fetch(path, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(merged),
       });
       const j = await res.json() as { summary?: Record<string, number>; error?: string };
       if (!res.ok) throw new Error(j.error ?? `${res.status}`);
@@ -96,6 +127,35 @@ export function Invest() {
       <h2>投資 / 優待アドバイザ</h2>
       <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: "-0.4rem" }}>
         よく使う店の運営企業を株主目線で。 まず「① 銘柄マッピング」→「② 株価更新」→「③ 優待更新」を順に実行。
+      </p>
+
+      <section style={{ display: "flex", gap: "1rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem", fontSize: "0.85rem" }}>
+        <label>
+          対象ソース{" "}
+          <select value={source} onChange={(e) => setSource(e.target.value)}>
+            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </label>
+        <label>
+          期間{" "}
+          <select value={months} onChange={(e) => setMonths(Number(e.target.value))}>
+            <option value={3}>直近3ヶ月</option>
+            <option value={6}>直近6ヶ月</option>
+            <option value={12}>直近12ヶ月</option>
+            <option value={0}>全期間</option>
+          </select>
+        </label>
+        <span style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+          {range.from || range.to
+            ? `集計期間: ${range.from ?? "—"} 〜 ${range.to ?? "—"}`
+            : "集計期間: 全期間"}
+          {coverage && coverage.latest
+            ? ` ・ データ ${coverage.months.length}ヶ月 (最新 ${coverage.latest})`
+            : " ・ データなし"}
+        </span>
+      </section>
+      <p style={{ color: "var(--muted)", fontSize: "0.72rem", marginTop: "-0.2rem" }}>
+        ※ クレカ明細は「先月分を当月取込」と1ヶ月遅れのため、 既定は当月を除いた完了月で集計します。
       </p>
 
       <section style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>

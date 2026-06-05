@@ -4,7 +4,7 @@ import { applyMigrations } from "../src/db/schema.js";
 import { ReceiptsRepo } from "../src/db/receipts-repo.js";
 import { TransactionsRepo } from "../src/db/transactions-repo.js";
 import { ReconciliationsRepo } from "../src/db/reconciliations-repo.js";
-import { analyzeBehavior } from "../src/services/behavior-analysis.js";
+import { analyzeBehavior, dataCoverage, resolveRange, addMonths } from "../src/services/behavior-analysis.js";
 
 describe("analyzeBehavior", () => {
   let db: Database.Database;
@@ -112,5 +112,94 @@ describe("analyzeBehavior", () => {
     receipts.setOcrResult(id, { ocr_status: "done", date: "2025-04-01", payee: "未投入店", total: 999 });
     // commit していない
     expect(analyzeBehavior(db)).toHaveLength(0);
+  });
+});
+
+describe("addMonths", () => {
+  it("加減算と年跨ぎ", () => {
+    expect(addMonths("2025-04", -3)).toBe("2025-01");
+    expect(addMonths("2025-02", -3)).toBe("2024-11");
+    expect(addMonths("2025-11", 3)).toBe("2026-02");
+  });
+});
+
+describe("source filter / coverage / 月次窓", () => {
+  let db: Database.Database;
+  let receipts: ReceiptsRepo;
+  let txs: TransactionsRepo;
+  let n = 0;
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    applyMigrations(db);
+    receipts = new ReceiptsRepo(db);
+    txs = new TransactionsRepo(db);
+    n = 0;
+  });
+
+  function seedTx(date: string, payee: string, amount: number, source: "credit-card" | "bank") {
+    n++;
+    txs.insertOne({
+      date, amount_in: null, amount_out: amount,
+      currency: "JPY", fx_amount: null, fx_currency: null,
+      description: payee, payee, source,
+      source_id: `${source}|${date}|${amount}|${n}`, account: source, metadata: {},
+    });
+  }
+
+  function seedReceipt(date: string, payee: string, total: number) {
+    const id = receipts.insert({});
+    receipts.setOcrResult(id, { ocr_status: "done", date, payee, total });
+    receipts.commit(id);
+  }
+
+  it("source=credit-card は credit-card tx のみ (receipts 除外)", () => {
+    seedTx("2025-04-01", "クレカ店", 1000, "credit-card");
+    seedTx("2025-04-02", "銀行引落", 2000, "bank");
+    seedReceipt("2025-04-03", "現金店", 500);
+
+    const r = analyzeBehavior(db, { source: "credit-card" });
+    expect(r).toHaveLength(1);
+    expect(r[0]!.payee_sample).toBe("クレカ店");
+  });
+
+  it("source 未指定は tx 全 source + receipts", () => {
+    seedTx("2025-04-01", "クレカ店", 1000, "credit-card");
+    seedTx("2025-04-02", "銀行引落", 2000, "bank");
+    seedReceipt("2025-04-03", "現金店", 500);
+    expect(analyzeBehavior(db)).toHaveLength(3);
+  });
+
+  it("dataCoverage は source で絞れる", () => {
+    seedTx("2025-01-15", "A", 100, "credit-card");
+    seedTx("2025-03-15", "B", 100, "credit-card");
+    seedTx("2025-04-15", "C", 100, "bank");
+    const all = dataCoverage(db);
+    expect(all.months).toEqual(["2025-01", "2025-03", "2025-04"]);
+    expect(all.latest).toBe("2025-04");
+    const cc = dataCoverage(db, "credit-card");
+    expect(cc.months).toEqual(["2025-01", "2025-03"]);
+    expect(cc.latest).toBe("2025-03");
+  });
+
+  it("resolveRange は from/to 未指定なら最終月から直近N月", () => {
+    seedTx("2025-01-15", "A", 100, "credit-card");
+    seedTx("2025-04-15", "B", 100, "credit-card");
+    const r = resolveRange(db, { months: 2 });
+    expect(r.from).toBe("2025-03-01");
+    expect(r.to).toBe("2025-04-31");
+    // from/to 明示はそのまま
+    expect(resolveRange(db, { from: "2024-01-01" })).toEqual({ from: "2024-01-01", to: undefined });
+    // months=0 は制約なし
+    expect(resolveRange(db, { months: 0 })).toEqual({});
+  });
+
+  it("既定窓 (months) で古い月を除外して集計する", () => {
+    seedTx("2024-01-15", "古い店", 9999, "credit-card");
+    seedTx("2025-03-15", "今の店A", 1000, "credit-card");
+    seedTx("2025-04-15", "今の店B", 2000, "credit-card");
+    // 最終 2025-04 から直近 2 月 → 2024-01 は窓外
+    const r = analyzeBehavior(db, { months: 2 });
+    expect(r.map((e) => e.payee_sample).sort()).toEqual(["今の店A", "今の店B"]);
   });
 });

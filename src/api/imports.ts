@@ -4,8 +4,10 @@ import { z } from "zod";
 import { Buffer } from "node:buffer";
 import * as registry from "../importers/registry.js";
 import { parseSmbcBankPdf } from "../importers/smbc-bank-pdf.js";
+import { parseWithProfile, detectProfile } from "../importers/profile-csv.js";
 import type { ImportsRepo } from "../db/imports-repo.js";
 import type { TransactionsRepo } from "../db/transactions-repo.js";
+import type { StatementProfilesRepo } from "../db/statement-profiles-repo.js";
 import type { ImporterResult, SourceKind } from "../shared/types.js";
 import type { SmartImporter, SmartImportResult } from "../services/smart-import.js";
 
@@ -22,6 +24,8 @@ export interface ImportsApiDeps {
   txs: TransactionsRepo;
   /** スマート import (vision / text) 用、 OCR と同じく省略可 */
   smart?: SmartImporter;
+  /** 外部登録された明細プロファイル (列マッピング importer)。 省略可 */
+  profiles?: StatementProfilesRepo;
 }
 
 const SmartScreenshotSchema = z.object({
@@ -53,27 +57,50 @@ export function importsRouter(deps: ImportsApiDeps): Hono {
     const buf = Buffer.from(parsed.data.content_b64, "base64");
     if (buf.length === 0) return c.json({ error: "empty content" }, 400);
 
-    const picked = parsed.data.brand
-      ? { brand: parsed.data.brand, importer: registry.get(parsed.data.brand) }
-      : registry.detect(buf);
-    if (!picked || !picked.importer) {
-      return c.json({ error: "no importer matched", supported_brands: registry.brands() }, 422);
-    }
-
-    // smbc-bank は async (PDF パース) 専用 path
+    // dispatch: built-in importer (UFJ/SMBC/Amazon) → smbc-bank(PDF) → 登録済 profile の順。
+    // brand 指定なら明示解決、 未指定なら auto-detect (built-in 優先、 次に profile)。
+    const account = parsed.data.account;
     let result: ImporterResult;
-    if (picked.brand === "smbc-bank") {
-      result = await parseSmbcBankPdf(buf, { account: parsed.data.account });
-    } else if (picked.importer) {
-      result = picked.importer.parse(buf, { account: parsed.data.account });
+    let brandUsed: string;
+    let source: SourceKind;
+
+    if (parsed.data.brand) {
+      const brand = parsed.data.brand;
+      if (brand === "smbc-bank") {
+        result = await parseSmbcBankPdf(buf, { account });
+        source = "bank";
+        brandUsed = brand;
+      } else if (registry.get(brand)) {
+        result = registry.get(brand)!.parse(buf, { account });
+        source = sourceForBrand(brand);
+        brandUsed = brand;
+      } else {
+        const profile = deps.profiles?.findByBrand(brand);
+        if (!profile) return c.json({ error: "no importer matched", supported_brands: supportedBrands(deps) }, 422);
+        result = parseWithProfile(profile, buf, { account });
+        source = profile.source;
+        brandUsed = profile.brand;
+      }
     } else {
-      return c.json({ error: "no importer matched", supported_brands: registry.brands() }, 422);
+      const det = registry.detect(buf);
+      if (det) {
+        result = det.brand === "smbc-bank"
+          ? await parseSmbcBankPdf(buf, { account })
+          : det.importer.parse(buf, { account });
+        source = det.brand === "smbc-bank" ? "bank" : sourceForBrand(det.brand);
+        brandUsed = det.brand;
+      } else {
+        const profile = deps.profiles ? detectProfile(deps.profiles.listEnabled(), buf) : null;
+        if (!profile) return c.json({ error: "no importer matched", supported_brands: supportedBrands(deps) }, 422);
+        result = parseWithProfile(profile, buf, { account });
+        source = profile.source;
+        brandUsed = profile.brand;
+      }
     }
-    const source: SourceKind = sourceForBrand(picked.brand);
 
     const importId = deps.imports.insert({
       source,
-      brand: picked.brand,
+      brand: brandUsed,
       account: result.account,
       filename: parsed.data.filename ?? null,
       metadata: { warnings: result.warnings, parsed_rows: result.rows.length },
@@ -88,7 +115,7 @@ export function importsRouter(deps: ImportsApiDeps): Hono {
 
     return c.json({
       import_id: importId,
-      brand: picked.brand,
+      brand: brandUsed,
       account: result.account,
       parsed: result.rows.length,
       inserted: bulk.inserted,
@@ -144,6 +171,12 @@ async function persistSmartResult(
     duplicates: bulk.duplicates,
     warnings: result.warnings,
   });
+}
+
+/** built-in brand + 登録済 profile brand を併せたサポート一覧 (422 のヒント用) */
+function supportedBrands(deps: ImportsApiDeps): string[] {
+  const profileBrands = deps.profiles?.list().map((p) => p.brand) ?? [];
+  return [...registry.brands(), ...profileBrands];
 }
 
 function sourceForBrand(brand: string): SourceKind {
