@@ -160,6 +160,22 @@ AR scanner 経由で生成された `Receipt` を `transactions` には複製し
 4. 0.85 以上なら auto-match、 0.5–0.85 はユーザ承認待ち、 それ未満は捨てる
 5. ユーザが手動で結合・分離可
 
+## 投資 / 優待アドバイザ
+
+会計データの上に乗る分析層 (詳細: [`spec/feature/invest-advisor.md`](./spec/feature/invest-advisor.md))。
+
+1. **行動解析** — `transactions` (出金) + 未 reconcile の committed `receipts` を
+   `normalizePayee` で集約し「よく使う店」ランキングを作る (二重計上回避)
+2. **銘柄マッピング** — 店名 → 運営上場企業 → 証券コードを Claude (tool_use) で同定し
+   `payee_securities` にキャッシュ。 支店違い・表記揺れは ticker 単位で後段集約
+3. **市場データ** — 株価は stooq 日足 (`StockClient` interface で J-Quants 等へ差替可)、
+   株主優待は Claude (公式 API が無いため LLM 知識ベース、 `fetched_at` で鮮度管理)
+4. **統合提案** — 行動 × 株価動向 × 優待 を ticker 単位で結合。 優待利回り =
+   優待価値 / (株価 × 必要株数)、 必要投資額も算出
+
+外部アクセス (Claude / stooq) は POST 操作に限定し、 GET は DB キャッシュのみ返す。
+送信するのは店名・会社名のみで金額/日付/個人情報は送らない。
+
 ## 個人データ・セキュリティ
 
 - DB ファイルは `app_data/quaestor.db`。 デフォルトローカルのみ
@@ -194,6 +210,7 @@ calc に無くて Quaestor が新規に持つもの: **AR レシートスキャ�
 - v0.7: SMBC 系クレカ + SMBC 銀行 PDF
 - v0.8: Tauri 2 wrap
 - v1.0: 仕訳帳 Excel export (calc 互換) + 確定申告下準備
+- v1.1: 投資 / 優待アドバイザ (行動解析 → 銘柄マッピング → 株価/優待 → 統合提案)
 
 ## 未決事項
 
