@@ -9,6 +9,7 @@ import { Invoices } from "./pages/Invoices.js";
 import { Dashboard } from "./pages/Dashboard.js";
 import { FinancialStatement } from "./pages/FinancialStatement.js";
 import { Invest } from "./pages/Invest.js";
+import { StatementProfiles } from "./pages/StatementProfiles.js";
 
 type Page =
   | "dashboard"
@@ -16,6 +17,7 @@ type Page =
   | "scan"
   | "receipts"
   | "imports"
+  | "profiles"
   | "transactions"
   | "reconcile"
   | "invoices"
@@ -28,6 +30,7 @@ const PAGES: { key: Page; label: string }[] = [
   { key: "scan", label: "scan" },
   { key: "receipts", label: "receipts" },
   { key: "imports", label: "imports" },
+  { key: "profiles", label: "明細プロファイル" },
   { key: "transactions", label: "transactions" },
   { key: "reconcile", label: "reconcile" },
   { key: "invoices", label: "invoices" },
@@ -54,6 +57,7 @@ export function App() {
       {page === "scan" && <Scan />}
       {page === "receipts" && <Receipts />}
       {page === "imports" && <Imports />}
+      {page === "profiles" && <StatementProfiles />}
       {page === "transactions" && <Transactions />}
       {page === "reconcile" && <Reconcile />}
       {page === "invoices" && <Invoices />}

@@ -20,8 +20,13 @@ receipts + tx   →    payee → 上場企業 →   →   株価 (stooq)        
 ```
 
 1. **行動解析** `services/behavior-analysis.ts`
-   - `receipts` (committed_at IS NOT NULL) と `transactions` (is_transfer=0, amount_out) を
-     `normalizePayee` キーで集約 → 訪問回数 + 累計支出のランキング。
+   - `transactions` (is_transfer=0, amount_out) を主入力に、 未 reconcile の committed
+     `receipts` を補完して `normalizePayee` キーで集約 → 訪問回数 + 累計支出のランキング。
+   - **クレカ明細が主供給源**。 `source` フィルタ (`credit-card`/`bank`/…) で絞れる。
+     source 指定時はその tx のみ (receipts 除外)。
+   - **月次取込対応**: クレカは「先月分を当月取込」と 1 ヶ月遅れ。 from/to 未指定なら
+     `dataCoverage` の最終月から `months` (既定 6) 遡った窓を既定にし当月の空データを除外。
+     `resolveRange` が窓を解決し `/behavior`・`/suggestions` は適用期間 + coverage を返す。
    - 出力: `{ payee_norm, payee_sample, visits, total_spend, sources[] }`
 
 2. **銘柄マッピング** `services/security-mapper.ts`

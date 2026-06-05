@@ -198,6 +198,33 @@ const STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_quotes_ticker ON stock_quotes(ticker, as_of)`,
 
+  // statement_profiles — クレカ/明細 CSV の列マッピング定義 (外部登録可能な importer)。
+  // UFJ/SMBC は固有ロジックの bespoke importer を維持し、 本テーブルは他社カード追加用。
+  `CREATE TABLE IF NOT EXISTS statement_profiles (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT NOT NULL,                                       -- 表示名 例 "楽天カード"
+    brand           TEXT NOT NULL UNIQUE,                                -- import 時の brand slug 例 "rakuten"
+    source          TEXT NOT NULL DEFAULT 'credit-card'
+                    CHECK (source IN ('credit-card','bank','amazon','receipt','manual')),
+    encoding        TEXT NOT NULL DEFAULT 'auto'
+                    CHECK (encoding IN ('auto','shift_jis','utf-8')),
+    header_skip     INTEGER NOT NULL DEFAULT 0,                          -- 先頭から読み飛ばす行数
+    col_date        INTEGER NOT NULL,                                    -- 0-based 列番号: 日付
+    col_payee       INTEGER NOT NULL,                                    -- 店名
+    col_amount      INTEGER NOT NULL,                                    -- 金額
+    col_memo        INTEGER,                                             -- メモ (任意)
+    amount_sign     TEXT NOT NULL DEFAULT 'out'
+                    CHECK (amount_sign IN ('out','in','signed')),        -- out=出金 / in=入金 / signed=符号で判定
+    filter_col      INTEGER,                                             -- 行フィルタ列 (任意)
+    filter_value    TEXT,                                                -- その列がこの値の行のみ取込 (例 UFJ "確定")
+    date_year_hint  INTEGER,                                             -- M/D 形式用の補完年 (任意)
+    account_default TEXT,                                                -- 既定 account ラベル
+    detect_keywords TEXT,                                                -- JSON 配列: auto-detect 用キーワード
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  )`,
+
   // shareholder_perks — 株主優待 (公式 API が無いため LLM 知識ベース)。 1 ticker = 1 行。
   `CREATE TABLE IF NOT EXISTS shareholder_perks (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,7 +258,7 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 4");
+  db.pragma("user_version = 5");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */
