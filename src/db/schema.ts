@@ -149,6 +149,71 @@ const STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_fs_year ON financial_statements(year, section, display_order)`,
+
+  // ── 投資 / 優待アドバイザ (spec/feature/invest-advisor.md) ──
+
+  // securities — 銘柄マスタ。 ticker = 日本株の証券コード (4 桁) を PK にする
+  `CREATE TABLE IF NOT EXISTS securities (
+    ticker     TEXT PRIMARY KEY,                                       -- 証券コード 例 "8267"
+    name       TEXT NOT NULL,                                          -- 会社名
+    market     TEXT,                                                   -- 例 "東証プライム"
+    metadata   TEXT,                                                   -- JSON 自由領域
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+
+  // payee_securities — 店名(正規化) → 銘柄リンク。 行動解析と市場データの橋渡し。
+  // ticker NULL = 「解析したが上場該当なし」 (relation='none')。 1 payee = 1 行。
+  `CREATE TABLE IF NOT EXISTS payee_securities (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    payee_norm   TEXT NOT NULL UNIQUE,                                 -- normalizePayee 済キー
+    payee_sample TEXT,                                                 -- 元表記サンプル (UI 表示用)
+    ticker       TEXT REFERENCES securities(ticker) ON DELETE SET NULL,
+    relation     TEXT NOT NULL DEFAULT 'operator'
+                 CHECK (relation IN ('operator','brand','parent','none')),
+    confidence   REAL NOT NULL DEFAULT 0,
+    reason       TEXT,                                                 -- Claude の判断根拠
+    source       TEXT NOT NULL DEFAULT 'claude'
+                 CHECK (source IN ('claude','manual')),
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_payee_sec_ticker ON payee_securities(ticker)`,
+
+  // stock_quotes — 株価スナップショット (日足キャッシュ + 期間騰落率)。
+  `CREATE TABLE IF NOT EXISTS stock_quotes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker      TEXT NOT NULL REFERENCES securities(ticker) ON DELETE CASCADE,
+    as_of       TEXT NOT NULL,                                         -- 最新足の日付 ISO yyyy-mm-dd
+    close       REAL,                                                  -- 終値
+    prev_close  REAL,                                                  -- 期間始点の終値 (比較用)
+    change_pct  REAL,                                                  -- 期間騰落率 %
+    period_days INTEGER,                                               -- trend 計算窓
+    currency    TEXT NOT NULL DEFAULT 'JPY',
+    bars        TEXT,                                                  -- JSON: [{date, close}] 直近 N 本 (sparkline)
+    fetched_at  INTEGER NOT NULL,
+    UNIQUE (ticker, as_of)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_quotes_ticker ON stock_quotes(ticker, as_of)`,
+
+  // shareholder_perks — 株主優待 (公式 API が無いため LLM 知識ベース)。 1 ticker = 1 行。
+  `CREATE TABLE IF NOT EXISTS shareholder_perks (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker           TEXT NOT NULL UNIQUE REFERENCES securities(ticker) ON DELETE CASCADE,
+    has_perk         INTEGER NOT NULL DEFAULT 0,                       -- 優待制度の有無
+    min_shares       INTEGER,                                         -- 必要株数
+    description      TEXT,                                            -- 優待内容
+    ex_rights_months TEXT,                                            -- JSON: [3,9] 権利確定月
+    perk_value_yen   INTEGER,                                         -- 優待価値 (円、 概算)
+    yield_pct        REAL,                                            -- 優待利回り % (概算)
+    notes            TEXT,
+    source           TEXT NOT NULL DEFAULT 'claude'
+                     CHECK (source IN ('claude','manual')),
+    fetched_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL
+  )`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -166,7 +231,7 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 3");
+  db.pragma("user_version = 4");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */
