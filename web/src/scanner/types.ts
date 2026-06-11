@@ -19,6 +19,8 @@ export interface DetectedRegion {
   value?: string;
   /** Phase 2 でのアニメーション開始遅延 (ms) */
   delay?: number;
+  /** ボックス種別: noise=analyze中ノイズ演出 / item=レシート個別品目 */
+  kind?: "noise" | "item";
 }
 
 /** 検知エンジン抽象インターフェース。実装を差し替えるための境界。 */

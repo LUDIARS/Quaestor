@@ -500,31 +500,49 @@
 }
 
 /* ------------------------------------------------------------------
-   フィールド個別 CONFIRMED バッジ (confirm フェーズ)
+   ロックオン収縮アニメ (confirm フェーズ、フィールドごと)
    ------------------------------------------------------------------ */
-.sc-confirm-badge {
+.sc-lockon-shrink {
   position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  padding: 3px 10px;
-  border: 1.5px solid var(--sc-clr, #00ffc8);
-  color: var(--sc-clr, #00ffc8);
-  background: rgba(0, 0, 0, 0.75);
-  font-size: 8px;
-  font-weight: 900;
-  letter-spacing: 0.3em;
-  white-space: nowrap;
-  text-shadow: 0 0 8px var(--sc-clr, #00ffc8);
-  box-shadow: 0 0 10px rgba(0,255,200,0.25), inset 0 0 6px rgba(0,255,200,0.06);
-  animation: sc-confirm-badge-in 0.38s cubic-bezier(0.15, 0.8, 0.35, 1.1) both;
+  top: 0; right: 0; bottom: 0; left: 0;
+  border: 2px solid var(--sc-clr, #00ffc8);
+  box-shadow: 0 0 10px var(--sc-clr, #00ffc8),
+              inset 0 0 8px rgba(0, 255, 200, 0.08);
+  animation: sc-lockon-shrink 700ms cubic-bezier(0.2, 0, 0.3, 1) both;
   pointer-events: none;
-  z-index: 8;
+  z-index: 7;
 }
 
-@keyframes sc-confirm-badge-in {
-  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.8) rotate(-8deg); filter: blur(3px); }
-  50%  { opacity: 1; transform: translate(-50%, -50%) scale(0.92) rotate(-2deg); filter: none; }
-  100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-3deg); }
+@keyframes sc-lockon-shrink {
+  0%   { top: 0;   right: 0;   bottom: 0;   left: 0;   opacity: 0; }
+  12%  { opacity: 1; }
+  100% { top: 14%; right: 14%; bottom: 14%; left: 14%; opacity: 1; }
+}
+
+/* ------------------------------------------------------------------
+   confirm 完了後のボックスフェードアウト
+   ------------------------------------------------------------------ */
+.sc-box.is-confirm-done {
+  animation: sc-box-fadeout 600ms ease-out forwards;
+}
+
+@keyframes sc-box-fadeout {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* ------------------------------------------------------------------
+   ノイズ演出ボックス (analyze 中の偽 YOLO 検知)
+   ------------------------------------------------------------------ */
+.sc-box.is-noise {
+  opacity: 0.6;
+}
+.sc-box.is-noise .sc-corner {
+  opacity: 0.7;
+}
+.sc-box.is-noise .sc-target-num {
+  font-size: 7px;
+  opacity: 0.75;
 }
 
 /* confirm フェーズのコーナーパルス (分析とは別の色味で) */
@@ -571,6 +589,76 @@
    ------------------------------------------------------------------ */
 .sc-status--locate  { color: #7c8fff; }
 .sc-status--confirm { color: #00ffc8; }
+
+/* ------------------------------------------------------------------
+   CRT ノイズオーバーレイ (detect フェーズ)
+   ------------------------------------------------------------------ */
+.sc-crt-noise {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  /* ブラウン管スキャンライン: 細かい横縞 */
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.12) 2px,
+      rgba(0, 0, 0, 0.12) 3px
+    );
+  animation: sc-crt-flicker 0.08s steps(1) infinite;
+}
+
+/* ランダムノイズ疑似要素: 粒状テクスチャ */
+.sc-crt-noise::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.08'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  mix-blend-mode: screen;
+  opacity: 0.55;
+  animation: sc-crt-noise-shift 0.12s steps(2) infinite;
+}
+
+/* RGBシフト (色収差) 疑似要素 */
+.sc-crt-noise::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 0, 0, 0.03) 0%,
+    transparent 25%,
+    rgba(0, 255, 255, 0.03) 75%,
+    transparent 100%
+  );
+  mix-blend-mode: screen;
+  animation: sc-crt-rgb-shift 0.25s ease-in-out infinite alternate;
+}
+
+@keyframes sc-crt-flicker {
+  0%  { opacity: 0.95; }
+  20% { opacity: 1; }
+  40% { opacity: 0.97; }
+  60% { opacity: 1; }
+  80% { opacity: 0.93; }
+  100%{ opacity: 1; }
+}
+
+@keyframes sc-crt-noise-shift {
+  0%  { background-position: 0 0; }
+  33% { background-position: -12px 5px; }
+  66% { background-position: 8px -7px; }
+  100%{ background-position: -5px 10px; }
+}
+
+@keyframes sc-crt-rgb-shift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(1px); filter: hue-rotate(2deg); }
+}
 
 /* ------------------------------------------------------------------
    共通ユーティリティ

@@ -94,34 +94,54 @@ export function receiptFieldRegions(c: ReceiptCandidate): DetectedRegion[] {
   ];
 }
 
-/** Phase 3: OCR 結果の値を各領域に埋める */
+/** Phase 3: OCR 結果の値を各領域に埋める。items は個別品目に展開する。 */
 export function fillRegionValues(
   regions: DetectedRegion[],
   fields: OcrFields,
 ): DetectedRegion[] {
-  return regions.map((r) => {
+  return regions.flatMap((r) => {
     switch (r.id) {
       case "payee":
-        return { ...r, value: fields.payee ?? undefined };
+        return [{ ...r, value: fields.payee ?? undefined }];
       case "date":
-        return { ...r, value: fields.date ?? undefined };
+        return [{ ...r, value: fields.date ?? undefined }];
       case "items": {
-        let itemCount: number | undefined;
         try {
           if (fields.items) {
-            const parsed = JSON.parse(fields.items) as unknown[];
-            if (Array.isArray(parsed)) itemCount = parsed.length;
+            const parsed = JSON.parse(fields.items) as Array<unknown>;
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              const maxItems = Math.min(parsed.length, 10);
+              const rowH = r.height / maxItems;
+              const itemH = rowH * 0.88;
+              return parsed.slice(0, maxItems).map((item, i) => {
+                const obj = typeof item === "object" && item !== null
+                  ? (item as Record<string, unknown>) : {};
+                const name = typeof obj["name"] === "string" ? obj["name"]
+                  : typeof item === "string" ? item
+                  : `ITEM ${String(i + 1).padStart(2, "0")}`;
+                return {
+                  ...r,
+                  id:     `item-${i}`,
+                  label:  `ITEM ${String(i + 1).padStart(2, "0")}`,
+                  y:      r.y + i * rowH,
+                  height: itemH,
+                  value:  name,
+                  kind:   "item" as const,
+                  delay:  (r.delay ?? 0) + i * 120,
+                };
+              });
+            }
           }
         } catch { /* ignore */ }
-        return { ...r, value: itemCount != null ? `${itemCount} ITEMS` : undefined };
+        return [{ ...r, value: undefined }];
       }
       case "total":
-        return {
+        return [{
           ...r,
           value: fields.total != null ? `¥${fields.total.toLocaleString()}` : undefined,
-        };
+        }];
       default:
-        return r;
+        return [r];
     }
   });
 }

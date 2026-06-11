@@ -26,6 +26,33 @@ import type { DetectedRegion, FieldLocatorEngine, OcrFields, ScanPhase } from ".
 
 /** スキャンライン 1 回の所要時間。CSS の --sc-dur と合わせる */
 export const DETECT_DURATION_MS = 2000;
+
+// ---------------------------------------------------------------------------
+// analyze 中のノイズ演出: 実際とは無関係なオブジェクト検知を偽装
+// ---------------------------------------------------------------------------
+const NOISE_LABELS  = ["OBJ_A3", "OBJ_B7", "OBJ_F1", "OBJ_C9"] as const;
+const NOISE_COLORS  = ["#fb923c", "#f87171", "#a78bfa", "#fbbf24"] as const;
+const NOISE_POS = [
+  { rx: 0.05, ry: 0.05, rw: 0.18, rh: 0.14 },
+  { rx: 0.72, ry: 0.07, rw: 0.22, rh: 0.12 },
+  { rx: 0.06, ry: 0.74, rw: 0.20, rh: 0.16 },
+  { rx: 0.69, ry: 0.70, rw: 0.23, rh: 0.17 },
+] as const;
+
+function generateNoiseRegions(nw: number, nh: number): DetectedRegion[] {
+  return NOISE_POS.map((p, i) => ({
+    id:         `noise-${i}`,
+    label:      NOISE_LABELS[i] ?? `OBJ_${i}`,
+    x:          nw * (p.rx + (Math.random() - 0.5) * 0.04),
+    y:          nh * (p.ry + (Math.random() - 0.5) * 0.04),
+    width:      nw * p.rw,
+    height:     nh * p.rh,
+    confidence: 0.3 + Math.random() * 0.4,
+    color:      NOISE_COLORS[i] ?? "#fb923c",
+    kind:       "noise" as const,
+    delay:      i * 380,
+  }));
+}
 /** result スタンプ表示後 locate に移行するまでの待機時間 */
 const RESULT_TO_LOCATE_DELAY_MS = 1200;
 
@@ -112,7 +139,7 @@ export function useScanPipeline({
         score: mainRegion.confidence, meta: emptyMeta(),
       });
 
-      setRegions(fieldRegs);
+      setRegions([...fieldRegs, ...generateNoiseRegions(nw, nh)]);
       setPhase("analyze");
     } catch {
       setPhase("analyze");
