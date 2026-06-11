@@ -10,17 +10,37 @@ Quaestor web/backend がフォールバック段の本命 (`PaddleFieldLocator`)
   ブラックボックス学習データ収集 (点2) の供給源。
 - ローカル・オフライン・無料。日本語含む 106 言語対応。
 
-## セットアップ & 起動
+## セットアップ (1 回だけ)
 
+venv + 依存を用意する。これだけやれば以降は **Quaestor 起動時に自動で同時起動** する。
+
+```powershell
+# Windows
+./ocr-sidecar/setup.ps1
+```
 ```bash
-cd ocr-sidecar
-python -m venv .venv
-. .venv/Scripts/activate    # Windows: .venv\Scripts\activate.bat
-pip install -r requirements.txt
-uvicorn main:app --host 127.0.0.1 --port 17350
+# Linux / macOS
+./ocr-sidecar/setup.sh
 ```
 
-初回起動時にモデルを自動 DL する (~数十MB、`~/.paddleocr` にキャッシュ)。
+初回の OCR 実行時にモデルを自動 DL する (~数十MB、`~/.paddleocr` にキャッシュ)。
+
+## 自動起動 (Quaestor と同時)
+
+Quaestor backend (`src/server.ts`) が起動時に `OcrSidecarSupervisor` でこの sidecar を
+子プロセスとして立ち上げる (`.venv` の python → 無ければ PATH の python)。
+クラッシュ時は backoff 付きで再起動。ログは `app_data/ocr-sidecar.log`。
+
+- 無効化: `QUAESTOR_OCR_SIDECAR_MANAGE=0`
+- 外部 sidecar を使う: `QUAESTOR_OCR_SIDECAR_URL=http://host:port` (本機は起動しない)
+- port 変更: `QUAESTOR_OCR_SIDECAR_PORT` (既定 17350)
+
+## 手動起動 (任意)
+
+```bash
+.venv/bin/python -m uvicorn main:app --host 127.0.0.1 --port 17350   # posix
+.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 17350  # win
+```
 
 ## API
 
