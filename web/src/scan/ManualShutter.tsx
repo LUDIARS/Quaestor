@@ -14,6 +14,7 @@ import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
 import { FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
 import { PaddleFieldLocator, ChainedFieldLocator } from "../scanner/paddle-locator.js";
+import { OcrEvolver, type EvolutionProgress } from "../scanner/ocr-evolver.js";
 import type { FieldLocatorEngine } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
@@ -358,6 +359,34 @@ function ScanAnimation({
     });
   }, [phase, regions, shot.id, shot.naturalWidth, shot.naturalHeight]);
 
+  // ---- OCR-GA: LLM 検出待ち (analyze) の間、パラメータ個体を sidecar で評価 ----
+  const evolverRef = useRef<OcrEvolver | null>(null);
+  const evoStartedRef = useRef(false);
+  const evoFinalizedRef = useRef(false);
+  const [evo, setEvo] = useState<EvolutionProgress | null>(null);
+
+  useEffect(() => {
+    if (phase !== "analyze" || evoStartedRef.current) return;
+    evoStartedRef.current = true;
+    const ev = new OcrEvolver("global");
+    evolverRef.current = ev;
+    void (async () => {
+      await ev.loadPopulation();
+      await ev.evaluateAll(shot.imageUrl, (p) => setEvo(p));
+    })();
+  }, [phase, shot.imageUrl]);
+
+  // LLM 真値が揃ったら採点 → backend で世代を進化・永続 (1 回だけ)
+  useEffect(() => {
+    if (evoFinalizedRef.current || !evolverRef.current) return;
+    const done = shot.ocr_status === "done" || shot.ocr_status === "manual";
+    if (!done) return;
+    evoFinalizedRef.current = true;
+    void evolverRef.current.finalize({
+      date: shot.date, payee: shot.payee, total: shot.total, items: shot.items,
+    });
+  }, [shot.ocr_status, shot.date, shot.payee, shot.total, shot.items]);
+
   return (
     <div style={{ position: "absolute", inset: 0, borderRadius: 8, overflow: "hidden" }}>
       <ScannerOverlay
@@ -369,6 +398,7 @@ function ScanAnimation({
         animated={animated}
         onDismiss={onDismiss}
         onExitStart={onExitStart}
+        evolution={phase === "analyze" ? evo : null}
       />
     </div>
   );

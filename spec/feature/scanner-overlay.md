@@ -151,3 +151,34 @@ B で正確 BB+text を即供給し点1/点2を達成 → 学習データ蓄積 
   fire-and-forget で起動 (HTTP 応答はブロックしない)。コストは差分発生時のみ。
 
 蓄積された diff/evaluation は C(自前 YOLO/検出器) の弱点分析 + 学習データの質向上に使う。
+
+---
+
+## 7. OCR パラメータの遺伝的最適化 (OCR-GA、2026-06-11)
+
+LLM(Vision) 検出は遅い。その待機中に画面が暇なので、ローカル OCR (PaddleOCR sidecar) を
+パラメータ違いで反復し、LLM 真値(絶対正解)と照合して良いパラメータを残す = 遺伝的最適化。
+
+### 汎用 GA エンジン (再利用可能)
+GA ロジックはブラックボックス・アーキテクチャでも使えるよう汎用化:
+- `src/services/genetic.ts` — ドメイン非依存。遺伝子スキーマ (number/choice/bool) 駆動で
+  `randomGenome / mutate / crossover / nextGeneration` + `GaStore<G>` (key 別集団を JSON 永続)。
+- `src/services/ocr-ga.ts` — 汎用 engine の OCR 特化。`OCR_GENE_SCHEMA`
+  (detThresh/boxThresh/unclipRatio/limitSideLen/useDilation/dropScore) + `createOcrGaStore`。
+- 永続: `app_data/training/ga/<key>.json` (`global` or 店舗別)。
+
+### フロー
+1. capture → analyze (LLM 待ち) の間、web `OcrEvolver` が
+   `GET /v1/ocr-ga/population` で現世代の個体を取得。
+2. 各個体で sidecar `/detect` (genome 付き) を回し候補を蓄積。`OCR EVOLVE GEN g n/N` busy 演出。
+3. LLM 真値到着 → 各候補を `fitnessVsTruth` で採点 → `POST /v1/ocr-ga/generation`。
+4. backend が エリート保存 + ルーレット選択 + 交叉 + 突然変異で次世代を作り永続 (= GA)。
+   良い遺伝子が残り、次レシートの初期集団になる。
+
+### sidecar
+`ocr-sidecar/main.py` の `/detect` は `genome` (JSON) を受け、その det/rec パラメータの
+PaddleOCR インスタンス (キャッシュ) で実行する。
+
+### 残 (follow-up)
+- 勝ち遺伝子を confirm の検出に live 適用 (現状は集団の進化・永続まで)。
+- 店舗 (payee) 別キーで集団を分ける (現状 global)。

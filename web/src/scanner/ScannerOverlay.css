@@ -918,6 +918,36 @@
 }
 
 /* ------------------------------------------------------------------
+   OCR-GA 評価 busy 演出 (analyze 待機中)
+   ------------------------------------------------------------------ */
+.sc-evolve {
+  position: absolute;
+  left: 50%;
+  bottom: 30px;
+  transform: translateX(-50%);
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 10px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(124, 143, 255, 0.35);
+  border-radius: 4px;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  animation: sc-evolve-pulse 1.4s ease-in-out infinite;
+}
+.sc-evolve-tag  { color: #7c8fff; font-weight: 900; }
+.sc-evolve-gen  { color: rgba(255,255,255,0.7); }
+.sc-evolve-prog { color: #00ffc8; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+@keyframes sc-evolve-pulse {
+  0%, 100% { box-shadow: 0 0 6px rgba(124,143,255,0.15); }
+  50%      { box-shadow: 0 0 16px rgba(124,143,255,0.45); }
+}
+
+/* ------------------------------------------------------------------
    共通ユーティリティ
    ------------------------------------------------------------------ */
 @keyframes sc-blink {

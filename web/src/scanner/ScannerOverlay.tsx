@@ -152,6 +152,8 @@ interface Props {
   onDismiss?: () => void;
   /** exit 演出開始時 (タップ)。呼び出し側がカメラを裏で復帰させるのに使う */
   onExitStart?: () => void;
+  /** OCR-GA 評価の進捗 (analyze 中の待機を埋める busy 演出)。null で非表示 */
+  evolution?: { generation: number; attempt: number; total: number } | null;
 }
 
 export function ScannerOverlay({
@@ -163,6 +165,7 @@ export function ScannerOverlay({
   animated,
   onDismiss,
   onExitStart,
+  evolution,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imgRect, setImgRect] = useState<{
@@ -427,6 +430,15 @@ export function ScannerOverlay({
           </div>
         );
       })}
+
+      {/* OCR-GA 評価 busy 演出 (analyze 待機中、画面の暇を埋める) */}
+      {evolution && evolution.total > 0 && (
+        <div className="sc-evolve">
+          <span className="sc-evolve-tag">OCR EVOLVE</span>
+          <span className="sc-evolve-gen">GEN {evolution.generation}</span>
+          <span className="sc-evolve-prog">{evolution.attempt}/{evolution.total}</span>
+        </div>
+      )}
 
       {/* 本物 BB の演出コールアウト (BB から離して描画 + リーダー線) */}
       {calloutItems.length > 0 && (
