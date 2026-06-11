@@ -39,7 +39,7 @@ export class FallbackFieldLocator implements FieldLocatorEngine {
     const regions = receiptFieldRegions(candidate);
     return fillRegionValues(regions, fields).map((r, i) => ({
       ...r,
-      delay: i * 500,
+      delay: i * 850,
     }));
   }
 }
@@ -118,7 +118,7 @@ function buildFieldRegions(
     if (!found) return;
     const { matched, ...rect } = found;
     regions.push({ ...rect, source: "real", recognizedText: matched, ...r });
-    delay += 500;
+    delay += 850;
   };
 
   push(findText(words, fields.payee), {
@@ -143,7 +143,7 @@ function buildFieldRegions(
       value: `¥${totalStr}`,
       confidence: 0.95, delay,
     });
-    delay += 500;
+    delay += 850;
   }
 
   if (fields.items) {

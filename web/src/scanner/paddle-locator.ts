@@ -81,7 +81,7 @@ function buildRegions(lines: SidecarLine[], fields: OcrFields): DetectedRegion[]
       polygon: line.polygon,
       delay,
     });
-    delay += 500;
+    delay += 850;
   };
 
   push(matchLine(lines, fields.payee), {

@@ -30,8 +30,16 @@ export function ScannerSummary({ regions, exiting }: Props) {
     <div className={`sc-summary${exiting ? " is-exiting" : ""}`}>
       <div className="sc-summary-head">SCAN COMPLETE</div>
       <ul className="sc-summary-list">
-        {rows.map((r) => (
-          <li key={r.id} className="sc-summary-row" style={{ "--sc-clr": r.color ?? "#00ffc8" } as React.CSSProperties}>
+        {rows.map((r, i) => (
+          <li
+            key={r.id}
+            className="sc-summary-row"
+            style={{
+              "--sc-clr": r.color ?? "#00ffc8",
+              // 一つずつ丁寧に: 行を順番にゆっくり出す
+              animationDelay: `${i * 320}ms`,
+            } as React.CSSProperties}
+          >
             <span className="sc-summary-label">{r.label}</span>
             <span className="sc-summary-value">{r.value ?? r.recognizedText}</span>
           </li>
