@@ -150,6 +150,8 @@ interface Props {
   regions: DetectedRegion[];
   animated: boolean;
   onDismiss?: () => void;
+  /** exit 演出開始時 (タップ)。呼び出し側がカメラを裏で復帰させるのに使う */
+  onExitStart?: () => void;
 }
 
 export function ScannerOverlay({
@@ -160,6 +162,7 @@ export function ScannerOverlay({
   regions,
   animated,
   onDismiss,
+  onExitStart,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imgRect, setImgRect] = useState<{
@@ -253,12 +256,15 @@ export function ScannerOverlay({
     return () => window.clearTimeout(t);
   }, [phase, maxRegionDelay]);
 
-  // exit: 画面タップで上からスキャンラインを流して scanner (カメラ) に戻す
+  // exit: 画面タップで上からスキャンラインを流して scanner (カメラ) に戻す。
+  // タップで進めるのは「最後の confirm が出揃ったとき (ready)」だけ。
   const [exiting, setExiting] = useState(false);
   const realRegions = regions.filter((r) => r.source === "real" && r.kind !== "noise");
-  const canExit = phase === "confirm" && confirmDone && !exiting;
+  const ready = phase === "confirm" && confirmDone;
+  const canExit = ready && !exiting;
   function beginExit() {
-    if (exiting || !onDismiss) return;
+    if (exiting || !ready || !onDismiss) return;
+    onExitStart?.();        // カメラを裏で復帰
     setExiting(true);
     window.setTimeout(onDismiss, EXIT_DURATION_MS);
   }
@@ -460,10 +466,10 @@ export function ScannerOverlay({
               {lockedCount}/{totalCount} LOCKED
             </span>
           )}
-          {onDismiss && (phase === "result" || phase === "confirm") && (
+          {onDismiss && (phase === "result" || ready) && (
             <button
               className="sc-close"
-              onClick={(e) => { e.stopPropagation(); if (phase === "confirm") beginExit(); else onDismiss(); }}
+              onClick={(e) => { e.stopPropagation(); if (ready) beginExit(); else onDismiss(); }}
             >CLOSE</button>
           )}
         </div>

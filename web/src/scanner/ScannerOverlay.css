@@ -762,19 +762,48 @@
   border: 1px solid rgba(0, 255, 200, 0.25);
   border-radius: 8px;
   padding: 10px 12px;
-  /* 余韻: やわらかい呼吸グロー */
+  /* 余韻: ゆったりした呼吸グロー (強め・長め) */
   animation:
-    sc-summary-in 0.6s cubic-bezier(0.2, 0.8, 0.3, 1) both,
-    sc-summary-breathe 3.2s ease-in-out 0.6s infinite;
+    sc-summary-in 0.8s cubic-bezier(0.2, 0.8, 0.3, 1) both,
+    sc-summary-breathe 4.2s ease-in-out 0.8s infinite;
 }
 
 @keyframes sc-summary-in {
-  0%   { opacity: 0; transform: translateX(-50%) translateY(12px); filter: blur(3px); }
-  100% { opacity: 1; transform: translateX(-50%) translateY(0);    filter: none; }
+  0%   { opacity: 0; transform: translateX(-50%) translateY(16px) scale(0.96); filter: blur(4px); }
+  60%  { opacity: 1; }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1);       filter: none; }
 }
 @keyframes sc-summary-breathe {
-  0%, 100% { box-shadow: 0 0 10px rgba(0,255,200,0.10), inset 0 0 12px rgba(0,255,200,0.04); }
-  50%      { box-shadow: 0 0 22px rgba(0,255,200,0.28), inset 0 0 16px rgba(0,255,200,0.08); }
+  0%, 100% {
+    transform: translateX(-50%) scale(1);
+    border-color: rgba(0,255,200,0.22);
+    box-shadow: 0 0 12px rgba(0,255,200,0.10), inset 0 0 12px rgba(0,255,200,0.04);
+  }
+  50% {
+    transform: translateX(-50%) scale(1.015);
+    border-color: rgba(0,255,200,0.55);
+    box-shadow: 0 0 30px rgba(0,255,200,0.40), 0 0 60px rgba(0,255,200,0.15), inset 0 0 20px rgba(0,255,200,0.10);
+  }
+}
+
+/* 余韻: 待機中は画面全体にゆっくり明滅するグロー */
+.sc-root.is-waiting::after {
+  animation: sc-waiting-glow 4.2s ease-in-out infinite;
+}
+@keyframes sc-waiting-glow {
+  0%, 100% { opacity: 1;   box-shadow: inset 0 0 40px rgba(0,255,200,0.04); }
+  50%      { opacity: 1;   box-shadow: inset 0 0 90px rgba(0,255,200,0.14); }
+}
+
+/* 余韻: CONFIRMED スタンプも待機中はゆっくり脈動 */
+.sc-root.is-waiting .sc-stamp-inner {
+  animation: sc-stamp-breathe 4.2s ease-in-out infinite;
+}
+@keyframes sc-stamp-breathe {
+  0%, 100% { text-shadow: 0 0 12px rgba(0,255,200,0.9), 0 0 30px rgba(0,255,200,0.3);
+             box-shadow: 0 0 18px rgba(0,255,200,0.35), inset 0 0 16px rgba(0,255,200,0.06); }
+  50%      { text-shadow: 0 0 20px rgba(0,255,200,1), 0 0 50px rgba(0,255,200,0.55);
+             box-shadow: 0 0 34px rgba(0,255,200,0.6), inset 0 0 22px rgba(0,255,200,0.12); }
 }
 
 .sc-summary.is-exiting {
@@ -859,16 +888,6 @@
   animation: sc-exitline var(--sc-dur, 900ms) cubic-bezier(0.4, 0, 0.7, 1) forwards;
 }
 
-/* 通過した上側を暗幕で覆い、scanner に戻る印象を出す */
-.sc-exitline::before {
-  content: "";
-  position: absolute;
-  left: 0; right: 0;
-  bottom: 100%;
-  height: 100vh;
-  background: rgba(0, 0, 0, 0.55);
-}
-
 @keyframes sc-exitline {
   0%   { top: -2%;  opacity: 0; }
   6%   { opacity: 1; }
@@ -876,7 +895,8 @@
   100% { top: 102%; opacity: 0; }
 }
 
-/* exit 中はオーバーレイ内容をフェード (カメラへ戻す) */
+/* exit 中はレシート画像 + オーバーレイ内容をフェードし、奥のカメラを現す */
+.sc-root.is-exiting .sc-image,
 .sc-root.is-exiting .sc-box,
 .sc-root.is-exiting .sc-callout,
 .sc-root.is-exiting .sc-leaders,
@@ -884,8 +904,11 @@
 .sc-root.is-exiting .sc-status,
 .sc-root.is-exiting .sc-progress-bar,
 .sc-root.is-exiting .sc-stream {
-  animation: sc-fade-out 0.5s ease-out both;
+  animation: sc-fade-out 0.6s ease-out both;
 }
+/* exit 中はルート背景も透過してカメラを見せる */
+.sc-root.is-exiting { background: transparent; }
+.sc-root.is-exiting::after { opacity: 0; transition: opacity 0.4s; }
 
 @keyframes sc-fade-out {
   from { opacity: 1; }

@@ -67,6 +67,8 @@ export function ManualShutter() {
   const [capturing, setCapturing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeScanId, setActiveScanId] = useState<string | null>(null);
+  // exit 演出中はカメラ映像を裏で復帰させ、スキャンライン通過でカメラへ戻す
+  const [exitingScan, setExitingScan] = useState(false);
   const [animated, setAnimated] = useState(loadAnimated);
   const [flashKey, setFlashKey] = useState(0);
   const captureLockRef = useRef(false);
@@ -105,6 +107,7 @@ export function ManualShutter() {
           ...prev,
         ];
       });
+      setExitingScan(false);
       setActiveScanId(r.id);
       if (!up.deduped) void kickOcr(r.id).catch(() => { /* poll が拾う */ });
     } catch {
@@ -208,7 +211,9 @@ export function ManualShutter() {
             background: "#000",
             objectFit: "cover",
             position: activeShot ? "absolute" : "relative",
-            opacity: activeShot ? 0 : 1,
+            // exit 中はカメラを表に出す (オーバーレイがフェードして奥のカメラが現れる)
+            opacity: activeShot && !exitingScan ? 0 : 1,
+            transition: "opacity 0.5s ease-out",
           }}
         />
 
@@ -232,7 +237,8 @@ export function ManualShutter() {
             shot={activeShot}
             animated={animated}
             fieldLocator={defaultFieldLocator}
-            onDismiss={() => setActiveScanId(null)}
+            onExitStart={() => setExitingScan(true)}
+            onDismiss={() => { setActiveScanId(null); setExitingScan(false); }}
           />
         )}
 
@@ -277,7 +283,7 @@ export function ManualShutter() {
                 onToggleEdit={() => setEditingId((cur) => (cur === s.id ? null : s.id))}
                 onCommit={() => void commit(s)}
                 onSaved={() => setEditingId(null)}
-                onReplay={() => setActiveScanId(s.id)}
+                onReplay={() => { setExitingScan(false); setActiveScanId(s.id); }}
               />
             ))}
           </div>
@@ -296,11 +302,13 @@ function ScanAnimation({
   animated,
   fieldLocator,
   onDismiss,
+  onExitStart,
 }: {
   shot: Shot;
   animated: boolean;
   fieldLocator?: FieldLocatorEngine;
   onDismiss: () => void;
+  onExitStart?: () => void;
 }) {
   const { phase, regions } = useScanPipeline({
     imageUrl: shot.imageUrl,
@@ -360,6 +368,7 @@ function ScanAnimation({
         regions={regions}
         animated={animated}
         onDismiss={onDismiss}
+        onExitStart={onExitStart}
       />
     </div>
   );
