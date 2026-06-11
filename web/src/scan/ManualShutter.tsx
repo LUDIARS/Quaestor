@@ -8,18 +8,29 @@ import {
   tryGetGeo,
 } from "./captureUpload.js";
 import { ReceiptEditor, type EditableReceipt } from "../components/ReceiptEditor.js";
+import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
+import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
 
-/** このセッションで撮影した 1 枚の状態 (画面ローカル)。 */
+const ANIM_KEY = "quaestor.scan.animated";
+function loadAnimated(): boolean {
+  try { return localStorage.getItem(ANIM_KEY) !== "0"; } catch { return true; }
+}
+function saveAnimated(v: boolean) {
+  try { localStorage.setItem(ANIM_KEY, v ? "1" : "0"); } catch { /* ignore */ }
+}
+
 interface Shot {
   id: string;
   capturedAt: number;
+  imageUrl: string;
+  naturalWidth: number;
+  naturalHeight: number;
   ocr_status: string;
   date: string | null;
   payee: string | null;
   total: number | null;
   items: string | null;
   committed: boolean;
-  /** 投入を弾かれた時のメッセージ (重複 / 不備) */
   note?: string;
 }
 
@@ -28,20 +39,22 @@ function isComplete(s: Shot): boolean {
 }
 
 /**
- * 手動シャッター方式の撮影画面。
+ * 手動シャッター撮影画面。
  *
- * フロー: パシャっと撮る → OCR (自動キック) → 日付・場所・金額が揃ったら投入。
- * 投入時に (日付-場所-金額) で重複判定 (server: POST /v1/receipts/:id/commit)。
- * 端で自動検出はしない (= AR モードと対照)。
+ * フロー: 撮影 → スキャンアニメーション (DETECT→ANALYZE→RESULT) → 投入。
+ * アニメーションは右上トグルでオフ可能。
  */
 export function ManualShutter() {
   const { videoRef, running, error } = useCamera();
   const [shots, setShots] = useState<Shot[]>([]);
   const [capturing, setCapturing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [activeScanId, setActiveScanId] = useState<string | null>(null);
+  const [animated, setAnimated] = useState(loadAnimated);
   const captureLockRef = useRef(false);
 
-  // 撮影: 二度押し対策に短い lock。 連打 (パシャパシャ) は lock 解放後に次が通る。
+  const activeShot = shots.find((s) => s.id === activeScanId) ?? null;
+
   const shoot = useCallback(async () => {
     if (captureLockRef.current) return;
     const video = videoRef.current;
@@ -50,41 +63,41 @@ export function ManualShutter() {
     setCapturing(true);
     try {
       const frame = await captureFrame(video, { maxDim: 1080, quality: 0.9 });
-      const geo = await tryGetGeo();
-      const up = await uploadReceipt({
+      const geo   = await tryGetGeo();
+      const up    = await uploadReceipt({
         b64: frame.b64,
         geo,
         metadata: { source: "manual-shutter", kind: "manual", w: frame.w, h: frame.h },
       });
       const r = up.receipt;
-      // server-side image-hash dedup で既存が返ったら list に重複追加しない
       setShots((prev) => {
         if (prev.some((s) => s.id === r.id)) return prev;
         return [
           {
             id: r.id,
             capturedAt: Math.floor(Date.now() / 1000),
+            imageUrl: `/v1/receipts/${r.id}/image`,
+            naturalWidth:  frame.w,
+            naturalHeight: frame.h,
             ocr_status: r.ocr_status,
-            date: r.date,
-            payee: r.payee,
-            total: r.total,
-            items: null,
+            date: r.date, payee: r.payee, total: r.total, items: null,
             committed: r.committed_at != null,
           },
           ...prev,
         ];
       });
-      // OCR をキック (自動)。 完了は poll で拾う。
+      // アニメーション開始
+      setActiveScanId(r.id);
       if (!up.deduped) void kickOcr(r.id).catch(() => { /* poll が拾う */ });
     } catch {
-      /* 1 枚失敗してもスルー (連写を止めない) */
+      /* 1 枚失敗してもスルー */
     } finally {
       captureLockRef.current = false;
       setCapturing(false);
     }
   }, [videoRef]);
 
-  // 未投入かつ未編集中の shot を 3 秒毎に poll して OCR 結果を反映。
+  // OCR 結果を 3 秒毎に poll
   useEffect(() => {
     const pending = shots.some((s) => !s.committed);
     if (!pending) return;
@@ -95,25 +108,26 @@ export function ManualShutter() {
         targets.map(async (s) => {
           try {
             const j = (await (await fetch(`/v1/receipts/${s.id}`)).json()) as {
-              receipt?: { ocr_status: string; date: string | null; payee: string | null; total: number | null; items: string | null; committed_at: number | null };
+              receipt?: {
+                ocr_status: string;
+                date: string | null; payee: string | null;
+                total: number | null; items: string | null;
+                committed_at: number | null;
+              };
             };
             return j.receipt ? { id: s.id, r: j.receipt } : null;
-          } catch {
-            return null;
-          }
+          } catch { return null; }
         }),
       );
       setShots((prev) =>
         prev.map((s) => {
-          const u = updates.find((x) => x && x.id === s.id);
+          const u = updates.find((x) => x?.id === s.id);
           if (!u) return s;
           return {
             ...s,
             ocr_status: u.r.ocr_status,
-            date: u.r.date,
-            payee: u.r.payee,
-            total: u.r.total,
-            items: u.r.items,
+            date: u.r.date, payee: u.r.payee,
+            total: u.r.total, items: u.r.items,
             committed: u.r.committed_at != null,
           };
         }),
@@ -127,8 +141,9 @@ export function ManualShutter() {
     setShots((prev) =>
       prev.map((x) => {
         if (x.id !== s.id) return x;
-        if (res.ok) return { ...x, committed: true, note: undefined };
-        return { ...x, note: res.message ?? res.error };
+        return res.ok
+          ? { ...x, committed: true, note: undefined }
+          : { ...x, note: res.message ?? res.error };
       }),
     );
   }
@@ -137,42 +152,80 @@ export function ManualShutter() {
 
   return (
     <div>
-      <h2>レシート撮影</h2>
-      <p style={{ color: "var(--c-subtle)", fontSize: "0.85rem" }}>
-        レシートを画面に収めて <strong>シャッター</strong> を押すだけ。 何枚でも続けて撮れます。
-        撮影 → OCR (自動) → <strong>日付・場所・金額</strong> が揃ったら投入。
-        投入は (日付-場所-金額) が同じものを重複として弾きます。
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
+        <h2 style={{ margin: 0 }}>レシート撮影</h2>
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.75rem", color: "var(--c-subtle)", cursor: "pointer", marginLeft: "auto" }}>
+          <input
+            type="checkbox"
+            checked={animated}
+            onChange={(e) => { setAnimated(e.target.checked); saveAnimated(e.target.checked); }}
+            style={{ margin: 0 }}
+          />
+          スキャンアニメ
+        </label>
+      </div>
+      <p style={{ color: "var(--c-subtle)", fontSize: "0.85rem", marginTop: 0 }}>
+        レシートを画面に収めて <strong>シャッター</strong> を押すだけ。
+        撮影 → OCR → <strong>日付・場所・金額</strong> が揃ったら投入。
       </p>
 
-      <div className="scan-stage" style={{ position: "relative", maxWidth: 480 }}>
-        <video ref={videoRef} muted playsInline style={{ width: "100%", borderRadius: 8, background: "#000" }} />
+      {/* カメラ + スキャンアニメーション */}
+      <div
+        className="scan-stage"
+        style={{ position: "relative", maxWidth: 480, aspectRatio: activeShot ? "3/4" : "4/3" }}
+      >
+        {/* カメラ映像 (アニメ非表示時は常に表示、表示時は後ろに隠れる) */}
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          style={{
+            width: "100%",
+            height: "100%",
+            borderRadius: 8,
+            background: "#000",
+            objectFit: "cover",
+            position: activeShot ? "absolute" : "relative",
+            opacity: activeShot ? 0 : 1,
+          }}
+        />
+
+        {/* スキャンアニメーション */}
+        {activeShot && (
+          <ScanAnimation
+            shot={activeShot}
+            animated={animated}
+            onDismiss={() => setActiveScanId(null)}
+          />
+        )}
+
+        {/* シャッターボタン */}
         <button
           onClick={() => void shoot()}
-          disabled={!running || capturing}
+          disabled={!running || capturing || !!activeShot}
           aria-label="シャッター"
           style={{
             position: "absolute",
             bottom: "1rem",
             left: "50%",
             transform: "translateX(-50%)",
-            width: 68,
-            height: 68,
+            width: 68, height: 68,
             borderRadius: "50%",
             border: "4px solid rgba(255,255,255,0.9)",
             background: capturing ? "var(--c-accent)" : "rgba(255,255,255,0.35)",
-            cursor: running ? "pointer" : "not-allowed",
+            cursor: (running && !activeShot) ? "pointer" : "not-allowed",
             boxShadow: "0 2px 12px rgba(0,0,0,0.5)",
-            transition: "background 120ms, transform 80ms",
+            transition: "background 120ms",
+            zIndex: 20,
           }}
         />
       </div>
 
       <div className="scan-meta" style={{ marginTop: "0.5rem" }}>
-        {error ? (
-          <span className="error">{error}</span>
-        ) : (
-          <>camera: {running ? "ready" : "starting…"} ｜ 撮影 {shots.length} 枚 ｜ 投入済 {committedCount}</>
-        )}
+        {error
+          ? <span className="error">{error}</span>
+          : <>camera: {running ? "ready" : "starting…"} ｜ 撮影 {shots.length} 枚 ｜ 投入済 {committedCount}</>
+        }
       </div>
 
       {shots.length > 0 && (
@@ -187,6 +240,7 @@ export function ManualShutter() {
                 onToggleEdit={() => setEditingId((cur) => (cur === s.id ? null : s.id))}
                 onCommit={() => void commit(s)}
                 onSaved={() => setEditingId(null)}
+                onReplay={() => setActiveScanId(s.id)}
               />
             ))}
           </div>
@@ -196,48 +250,112 @@ export function ManualShutter() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// スキャンアニメーション領域
+// ---------------------------------------------------------------------------
+
+function ScanAnimation({
+  shot,
+  animated,
+  onDismiss,
+}: {
+  shot: Shot;
+  animated: boolean;
+  onDismiss: () => void;
+}) {
+  const { phase, regions } = useScanPipeline({
+    imageUrl: shot.imageUrl,
+    naturalWidth:  shot.naturalWidth,
+    naturalHeight: shot.naturalHeight,
+    ocrStatus: shot.ocr_status,
+    ocrFields: {
+      date: shot.date, payee: shot.payee,
+      total: shot.total, items: shot.items,
+    },
+    animated,
+  });
+
+  // result フェーズから 3.5s 後に自動 dismiss
+  useEffect(() => {
+    if (phase !== "result") return;
+    const t = window.setTimeout(onDismiss, 3500);
+    return () => window.clearTimeout(t);
+  }, [phase, onDismiss]);
+
+  return (
+    <div style={{ position: "absolute", inset: 0, borderRadius: 8, overflow: "hidden" }}>
+      <ScannerOverlay
+        imageUrl={shot.imageUrl}
+        naturalWidth={shot.naturalWidth}
+        naturalHeight={shot.naturalHeight}
+        phase={phase}
+        regions={regions}
+        animated={animated}
+        onDismiss={onDismiss}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ショットカード
+// ---------------------------------------------------------------------------
+
 function ShotCard({
   shot,
   editing,
   onToggleEdit,
   onCommit,
   onSaved,
+  onReplay,
 }: {
   shot: Shot;
   editing: boolean;
   onToggleEdit: () => void;
   onCommit: () => void;
   onSaved: () => void;
+  onReplay: () => void;
 }) {
-  const complete = isComplete(shot);
-  const borderColor = shot.committed
-    ? "var(--c-ok)"
-    : complete
-      ? "var(--c-accent)"
-      : "var(--c-border)";
+  const complete    = isComplete(shot);
+  const borderColor = shot.committed ? "var(--c-ok)" : complete ? "var(--c-accent)" : "var(--c-border)";
+
   return (
     <div
       style={{
-        display: "flex",
-        gap: "0.75rem",
-        alignItems: "flex-start",
+        display: "flex", gap: "0.75rem", alignItems: "flex-start",
         background: "var(--c-muted)",
         border: `1px solid ${borderColor}`,
-        borderRadius: 6,
-        padding: "0.5rem",
+        borderRadius: 6, padding: "0.5rem",
       }}
     >
-      <img
-        src={`/v1/receipts/${shot.id}/image`}
-        alt=""
-        style={{ width: 64, height: 85, objectFit: "cover", borderRadius: 4, background: "var(--c-bg)" }}
-      />
+      {/* サムネイル (クリックでリプレイ) */}
+      <button
+        onClick={onReplay}
+        style={{
+          padding: 0, border: "none", background: "none",
+          cursor: "pointer", flex: "0 0 64px",
+        }}
+        title="スキャンアニメをリプレイ"
+      >
+        <img
+          src={shot.imageUrl}
+          alt=""
+          style={{
+            width: 64, height: 85, objectFit: "cover",
+            borderRadius: 4, background: "var(--c-bg)",
+            display: "block",
+          }}
+        />
+      </button>
+
       <div style={{ flex: 1, minWidth: 0, fontSize: "0.8rem" }}>
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ color: shot.committed ? "var(--c-ok)" : "var(--c-subtle)" }}>
             {shot.committed ? "✅ 投入済" : statusLabel(shot.ocr_status)}
           </span>
-          <span style={{ color: "var(--c-subtle)" }}>{new Date(shot.capturedAt * 1000).toLocaleTimeString()}</span>
+          <span style={{ color: "var(--c-subtle)" }}>
+            {new Date(shot.capturedAt * 1000).toLocaleTimeString()}
+          </span>
         </div>
         <div style={{ marginTop: 2 }}>
           <Field label="日付" value={shot.date} />
@@ -246,8 +364,9 @@ function ShotCard({
           {" ｜ "}
           <Field label="金額" value={shot.total != null ? `¥${shot.total.toLocaleString()}` : null} />
         </div>
-        {shot.note && <div className="error" style={{ marginTop: 2, fontSize: "0.75rem" }}>{shot.note}</div>}
-
+        {shot.note && (
+          <div className="error" style={{ marginTop: 2, fontSize: "0.75rem" }}>{shot.note}</div>
+        )}
         {!shot.committed && (
           <div style={{ marginTop: 4, display: "flex", gap: "0.4rem" }}>
             <button
@@ -268,7 +387,6 @@ function ShotCard({
             </button>
           </div>
         )}
-
         {editing && (
           <ReceiptEditor
             receipt={shot as EditableReceipt}
@@ -285,18 +403,21 @@ function Field({ label, value }: { label: string; value: string | null }) {
   return (
     <span>
       <span style={{ color: "var(--c-subtle)" }}>{label}:</span>{" "}
-      {value ? <strong>{value}</strong> : <span style={{ color: "var(--c-danger)" }}>—</span>}
+      {value
+        ? <strong>{value}</strong>
+        : <span style={{ color: "var(--c-danger)" }}>—</span>
+      }
     </span>
   );
 }
 
 function statusLabel(status: string): string {
   switch (status) {
-    case "pending": return "⏳ OCR待ち";
+    case "pending":    return "⏳ OCR待ち";
     case "processing": return "🔄 OCR中";
-    case "done": return "📝 OCR完了";
-    case "failed": return "⚠️ OCR失敗";
-    case "manual": return "✍️ 手入力";
-    default: return status;
+    case "done":       return "📝 OCR完了";
+    case "failed":     return "⚠️ OCR失敗";
+    case "manual":     return "✍️ 手入力";
+    default:           return status;
   }
 }

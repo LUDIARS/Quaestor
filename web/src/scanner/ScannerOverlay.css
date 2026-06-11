@@ -1,0 +1,466 @@
+/* =====================================================================
+   Scanner Overlay — SEED マルチロックオン + 特撮 HUD 演出
+   フェーズ: DETECT → ANALYZE → RESULT
+   ===================================================================== */
+
+.sc-root {
+  position: relative;
+  width: 100%;
+  background: #000;
+  overflow: hidden;
+  font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
+}
+
+.sc-root img.sc-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+/* ------------------------------------------------------------------
+   グローバル HUD フィルター: 軽いグリーン tint
+   ------------------------------------------------------------------ */
+.sc-root::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(0,255,120,0.03) 0%,
+    transparent 40%,
+    transparent 60%,
+    rgba(0,200,255,0.03) 100%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ------------------------------------------------------------------
+   スキャンライン (Phase 1: DETECT)
+   横断後にレーダースウィープを残す
+   ------------------------------------------------------------------ */
+.sc-scanline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 5px;
+  pointer-events: none;
+  background: linear-gradient(to bottom,
+    transparent,
+    rgba(0, 255, 180, 0.85) 50%,
+    transparent
+  );
+  box-shadow:
+    0 0  6px rgba(0, 255, 180, 0.9),
+    0 0 18px rgba(0, 255, 180, 0.55),
+    0 0 40px rgba(0, 255, 180, 0.2),
+    0 -2px 60px rgba(0, 200, 255, 0.15);
+  animation: sc-scanline var(--sc-dur, 1.3s) cubic-bezier(0.3, 0, 0.7, 1) forwards;
+  z-index: 5;
+}
+
+/* スキャンラインの残像 */
+.sc-scanline::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  top: -20px;
+  height: 20px;
+  background: linear-gradient(to top, rgba(0,255,180,0.08), transparent);
+}
+
+@keyframes sc-scanline {
+  0%   { top: 0%;   opacity: 0; }
+  3%   { top: 1.5%; opacity: 1; }
+  97%  { top: 98%;  opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ------------------------------------------------------------------
+   ターゲットボックス
+   ------------------------------------------------------------------ */
+.sc-box {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+}
+
+/* コーナーブラケット: 外→内へスライドイン (SEED ロックオン演出) */
+.sc-corner {
+  position: absolute;
+  width: 12px; height: 12px;
+  border-color: var(--sc-clr, #00ffc8);
+  border-style: solid;
+  transition: transform 0.22s ease-out, opacity 0.22s ease-out;
+  animation: sc-corner-slide-in 0.3s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+.sc-corner--tl { top: -1px;    left: -1px;  border-width: 2px 0 0 2px; transform-origin: top left; }
+.sc-corner--tr { top: -1px;    right: -1px; border-width: 2px 2px 0 0; transform-origin: top right; }
+.sc-corner--bl { bottom: -1px; left: -1px;  border-width: 0 0 2px 2px; transform-origin: bottom left; }
+.sc-corner--br { bottom: -1px; right: -1px; border-width: 0 2px 2px 0; transform-origin: bottom right; }
+
+@keyframes sc-corner-slide-in {
+  0%  {
+    opacity: 0;
+    transform: scale(1.6) translate(
+      calc(var(--sc-cx, 1) * -6px),
+      calc(var(--sc-cy, 1) * -6px)
+    );
+  }
+  60% { opacity: 1; transform: scale(0.95); }
+  100%{ opacity: 1; transform: scale(1); }
+}
+
+.sc-corner--tl { --sc-cx: -1; --sc-cy: -1; }
+.sc-corner--tr { --sc-cx:  1; --sc-cy: -1; }
+.sc-corner--bl { --sc-cx: -1; --sc-cy:  1; }
+.sc-corner--br { --sc-cx:  1; --sc-cy:  1; }
+
+/* main bbox のコーナーは大きく */
+.sc-box--main .sc-corner {
+  width: 16px; height: 16px;
+  border-width: 3px;
+}
+.sc-box--main .sc-corner--tl { border-width: 3px 0 0 3px; }
+.sc-box--main .sc-corner--tr { border-width: 3px 3px 0 0; }
+.sc-box--main .sc-corner--bl { border-width: 0 0 3px 3px; }
+.sc-box--main .sc-corner--br { border-width: 0 3px 3px 0; }
+
+/* ターゲット中央十字線 */
+.sc-crosshair {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 14px; height: 14px;
+  pointer-events: none;
+  animation: sc-crosshair-in 0.4s ease-out both;
+}
+
+.sc-crosshair::before,
+.sc-crosshair::after {
+  content: "";
+  position: absolute;
+  background: var(--sc-clr, #00ffc8);
+  opacity: 0.6;
+}
+.sc-crosshair::before { /* 横線 */
+  top: 50%; left: 0; right: 0;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.sc-crosshair::after { /* 縦線 */
+  left: 50%; top: 0; bottom: 0;
+  width: 1px;
+  transform: translateX(-50%);
+}
+
+@keyframes sc-crosshair-in {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(2.5); }
+  60%  { opacity: 1; transform: translate(-50%, -50%) scale(0.9); }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* analyze フェーズ: ボックスがパルス */
+.sc-box.is-analyze .sc-corner {
+  animation: sc-corner-slide-in 0.3s cubic-bezier(0.2, 0.8, 0.3, 1) both,
+             sc-corner-pulse 2.2s ease-in-out 0.35s infinite;
+}
+
+@keyframes sc-corner-pulse {
+  0%, 100% { opacity: 1; box-shadow: none; }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 6px var(--sc-clr, #00ffc8);
+  }
+}
+
+/* ------------------------------------------------------------------
+   TARGET 番号バッジ
+   ------------------------------------------------------------------ */
+.sc-target-num {
+  position: absolute;
+  top: -1px;
+  right: 2px;
+  padding: 0 4px;
+  background: var(--sc-clr, #00ffc8);
+  color: #000;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.5;
+  animation: sc-flicker 0.35s steps(4) both;
+}
+
+/* ------------------------------------------------------------------
+   ラベル: HEX フリッカー → 実ラベル
+   ------------------------------------------------------------------ */
+.sc-label {
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 0;
+  padding: 1px 6px;
+  background: rgba(0, 0, 0, 0.85);
+  color: var(--sc-clr, #00ffc8);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  animation: sc-flicker 0.4s steps(5) both;
+}
+
+/* HEX 値フリッカー (ラベル確定前の疑似要素で表現) */
+.sc-label.is-flickering {
+  animation: sc-label-flicker 0.65s steps(8) both;
+}
+
+@keyframes sc-label-flicker {
+  0%   { opacity: 0.2; letter-spacing: 0.5em; filter: blur(1px); }
+  25%  { opacity: 1;   letter-spacing: 0.2em; }
+  50%  { opacity: 0.4; letter-spacing: 0.3em; }
+  75%  { opacity: 1;   letter-spacing: 0.15em; }
+  100% { opacity: 1;   letter-spacing: 0.15em; filter: none; }
+}
+
+@keyframes sc-flicker {
+  0%  { opacity: 0; }
+  30% { opacity: 1; }
+  55% { opacity: 0.15; }
+  80% { opacity: 1; }
+  100%{ opacity: 1; }
+}
+
+/* ------------------------------------------------------------------
+   信頼度バー
+   ------------------------------------------------------------------ */
+.sc-bar-wrap {
+  position: absolute;
+  top: 100%;
+  left: 0; right: 0;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.sc-bar {
+  height: 100%;
+  background: var(--sc-clr, #00ffc8);
+  box-shadow: 0 0 4px var(--sc-clr, #00ffc8);
+  animation: sc-bar-fill var(--sc-bar-dur, 0.7s) ease-out both;
+}
+
+@keyframes sc-bar-fill {
+  from { width: 0%; }
+  to   { width: var(--sc-bar-w, 90%); }
+}
+
+/* ------------------------------------------------------------------
+   LOCK-ON フラッシュ (各ボックス confirm エフェクト)
+   ------------------------------------------------------------------ */
+.sc-lockon-flash {
+  position: absolute;
+  inset: -3px;
+  border: 2px solid var(--sc-clr, #00ffc8);
+  box-shadow:
+    0 0 8px  var(--sc-clr, #00ffc8),
+    inset 0 0 8px rgba(0,255,200,0.08);
+  animation: sc-lockon-flash 0.45s ease-out both;
+  pointer-events: none;
+}
+
+@keyframes sc-lockon-flash {
+  0%   { opacity: 1; transform: scale(1.15); }
+  40%  { opacity: 0.8; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1); }
+}
+
+/* ------------------------------------------------------------------
+   値テキスト (Phase 3)
+   ------------------------------------------------------------------ */
+.sc-value {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0; right: 0;
+  text-align: center;
+  color: #00ffc8;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  background: rgba(0, 0, 0, 0.88);
+  border: 1px solid rgba(0,255,200,0.2);
+  padding: 2px 5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: sc-value-in 0.55s ease-out both;
+}
+
+.sc-box--total .sc-value { color: #fbbf24; font-size: 12px; letter-spacing: 0.05em; }
+.sc-box--food  .sc-value { color: #fb923c; }
+
+@keyframes sc-value-in {
+  0%   { opacity: 0; letter-spacing: 0.6em; filter: blur(2px); }
+  50%  { letter-spacing: 0.2em; }
+  100% { opacity: 1; letter-spacing: 0.1em; filter: none; }
+}
+
+/* ------------------------------------------------------------------
+   ALL-CONFIRMED スタンプ (Phase 3)
+   ------------------------------------------------------------------ */
+.sc-stamp {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 9;
+  animation: sc-stamp-in 0.38s cubic-bezier(0.15, 0.8, 0.35, 1.15) both;
+}
+
+.sc-stamp-inner {
+  padding: 10px 22px;
+  border: 3px solid #00ffc8;
+  color: #00ffc8;
+  font-size: clamp(15px, 3.5vw, 20px);
+  font-weight: 900;
+  letter-spacing: 0.35em;
+  transform: rotate(-7deg);
+  text-shadow:
+    0 0 12px rgba(0, 255, 200, 0.9),
+    0 0 30px rgba(0, 255, 200, 0.4);
+  box-shadow:
+    0 0 18px rgba(0, 255, 200, 0.4),
+    inset 0 0 16px rgba(0, 255, 200, 0.07);
+  background: rgba(0, 0, 0, 0.6);
+  line-height: 1;
+}
+
+.sc-stamp--error .sc-stamp-inner {
+  border-color: #f87171;
+  color: #f87171;
+  text-shadow: 0 0 12px rgba(248,113,113,0.9), 0 0 30px rgba(248,113,113,0.4);
+  box-shadow: 0 0 18px rgba(248,113,113,0.4), inset 0 0 16px rgba(248,113,113,0.07);
+}
+
+@keyframes sc-stamp-in {
+  0%   { opacity: 0; transform: scale(2.5) rotate(-12deg); filter: blur(4px); }
+  55%  { opacity: 1; transform: scale(0.93) rotate(-5deg); filter: none; }
+  100% { opacity: 1; transform: scale(1) rotate(-7deg); }
+}
+
+/* ------------------------------------------------------------------
+   HUD ステータスバー (上部)
+   ------------------------------------------------------------------ */
+.sc-status {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.82);
+  border-bottom: 1px solid rgba(0,255,180,0.15);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #00ffc8;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.sc-status-dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+  flex-shrink: 0;
+  animation: sc-blink 0.6s steps(2) infinite;
+}
+
+/* ロックオン数カウンタ */
+.sc-lockon-counter {
+  margin-left: 4px;
+  color: rgba(0,255,200,0.55);
+  font-size: 9px;
+}
+
+.sc-status--analyze { color: #7c8fff; }
+.sc-status--result  { color: #00ffc8; }
+.sc-status--error   { color: #f87171; }
+
+.sc-close {
+  margin-left: auto;
+  pointer-events: all;
+  background: none;
+  border: 1px solid rgba(0,255,200,0.4);
+  color: inherit;
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  padding: 1px 7px;
+  cursor: pointer;
+  opacity: 0.65;
+  transition: opacity 0.15s;
+}
+.sc-close:hover { opacity: 1; border-color: currentColor; }
+
+/* ------------------------------------------------------------------
+   データストリーム (右端 + 左端)
+   ------------------------------------------------------------------ */
+.sc-stream {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 18px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 4;
+}
+.sc-stream--right { right: 0; }
+.sc-stream--left  { left: 0; }
+
+.sc-stream-text {
+  color: rgba(0, 255, 200, 0.18);
+  font-size: 7px;
+  line-height: 1.15;
+  white-space: pre;
+  user-select: none;
+}
+.sc-stream--right .sc-stream-text { animation: sc-stream-dn 3.2s linear infinite; }
+.sc-stream--left  .sc-stream-text { animation: sc-stream-up 3.8s linear infinite; }
+
+@keyframes sc-stream-dn {
+  from { transform: translateY(-50%); }
+  to   { transform: translateY(0%); }
+}
+@keyframes sc-stream-up {
+  from { transform: translateY(0%); }
+  to   { transform: translateY(-50%); }
+}
+
+/* ------------------------------------------------------------------
+   スキャン進捗バー (画面下部)
+   ------------------------------------------------------------------ */
+.sc-progress-bar {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 2px;
+  background: rgba(255,255,255,0.06);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.sc-progress-fill {
+  height: 100%;
+  background: linear-gradient(to right, #00ffc8, #7c8fff);
+  box-shadow: 0 0 6px #00ffc8;
+  transition: width 0.4s ease-out;
+}
+
+/* ------------------------------------------------------------------
+   共通ユーティリティ
+   ------------------------------------------------------------------ */
+@keyframes sc-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
