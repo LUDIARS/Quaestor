@@ -108,8 +108,10 @@ export function ManualShutter() {
           ...prev,
         ];
       });
+      // アニメ ON: スキャン演出を表示 (タップで戻るまで占有)。
+      // アニメ OFF: 演出を出さず、従来どおり連続撮影 → キューイングを許す。
       setExitingScan(false);
-      setActiveScanId(r.id);
+      if (animated) setActiveScanId(r.id);
       if (!up.deduped) void kickOcr(r.id).catch(() => { /* poll が拾う */ });
     } catch {
       /* 1 枚失敗してもスルー */
@@ -117,7 +119,7 @@ export function ManualShutter() {
       captureLockRef.current = false;
       setCapturing(false);
     }
-  }, [videoRef]);
+  }, [videoRef, animated]);
 
   // OCR 結果を 3 秒毎に poll
   useEffect(() => {
