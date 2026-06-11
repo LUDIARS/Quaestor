@@ -458,6 +458,107 @@
 }
 
 /* ------------------------------------------------------------------
+   locate フェーズ再スキャンライン (紫)
+   ------------------------------------------------------------------ */
+.sc-rescanline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 3px;
+  pointer-events: none;
+  background: linear-gradient(to bottom,
+    transparent,
+    rgba(124, 143, 255, 0.9) 50%,
+    transparent
+  );
+  box-shadow:
+    0 0  8px rgba(124, 143, 255, 0.9),
+    0 0 22px rgba(124, 143, 255, 0.5),
+    0 0 45px rgba(100, 120, 255, 0.2);
+  animation: sc-rescanline 1.1s cubic-bezier(0.3, 0, 0.7, 1) forwards;
+  z-index: 5;
+}
+
+@keyframes sc-rescanline {
+  0%   { top: 5%;  opacity: 0; }
+  4%   { opacity: 1; }
+  96%  { opacity: 1; }
+  100% { top: 95%; opacity: 0; }
+}
+
+/* ------------------------------------------------------------------
+   フィールド個別 CONFIRMED バッジ (confirm フェーズ)
+   ------------------------------------------------------------------ */
+.sc-confirm-badge {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1.5px solid var(--sc-clr, #00ffc8);
+  color: var(--sc-clr, #00ffc8);
+  background: rgba(0, 0, 0, 0.75);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.3em;
+  white-space: nowrap;
+  text-shadow: 0 0 8px var(--sc-clr, #00ffc8);
+  box-shadow: 0 0 10px rgba(0,255,200,0.25), inset 0 0 6px rgba(0,255,200,0.06);
+  animation: sc-confirm-badge-in 0.38s cubic-bezier(0.15, 0.8, 0.35, 1.1) both;
+  pointer-events: none;
+  z-index: 8;
+}
+
+@keyframes sc-confirm-badge-in {
+  0%   { opacity: 0; transform: translate(-50%, -50%) scale(1.8) rotate(-8deg); filter: blur(3px); }
+  50%  { opacity: 1; transform: translate(-50%, -50%) scale(0.92) rotate(-2deg); filter: none; }
+  100% { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-3deg); }
+}
+
+/* confirm フェーズのコーナーパルス (分析とは別の色味で) */
+.sc-box.is-confirm .sc-corner {
+  animation: sc-corner-slide-in 0.3s cubic-bezier(0.2, 0.8, 0.3, 1) both,
+             sc-corner-confirm-pulse 2.0s ease-in-out 0.35s infinite;
+}
+
+@keyframes sc-corner-confirm-pulse {
+  0%, 100% { opacity: 1; }
+  50% {
+    opacity: 0.7;
+    box-shadow: 0 0 8px var(--sc-clr, #00ffc8), 0 0 16px var(--sc-clr, #00ffc8);
+  }
+}
+
+/* ------------------------------------------------------------------
+   カメラ常時スキャンライン (撮影前ループ)
+   ------------------------------------------------------------------ */
+.camera-scanline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  pointer-events: none;
+  background: linear-gradient(to bottom,
+    transparent,
+    rgba(0, 255, 180, 0.5) 50%,
+    transparent
+  );
+  box-shadow: 0 0 8px rgba(0, 255, 180, 0.5);
+  animation: sc-camera-scan 3.5s linear infinite;
+  z-index: 5;
+}
+
+@keyframes sc-camera-scan {
+  0%   { top: 0%;   opacity: 0; }
+  4%   { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { top: 100%; opacity: 0; }
+}
+
+/* ------------------------------------------------------------------
+   HUD ステータスカラー拡張
+   ------------------------------------------------------------------ */
+.sc-status--locate  { color: #7c8fff; }
+.sc-status--confirm { color: #00ffc8; }
+
+/* ------------------------------------------------------------------
    共通ユーティリティ
    ------------------------------------------------------------------ */
 @keyframes sc-blink {

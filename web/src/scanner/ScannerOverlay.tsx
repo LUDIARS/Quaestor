@@ -6,6 +6,8 @@
  *   - ラベルが HEX フリッカーから実テキストへ
  *   - ボックス確定時に LOCK-ON フラッシュ
  *   - 左右データストリーム + 下部進捗バー
+ *   - locate フェーズ: 再スキャンライン (紫)
+ *   - confirm フェーズ: フィールドごとに CONFIRMED バッジを順次表示
  *
  * animated=false のときアニメーションをスキップして最終状態を即表示。
  * ボックス座標は naturalWidth/Height 座標系。letterbox は内部補正。
@@ -42,7 +44,6 @@ function FlickerLabel({
 
   useEffect(() => {
     if (!animated) { setDisplay(text); return; }
-    // フリッカー: 40ms × 8 回ランダム → 実テキスト
     let count = 0;
     const total = 8;
     const start = () => {
@@ -86,6 +87,39 @@ function makeStream(lines: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// LOCK-ON フラッシュサブコンポーネント
+// ---------------------------------------------------------------------------
+
+function LockOnFlash({ color, delay }: { color: string; delay: number }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setVisible(true), delay);
+    return () => window.clearTimeout(t);
+  }, [delay]);
+  if (!visible) return null;
+  return (
+    <div
+      className="sc-lockon-flash"
+      style={{ "--sc-clr": color } as React.CSSProperties}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CONFIRMED バッジ (confirm フェーズ、フィールドごと)
+// ---------------------------------------------------------------------------
+
+function ConfirmBadge({ delay }: { delay: number }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setVisible(true), delay);
+    return () => window.clearTimeout(t);
+  }, [delay]);
+  if (!visible) return null;
+  return <div className="sc-confirm-badge">CONFIRMED</div>;
+}
+
+// ---------------------------------------------------------------------------
 // メインコンポーネント
 // ---------------------------------------------------------------------------
 
@@ -114,7 +148,6 @@ export function ScannerOverlay({
     x: number; y: number; w: number; h: number;
   } | null>(null);
 
-  // ストリームテキストはマウント時に一度だけ生成
   const streamL = useMemo(() => makeStream(60), []);
   const streamR = useMemo(() => makeStream(60), []);
 
@@ -149,22 +182,30 @@ export function ScannerOverlay({
     };
   }
 
-  const lockedCount   = regions.filter((r) => r.value !== undefined).length;
-  const totalCount    = regions.length;
-  const progressPct   = progressFor(phase, lockedCount, totalCount);
-  const statusInfo    = statusFor(phase, lockedCount, totalCount);
+  const lockedCount = regions.filter((r) => r.value !== undefined).length;
+  const totalCount  = regions.length;
+  const progressPct = progressFor(phase, lockedCount, totalCount);
+  const statusInfo  = statusFor(phase, lockedCount, totalCount);
 
-  const showScan      = animated && phase === "detect";
-  const showBoxes     = phase !== "idle" && (phase !== "detect" || !animated);
-  const showStreams    = phase === "analyze" || phase === "result";
-  const showStamp     = phase === "result";
+  const showScan    = animated && phase === "detect";
+  const showRescan  = animated && phase === "locate";
+  const showBoxes   = phase !== "idle" && phase !== "locate" && (phase !== "detect" || !animated);
+  const showStreams  = phase === "analyze" || phase === "result" || phase === "locate" || phase === "confirm";
+  const showStamp   = phase === "result" || phase === "confirm";
+
+  // confirm フェーズ: 全リージョンの最大 delay + 800ms でスタンプ表示
+  const maxRegionDelay = regions.reduce((m, r) => Math.max(m, r.delay ?? 0), 0);
+  const stampDelay     = (phase === "confirm" && animated) ? maxRegionDelay + 800 : 700;
 
   return (
     <div className="sc-root" ref={containerRef}>
       <img className="sc-image" src={imageUrl} alt="" draggable={false} />
 
-      {/* スキャンライン */}
+      {/* detect スキャンライン */}
       {showScan && <div className="sc-scanline" />}
+
+      {/* locate 再スキャンライン (紫) */}
+      {showRescan && <div className="sc-rescanline" />}
 
       {/* データストリーム */}
       {showStreams && (
@@ -189,11 +230,12 @@ export function ScannerOverlay({
         const barDur  = animated ? `${0.35 + r.confidence * 0.55}s` : "0s";
         const isAn    = phase === "analyze";
         const isRes   = phase === "result";
+        const isCo    = phase === "confirm";
 
         return (
           <div
             key={r.id}
-            className={`sc-box ${variant}${isAn ? " is-analyze" : ""}`}
+            className={`sc-box ${variant}${isAn ? " is-analyze" : ""}${isCo ? " is-confirm" : ""}`}
             style={{
               left:   pos.left,
               top:    pos.top,
@@ -213,7 +255,7 @@ export function ScannerOverlay({
             ))}
 
             {/* 中央十字線 */}
-            {(isAn || isRes) && (
+            {(isAn || isRes || isCo) && (
               <div
                 className="sc-crosshair"
                 style={{
@@ -236,7 +278,7 @@ export function ScannerOverlay({
             </div>
 
             {/* HEX フリッカーラベル */}
-            {(isAn || isRes) && (
+            {(isAn || isRes || isCo) && (
               <FlickerLabel
                 text={r.label}
                 animated={animated}
@@ -246,7 +288,7 @@ export function ScannerOverlay({
             )}
 
             {/* 信頼度バー */}
-            {(isAn || isRes) && (
+            {(isAn || isRes || isCo) && (
               <div className="sc-bar-wrap">
                 <div
                   className="sc-bar"
@@ -264,8 +306,8 @@ export function ScannerOverlay({
               <LockOnFlash key={`flash-${r.id}-${phase}`} color={clr} delay={delay + 200} />
             )}
 
-            {/* 値テキスト (Phase 3) */}
-            {isRes && r.value && (
+            {/* 値テキスト (result / confirm) */}
+            {(isRes || isCo) && r.value && (
               <div
                 className="sc-value"
                 style={{
@@ -276,6 +318,11 @@ export function ScannerOverlay({
                 {r.value}
               </div>
             )}
+
+            {/* フィールド個別 CONFIRMED バッジ (confirm フェーズ) */}
+            {isCo && (
+              <ConfirmBadge delay={animated ? delay + 420 : 0} />
+            )}
           </div>
         );
       })}
@@ -283,8 +330,8 @@ export function ScannerOverlay({
       {/* CONFIRMED スタンプ */}
       {showStamp && (
         <div
-          className={`sc-stamp${phase === "result" ? "" : " sc-stamp--error"}`}
-          style={{ animationDelay: animated ? "700ms" : "0ms" }}
+          className="sc-stamp"
+          style={{ animationDelay: animated ? `${stampDelay}ms` : "0ms" }}
         >
           <div className="sc-stamp-inner">CONFIRMED</div>
         </div>
@@ -300,7 +347,7 @@ export function ScannerOverlay({
               {lockedCount}/{totalCount} LOCKED
             </span>
           )}
-          {onDismiss && phase === "result" && (
+          {onDismiss && (phase === "result" || phase === "confirm") && (
             <button className="sc-close" onClick={onDismiss}>CLOSE</button>
           )}
         </div>
@@ -316,25 +363,6 @@ export function ScannerOverlay({
         </div>
       )}
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// LOCK-ON フラッシュサブコンポーネント
-// ---------------------------------------------------------------------------
-
-function LockOnFlash({ color, delay }: { color: string; delay: number }) {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => {
-    const t = window.setTimeout(() => setVisible(true), delay);
-    return () => window.clearTimeout(t);
-  }, [delay]);
-  if (!visible) return null;
-  return (
-    <div
-      className="sc-lockon-flash"
-      style={{ "--sc-clr": color } as React.CSSProperties}
-    />
   );
 }
 
@@ -366,6 +394,10 @@ function statusFor(
       };
     case "result":
       return { text: "ALL TARGETS CONFIRMED", mod: "result" };
+    case "locate":
+      return { text: "RE-SCANNING TARGET COORDINATES...", mod: "locate" };
+    case "confirm":
+      return { text: "CONFIRMING FIELD POSITIONS...", mod: "confirm" };
     default:
       return { text: "", mod: "" };
   }
@@ -376,6 +408,8 @@ function progressFor(phase: ScanPhase, locked: number, total: number): number {
     case "detect":  return 15;
     case "analyze": return total > 0 ? 15 + 70 * (locked / total) : 20;
     case "result":  return 100;
+    case "locate":  return 100;
+    case "confirm": return 100;
     default:        return 0;
   }
 }

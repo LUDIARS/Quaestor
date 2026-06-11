@@ -10,6 +10,8 @@ import {
 import { ReceiptEditor, type EditableReceipt } from "../components/ReceiptEditor.js";
 import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
+import { FallbackFieldLocator } from "../scanner/field-locator.js";
+import type { FieldLocatorEngine } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
 function loadAnimated(): boolean {
@@ -38,10 +40,14 @@ function isComplete(s: Shot): boolean {
   return !!s.date && !!s.payee && s.payee.trim() !== "" && s.total != null;
 }
 
+/** FallbackFieldLocator はシングルトンで OK (ステートレス) */
+const defaultFieldLocator: FieldLocatorEngine = new FallbackFieldLocator();
+
 /**
  * 手動シャッター撮影画面。
  *
- * フロー: 撮影 → スキャンアニメーション (DETECT→ANALYZE→RESULT) → 投入。
+ * フロー: 撮影 → スキャンアニメ (DETECT→ANALYZE→RESULT→LOCATE→CONFIRM) → 投入。
+ * カメラは常時 9:16 ポートレート + ループスキャンライン。
  * アニメーションは右上トグルでオフ可能。
  */
 export function ManualShutter() {
@@ -86,7 +92,6 @@ export function ManualShutter() {
           ...prev,
         ];
       });
-      // アニメーション開始
       setActiveScanId(r.id);
       if (!up.deduped) void kickOcr(r.id).catch(() => { /* poll が拾う */ });
     } catch {
@@ -169,12 +174,16 @@ export function ManualShutter() {
         撮影 → OCR → <strong>日付・場所・金額</strong> が揃ったら投入。
       </p>
 
-      {/* カメラ + スキャンアニメーション */}
+      {/* カメラ + スキャンアニメーション — 常時 9:16 ポートレート */}
       <div
         className="scan-stage"
-        style={{ position: "relative", maxWidth: 480, aspectRatio: activeShot ? "3/4" : "4/3" }}
+        style={{
+          position: "relative",
+          maxWidth: 360,
+          aspectRatio: "9/16",
+        }}
       >
-        {/* カメラ映像 (アニメ非表示時は常に表示、表示時は後ろに隠れる) */}
+        {/* カメラ映像 (アニメ表示中は後ろに隠れる) */}
         <video
           ref={videoRef}
           muted
@@ -190,11 +199,17 @@ export function ManualShutter() {
           }}
         />
 
+        {/* カメラ常時スキャンライン (撮影待機中) */}
+        {!activeShot && running && (
+          <div className="camera-scanline" />
+        )}
+
         {/* スキャンアニメーション */}
         {activeShot && (
           <ScanAnimation
             shot={activeShot}
             animated={animated}
+            fieldLocator={defaultFieldLocator}
             onDismiss={() => setActiveScanId(null)}
           />
         )}
@@ -257,10 +272,12 @@ export function ManualShutter() {
 function ScanAnimation({
   shot,
   animated,
+  fieldLocator,
   onDismiss,
 }: {
   shot: Shot;
   animated: boolean;
+  fieldLocator?: FieldLocatorEngine;
   onDismiss: () => void;
 }) {
   const { phase, regions } = useScanPipeline({
@@ -273,14 +290,19 @@ function ScanAnimation({
       total: shot.total, items: shot.items,
     },
     animated,
+    fieldLocator,
+    mode: "receipt",
   });
 
-  // result フェーズから 3.5s 後に自動 dismiss
+  // confirm フェーズなら全 confirm 完了後に dismiss、なければ result 後に dismiss
+  const dismissPhase = fieldLocator ? "confirm" : "result";
+  const dismissDelay = dismissPhase === "confirm" ? 5000 : 3500;
+
   useEffect(() => {
-    if (phase !== "result") return;
-    const t = window.setTimeout(onDismiss, 3500);
+    if (phase !== dismissPhase) return;
+    const t = window.setTimeout(onDismiss, dismissDelay);
     return () => window.clearTimeout(t);
-  }, [phase, onDismiss]);
+  }, [phase, onDismiss, dismissPhase, dismissDelay]);
 
   return (
     <div style={{ position: "absolute", inset: 0, borderRadius: 8, overflow: "hidden" }}>

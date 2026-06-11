@@ -3,7 +3,7 @@
  * Quaestor (receipt) / Memoria (food) 両方で使う。
  */
 
-export type ScanPhase = "idle" | "detect" | "analyze" | "result";
+export type ScanPhase = "idle" | "detect" | "analyze" | "result" | "locate" | "confirm";
 
 /** 検知エンジンが返す bounding box + メタ */
 export interface DetectedRegion {
@@ -43,4 +43,29 @@ export interface OcrFields {
   payee: string | null;
   total: number | null;
   items: string | null;
+}
+
+/**
+ * フィールド座標特定エンジン — 実装差し替え境界。
+ * locate フェーズで実際のピクセル座標を返す。
+ * 実装例: TesseractFieldLocator / ClaudeVisionLocator / YoloFieldLocator
+ */
+export interface FieldLocatorEngine {
+  locate(
+    imageUrl: string,
+    naturalWidth: number,
+    naturalHeight: number,
+    fields: OcrFields,
+    mode: "receipt" | "food",
+  ): Promise<DetectedRegion[]>;
+}
+
+/** 食事解析フィールド (Memoria food モード用) */
+export interface FoodItem {
+  name: string;
+  kind: string;
+  calories: number;
+}
+export interface FoodFields {
+  items: FoodItem[];
 }
