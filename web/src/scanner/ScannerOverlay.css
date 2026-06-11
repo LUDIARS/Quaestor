@@ -55,7 +55,7 @@
     0 0 18px rgba(0, 255, 180, 0.55),
     0 0 40px rgba(0, 255, 180, 0.2),
     0 -2px 60px rgba(0, 200, 255, 0.15);
-  animation: sc-scanline var(--sc-dur, 1.3s) cubic-bezier(0.3, 0, 0.7, 1) forwards;
+  animation: sc-scanline var(--sc-dur, 2s) cubic-bezier(0.25, 0, 0.75, 1) forwards;
   z-index: 5;
 }
 
@@ -455,6 +455,20 @@
   background: linear-gradient(to right, #00ffc8, #7c8fff);
   box-shadow: 0 0 6px #00ffc8;
   transition: width 0.4s ease-out;
+}
+
+/* ------------------------------------------------------------------
+   detect フェーズ: スキャンラインが通過した瞬間の枠フラッシュ
+   ------------------------------------------------------------------ */
+.sc-box.is-detect .sc-corner {
+  animation:
+    sc-corner-slide-in 0.28s cubic-bezier(0.2, 0.8, 0.3, 1) both,
+    sc-detect-flash 0.55s ease-out both;
+}
+
+@keyframes sc-detect-flash {
+  0%   { box-shadow: 0 0 14px var(--sc-clr, #00ffc8), 0 0 30px var(--sc-clr, #00ffc8); opacity: 1; }
+  100% { box-shadow: none; opacity: 0.65; }
 }
 
 /* ------------------------------------------------------------------

@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./ScannerOverlay.css";
 import type { DetectedRegion, ScanPhase } from "./types.js";
+import { DETECT_DURATION_MS } from "./use-scan-pipeline.js";
 
 // ---------------------------------------------------------------------------
 // HEX フリッカーラベル
@@ -189,7 +190,8 @@ export function ScannerOverlay({
 
   const showScan    = animated && phase === "detect";
   const showRescan  = animated && phase === "locate";
-  const showBoxes   = phase !== "idle" && phase !== "locate" && (phase !== "detect" || !animated);
+  // detect フェーズでも箱を描画 (y-based delay で scan line と同期して表示される)
+  const showBoxes   = phase !== "idle" && phase !== "locate";
   const showStreams  = phase === "analyze" || phase === "result" || phase === "locate" || phase === "confirm";
   const showStamp   = phase === "result" || phase === "confirm";
 
@@ -201,8 +203,13 @@ export function ScannerOverlay({
     <div className="sc-root" ref={containerRef}>
       <img className="sc-image" src={imageUrl} alt="" draggable={false} />
 
-      {/* detect スキャンライン */}
-      {showScan && <div className="sc-scanline" />}
+      {/* detect スキャンライン — JS タイマーと同じ時間で sweep */}
+      {showScan && (
+        <div
+          className="sc-scanline"
+          style={{ "--sc-dur": `${DETECT_DURATION_MS}ms` } as React.CSSProperties}
+        />
+      )}
 
       {/* locate 再スキャンライン (紫) */}
       {showRescan && <div className="sc-rescanline" />}
@@ -228,6 +235,7 @@ export function ScannerOverlay({
         const delay   = animated ? (r.delay ?? 0) : 0;
         const barW    = `${Math.round(r.confidence * 100)}%`;
         const barDur  = animated ? `${0.35 + r.confidence * 0.55}s` : "0s";
+        const isDet   = phase === "detect";
         const isAn    = phase === "analyze";
         const isRes   = phase === "result";
         const isCo    = phase === "confirm";
@@ -235,7 +243,7 @@ export function ScannerOverlay({
         return (
           <div
             key={r.id}
-            className={`sc-box ${variant}${isAn ? " is-analyze" : ""}${isCo ? " is-confirm" : ""}`}
+            className={`sc-box ${variant}${isDet ? " is-detect" : ""}${isAn ? " is-analyze" : ""}${isCo ? " is-confirm" : ""}`}
             style={{
               left:   pos.left,
               top:    pos.top,
@@ -254,7 +262,7 @@ export function ScannerOverlay({
               />
             ))}
 
-            {/* 中央十字線 */}
+            {/* 中央十字線 — detect フェーズは非表示 (ロックオン前) */}
             {(isAn || isRes || isCo) && (
               <div
                 className="sc-crosshair"

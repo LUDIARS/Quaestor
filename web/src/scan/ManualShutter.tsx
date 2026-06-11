@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import "./ManualShutter.css";
 import { useCamera } from "./useCamera.js";
 import {
   captureFrame,
@@ -57,6 +58,7 @@ export function ManualShutter() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeScanId, setActiveScanId] = useState<string | null>(null);
   const [animated, setAnimated] = useState(loadAnimated);
+  const [flashKey, setFlashKey] = useState(0);
   const captureLockRef = useRef(false);
 
   const activeShot = shots.find((s) => s.id === activeScanId) ?? null;
@@ -66,6 +68,7 @@ export function ManualShutter() {
     const video = videoRef.current;
     if (!video || video.videoWidth === 0) return;
     captureLockRef.current = true;
+    setFlashKey((k) => k + 1); // シャッターフラッシュ
     setCapturing(true);
     try {
       const frame = await captureFrame(video, { maxDim: 1080, quality: 0.9 });
@@ -198,6 +201,15 @@ export function ManualShutter() {
             opacity: activeShot ? 0 : 1,
           }}
         />
+
+        {/* シャッターフラッシュ (key で毎回アニメ再生) */}
+        {flashKey > 0 && (
+          <div
+            key={flashKey}
+            className="shutter-flash"
+            onAnimationEnd={() => setFlashKey(0)}
+          />
+        )}
 
         {/* カメラ常時スキャンライン (撮影待機中) */}
         {!activeShot && running && (

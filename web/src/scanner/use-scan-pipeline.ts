@@ -3,17 +3,16 @@
  *
  * フェーズ遷移:
  *   idle → detect   : imageUrl が設定されたとき
- *   detect → analyze : スキャンライン完了 + 矩形検知後 (~1.3s)
+ *   detect → analyze : スキャンライン完了 (DETECT_DURATION_MS) + 実検知後
  *   analyze → result : ocrStatus が done/manual/failed に変化したとき
- *   result → locate  : fieldLocator が有効なら 1.2s 後に自動遷移
+ *   result → locate  : fieldLocator が有効なら RESULT_TO_LOCATE_DELAY_MS 後
  *   locate → confirm : fieldLocator.locate() 完了時
  *
- * regions は各フェーズで変わる:
- *   detect  : 空
- *   analyze : field bbox 4 件 (STORE NAME / DATE / ITEMS / TOTAL)
- *   result  : 同上に OCR 値を充填したもの
- *   locate  : 同上のまま (rescan アニメーション中)
- *   confirm : FieldLocatorEngine が返した実座標 (近似または実 pixel)
+ * detect フェーズでの領域表示 (スキャンライン通過時に箱を出す):
+ *   - imageUrl 設定時にヒューリスティック領域を即計算
+ *   - 各領域の delay = (r.y / naturalHeight) × DETECT_DURATION_MS × 0.9
+ *   - スキャンラインが通過するタイミングで箱が現れる
+ *   - スキャン完了後に実検知を実行し analyze 領域 (標準 delay) に差し替え
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +24,11 @@ import {
 } from "./receipt-engine.js";
 import type { DetectedRegion, FieldLocatorEngine, OcrFields, ScanPhase } from "./types.js";
 
+/** スキャンライン 1 回の所要時間。CSS の --sc-dur と合わせる */
+export const DETECT_DURATION_MS = 2000;
+/** result スタンプ表示後 locate に移行するまでの待機時間 */
+const RESULT_TO_LOCATE_DELAY_MS = 1200;
+
 interface PipelineInput {
   imageUrl: string | null;
   naturalWidth: number;
@@ -32,7 +36,6 @@ interface PipelineInput {
   ocrStatus: string;
   ocrFields: OcrFields | null;
   animated: boolean;
-  /** 省略時は locate/confirm フェーズをスキップ */
   fieldLocator?: FieldLocatorEngine;
   mode?: "receipt" | "food";
 }
@@ -41,10 +44,6 @@ interface PipelineState {
   phase: ScanPhase;
   regions: DetectedRegion[];
 }
-
-const DETECT_TO_ANALYZE_DELAY_MS = 1400;
-/** result スタンプ表示後 locate に移行するまでの待機時間 */
-const RESULT_TO_LOCATE_DELAY_MS  = 1200;
 
 export function useScanPipeline({
   imageUrl,
@@ -60,30 +59,44 @@ export function useScanPipeline({
   const [regions, setRegions] = useState<DetectedRegion[]>([]);
 
   const engineRef = useRef(new SobelReceiptEngine());
-  const analyzeTimerRef = useRef<number | undefined>(undefined);
 
-  // refs for values used in async callbacks (avoid stale closures)
-  const fieldLocatorRef  = useRef(fieldLocator);
-  const imageUrlRef      = useRef(imageUrl);
-  const ocrFieldsRef     = useRef(ocrFields);
-  const modeRef          = useRef(mode);
-  useEffect(() => { fieldLocatorRef.current = fieldLocator; },  [fieldLocator]);
-  useEffect(() => { imageUrlRef.current     = imageUrl; },      [imageUrl]);
-  useEffect(() => { ocrFieldsRef.current    = ocrFields; },     [ocrFields]);
-  useEffect(() => { modeRef.current         = mode; },          [mode]);
+  // refs for async callbacks
+  const fieldLocatorRef = useRef(fieldLocator);
+  const imageUrlRef     = useRef(imageUrl);
+  const ocrFieldsRef    = useRef(ocrFields);
+  const modeRef         = useRef(mode);
+  useEffect(() => { fieldLocatorRef.current = fieldLocator; }, [fieldLocator]);
+  useEffect(() => { imageUrlRef.current     = imageUrl; },     [imageUrl]);
+  useEffect(() => { ocrFieldsRef.current    = ocrFields; },    [ocrFields]);
+  useEffect(() => { modeRef.current         = mode; },         [mode]);
 
   // imageUrl が届いたら detect フェーズへ
   useEffect(() => {
     if (!imageUrl || naturalWidth === 0 || naturalHeight === 0) return;
     setPhase("detect");
-    setRegions([]);
 
-    const delay = animated ? DETECT_TO_ANALYZE_DELAY_MS : 0;
-    analyzeTimerRef.current = window.setTimeout(() => {
+    // ---- スキャンライン通過タイミングで検知箱を表示するためのヒューリスティック領域 ----
+    // 実検知 (非同期) を待たずに即描画。delay = y 座標がスキャンラインに追いつく時刻。
+    const hMain = fallbackMainRegion(naturalWidth, naturalHeight);
+    const hFields = receiptFieldRegions({
+      x: hMain.x, y: hMain.y,
+      width: hMain.width, height: hMain.height,
+      score: 0.5, meta: emptyMeta(),
+    });
+    const detectRegions = hFields.map((r) => ({
+      ...r,
+      delay: animated
+        ? Math.round((r.y / naturalHeight) * DETECT_DURATION_MS * 0.9)
+        : 0,
+    }));
+    setRegions(detectRegions);
+
+    // スキャンライン完了後に実検知 → analyze へ
+    const timer = window.setTimeout(() => {
       void runDetection(imageUrl, naturalWidth, naturalHeight);
-    }, delay);
+    }, DETECT_DURATION_MS);
 
-    return () => window.clearTimeout(analyzeTimerRef.current);
+    return () => window.clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imageUrl, naturalWidth, naturalHeight]);
 
@@ -94,12 +107,9 @@ export function useScanPipeline({
 
       const mainRegion = detectedMain[0] ?? fallbackMainRegion(nw, nh);
       const fieldRegs = receiptFieldRegions({
-        x: mainRegion.x,
-        y: mainRegion.y,
-        width:  mainRegion.width,
-        height: mainRegion.height,
-        score:  mainRegion.confidence,
-        meta:   emptyMeta(),
+        x: mainRegion.x, y: mainRegion.y,
+        width: mainRegion.width, height: mainRegion.height,
+        score: mainRegion.confidence, meta: emptyMeta(),
       });
 
       setRegions(fieldRegs);
@@ -145,10 +155,7 @@ export function useScanPipeline({
           setRegions(located);
           setPhase("confirm");
         }
-        // locate が空を返した場合は locate フェーズのまま (onDismiss で片付ける)
-      }).catch(() => {
-        // locate 失敗は静かに無視 (result 表示のまま dismiss 待ち)
-      });
+      }).catch(() => { /* locate 失敗は静かに無視 */ });
     }, RESULT_TO_LOCATE_DELAY_MS);
 
     return () => {
@@ -156,7 +163,7 @@ export function useScanPipeline({
       window.clearTimeout(t);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, naturalWidth, naturalHeight]); // phase 変化が主トリガー
+  }, [phase, naturalWidth, naturalHeight]);
 
   return { phase, regions };
 }
@@ -172,9 +179,7 @@ function fallbackMainRegion(nw: number, nh: number): DetectedRegion {
     x: nw * margin, y: nh * margin,
     width:  nw * (1 - margin * 2),
     height: nh * (1 - margin * 2),
-    confidence: 0.5,
-    color: "#00ffc8",
-    delay: 0,
+    confidence: 0.5, color: "#00ffc8", delay: 0,
   };
 }
 
