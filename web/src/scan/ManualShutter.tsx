@@ -316,15 +316,16 @@ function ScanAnimation({
     mode: "receipt",
   });
 
-  // confirm フェーズなら全 confirm 完了後に dismiss、なければ result 後に dismiss
+  // fieldLocator あり (confirm) は全項目表示のまま待機し、画面タップで戻る
+  // (ScannerOverlay 内の exit 演出 → onDismiss)。なし (result) は従来どおり自動 dismiss。
   const dismissPhase = fieldLocator ? "confirm" : "result";
-  const dismissDelay = dismissPhase === "confirm" ? 5000 : 3500;
 
   useEffect(() => {
+    if (dismissPhase === "confirm") return; // タップ待ち (自動で閉じない)
     if (phase !== dismissPhase) return;
-    const t = window.setTimeout(onDismiss, dismissDelay);
+    const t = window.setTimeout(onDismiss, 3500);
     return () => window.clearTimeout(t);
-  }, [phase, onDismiss, dismissPhase, dismissDelay]);
+  }, [phase, onDismiss, dismissPhase]);
 
   // confirm フェーズ到達時、本物 BB (source=real) を学習データへ永続化 (1 回だけ)。
   const savedRef = useRef(false);

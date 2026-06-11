@@ -19,6 +19,10 @@ import type { DetectedRegion, ScanPhase } from "./types.js";
 import { DETECT_DURATION_MS } from "./use-scan-pipeline.js";
 import { layoutCallouts, type LayoutInput } from "./callout-layout.js";
 import { ScannerCallouts, type CalloutItem } from "./ScannerCallouts.js";
+import { ScannerSummary } from "./ScannerSummary.js";
+
+/** exit 演出 (上からスキャンラインで戻る) の所要時間。CSS の sc-exitline と合わせる */
+const EXIT_DURATION_MS = 900;
 
 // ---------------------------------------------------------------------------
 // HEX フリッカーラベル
@@ -240,7 +244,7 @@ export function ScannerOverlay({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, regions, imgRect, containerSize, animated]);
 
-  // confirm 演出が全て終わったらボックスをフェードアウト
+  // confirm 演出が全て終わったら「全項目表示のまま待機」(余韻)。タップで exit。
   const [confirmDone, setConfirmDone] = useState(false);
   useEffect(() => {
     if (phase !== "confirm") { setConfirmDone(false); return; }
@@ -249,8 +253,22 @@ export function ScannerOverlay({
     return () => window.clearTimeout(t);
   }, [phase, maxRegionDelay]);
 
+  // exit: 画面タップで上からスキャンラインを流して scanner (カメラ) に戻す
+  const [exiting, setExiting] = useState(false);
+  const realRegions = regions.filter((r) => r.source === "real" && r.kind !== "noise");
+  const canExit = phase === "confirm" && confirmDone && !exiting;
+  function beginExit() {
+    if (exiting || !onDismiss) return;
+    setExiting(true);
+    window.setTimeout(onDismiss, EXIT_DURATION_MS);
+  }
+
   return (
-    <div className="sc-root" ref={containerRef}>
+    <div
+      className={`sc-root${exiting ? " is-exiting" : ""}${canExit ? " is-waiting" : ""}`}
+      ref={containerRef}
+      onClick={canExit ? beginExit : undefined}
+    >
       <img className="sc-image" src={imageUrl} alt="" draggable={false} />
 
       {/* CRT ノイズオーバーレイ (detect フェーズ) */}
@@ -296,7 +314,6 @@ export function ScannerOverlay({
         const isRes    = phase === "result";
         const isCo     = phase === "confirm";
         const isNoise  = r.kind === "noise";
-        const isDone   = isCo && confirmDone;
         // 本物 BB はタイト枠のみ。ラベル/値/バーは離れた callout 側で描く。
         const isReal   = r.source === "real";
 
@@ -311,7 +328,6 @@ export function ScannerOverlay({
               isCo    ? "is-confirm" : "",
               isNoise ? "is-noise"   : "",
               isReal  ? "is-real"    : "",
-              isDone  ? "is-confirm-done" : "",
             ].filter(Boolean).join(" ")}
             style={{
               left:   pos.left,
@@ -421,6 +437,19 @@ export function ScannerOverlay({
         </div>
       )}
 
+      {/* 全項目リスト + 余韻 (confirm 演出完了後に待機) */}
+      {phase === "confirm" && confirmDone && (
+        <ScannerSummary regions={realRegions} exiting={exiting} />
+      )}
+
+      {/* exit スキャンライン: タップで上から下へ流して scanner に戻す */}
+      {exiting && (
+        <div
+          className="sc-exitline"
+          style={{ "--sc-dur": `${EXIT_DURATION_MS}ms` } as React.CSSProperties}
+        />
+      )}
+
       {/* HUD ステータスバー */}
       {phase !== "idle" && (
         <div className={`sc-status sc-status--${statusInfo.mod}`}>
@@ -432,7 +461,10 @@ export function ScannerOverlay({
             </span>
           )}
           {onDismiss && (phase === "result" || phase === "confirm") && (
-            <button className="sc-close" onClick={onDismiss}>CLOSE</button>
+            <button
+              className="sc-close"
+              onClick={(e) => { e.stopPropagation(); if (phase === "confirm") beginExit(); else onDismiss(); }}
+            >CLOSE</button>
           )}
         </div>
       )}

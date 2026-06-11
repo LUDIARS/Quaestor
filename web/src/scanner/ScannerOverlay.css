@@ -520,18 +520,6 @@
 }
 
 /* ------------------------------------------------------------------
-   confirm 完了後のボックスフェードアウト
-   ------------------------------------------------------------------ */
-.sc-box.is-confirm-done {
-  animation: sc-box-fadeout 600ms ease-out forwards;
-}
-
-@keyframes sc-box-fadeout {
-  from { opacity: 1; }
-  to   { opacity: 0; }
-}
-
-/* ------------------------------------------------------------------
    ノイズ演出ボックス (analyze 中の偽 YOLO 検知)
    ------------------------------------------------------------------ */
 .sc-box.is-noise {
@@ -753,6 +741,155 @@
   background: var(--sc-clr, #00ffc8);
   box-shadow: 0 0 4px var(--sc-clr, #00ffc8);
   animation: sc-bar-fill 0.6s ease-out both;
+}
+
+/* ------------------------------------------------------------------
+   全項目リスト サマリーカード (confirm 完了後の待機 + 余韻)
+   ------------------------------------------------------------------ */
+.sc-root.is-waiting { cursor: pointer; }
+
+.sc-summary {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  width: min(86%, 320px);
+  max-height: 56%;
+  overflow-y: auto;
+  z-index: 11;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.82);
+  border: 1px solid rgba(0, 255, 200, 0.25);
+  border-radius: 8px;
+  padding: 10px 12px;
+  /* 余韻: やわらかい呼吸グロー */
+  animation:
+    sc-summary-in 0.6s cubic-bezier(0.2, 0.8, 0.3, 1) both,
+    sc-summary-breathe 3.2s ease-in-out 0.6s infinite;
+}
+
+@keyframes sc-summary-in {
+  0%   { opacity: 0; transform: translateX(-50%) translateY(12px); filter: blur(3px); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0);    filter: none; }
+}
+@keyframes sc-summary-breathe {
+  0%, 100% { box-shadow: 0 0 10px rgba(0,255,200,0.10), inset 0 0 12px rgba(0,255,200,0.04); }
+  50%      { box-shadow: 0 0 22px rgba(0,255,200,0.28), inset 0 0 16px rgba(0,255,200,0.08); }
+}
+
+.sc-summary.is-exiting {
+  animation: sc-fade-out 0.5s ease-out both;
+}
+
+.sc-summary-head {
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.3em;
+  color: #00ffc8;
+  text-align: center;
+  margin-bottom: 8px;
+  text-shadow: 0 0 8px rgba(0,255,200,0.6);
+}
+
+.sc-summary-list { list-style: none; margin: 0; padding: 0; }
+
+.sc-summary-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.07);
+  animation: sc-summary-row-in 0.4s ease-out both;
+}
+.sc-summary-row:last-child { border-bottom: none; }
+
+@keyframes sc-summary-row-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+.sc-summary-label {
+  flex: 0 0 30%;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--sc-clr, #00ffc8);
+  opacity: 0.8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sc-summary-value {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.02em;
+  word-break: break-all;
+}
+
+.sc-summary-hint {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  color: rgba(0,255,200,0.5);
+  animation: sc-blink 1.6s steps(2) infinite;
+}
+
+/* ------------------------------------------------------------------
+   exit スキャンライン (タップで上から下へ → scanner に戻す)
+   ------------------------------------------------------------------ */
+.sc-exitline {
+  position: absolute;
+  left: 0; right: 0;
+  height: 6px;
+  pointer-events: none;
+  z-index: 30;
+  background: linear-gradient(to bottom,
+    transparent,
+    rgba(0, 255, 180, 0.95) 50%,
+    transparent
+  );
+  box-shadow:
+    0 0  8px rgba(0, 255, 180, 0.95),
+    0 0 24px rgba(0, 255, 180, 0.55),
+    0 -4px 80px rgba(0, 200, 255, 0.25);
+  animation: sc-exitline var(--sc-dur, 900ms) cubic-bezier(0.4, 0, 0.7, 1) forwards;
+}
+
+/* 通過した上側を暗幕で覆い、scanner に戻る印象を出す */
+.sc-exitline::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 100%;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+@keyframes sc-exitline {
+  0%   { top: -2%;  opacity: 0; }
+  6%   { opacity: 1; }
+  94%  { opacity: 1; }
+  100% { top: 102%; opacity: 0; }
+}
+
+/* exit 中はオーバーレイ内容をフェード (カメラへ戻す) */
+.sc-root.is-exiting .sc-box,
+.sc-root.is-exiting .sc-callout,
+.sc-root.is-exiting .sc-leaders,
+.sc-root.is-exiting .sc-stamp,
+.sc-root.is-exiting .sc-status,
+.sc-root.is-exiting .sc-progress-bar,
+.sc-root.is-exiting .sc-stream {
+  animation: sc-fade-out 0.5s ease-out both;
+}
+
+@keyframes sc-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
 }
 
 /* ------------------------------------------------------------------
