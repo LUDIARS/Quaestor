@@ -42,6 +42,10 @@ export interface TrainingRecord {
   regions: TrainingRegion[];
   /** 記録時刻 (unix sec)。呼び出し側で付与 */
   ts: number;
+  /** 差分評価 (detection-eval の DetectionDiff)。毎回付与 */
+  diff?: unknown;
+  /** 差分がある時に Opus が類推した検出挙動指標 (DiffInference)。任意 */
+  evaluation?: unknown;
 }
 
 /** YOLO class id 割当 (フィールド種別 → class)。item-* は items に寄せる */
@@ -72,6 +76,24 @@ export class TrainingDataset {
     writeFileSync(
       join(this.recordsDir, `${record.receiptId}.json`),
       JSON.stringify(record, null, 2),
+      "utf8",
+    );
+  }
+
+  /**
+   * 既存レコードに差分評価 (+任意で Opus 類推) を後付けする。
+   * record json を上書き + evals.jsonl に追記。レコードが無ければ何もしない。
+   */
+  attachEval(receiptId: string, diff: unknown, evaluation?: unknown): void {
+    const path = join(this.recordsDir, `${receiptId}.json`);
+    if (!existsSync(path)) return;
+    const rec = JSON.parse(readFileSync(path, "utf8")) as TrainingRecord;
+    rec.diff = diff;
+    if (evaluation !== undefined) rec.evaluation = evaluation;
+    writeFileSync(path, JSON.stringify(rec, null, 2), "utf8");
+    appendFileSync(
+      join(this.root, "evals.jsonl"),
+      JSON.stringify({ receiptId, ts: rec.ts, engine: rec.engine, diff, evaluation }) + "\n",
       "utf8",
     );
   }

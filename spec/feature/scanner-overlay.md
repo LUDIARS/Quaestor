@@ -122,3 +122,25 @@ FallbackFieldLocator (比率推定、BB なし)  ←最終手段、演出のみ
 
 採用: **B→C 段階構成** (2026-06-11 決定)。
 B で正確 BB+text を即供給し点1/点2を達成 → 学習データ蓄積 → 十分貯まったら C。
+
+---
+
+## 6. 毎レシートの検出差分評価 + Opus 類推 (2026-06-11 追加)
+
+検出系の精度を上げるため、confirm のたびに「検出器の認識テキスト」と
+「LLM(Vision) 抽出フィールド = **絶対正解**」を突合し、差分を評価する。
+
+- **真値**: Claude Vision OCR の date/payee/total/items。現状 LLM 検出にミスは無い前提で
+  絶対正解として扱う (ユーザ確認済 2026-06-11)。
+- **差分 (毎回・安価)**: `detection-eval.ts` の `computeDetectionDiff()` が純関数で算出。
+  フィールドごとに status = match / mismatch / missing / no_reference + 正規化類似度。
+  結果は学習レコード (`records/<id>.json` の `diff`) + `evals.jsonl` に保存。
+- **Opus 類推 (差分がある時だけ)**: `detection-diff-evaluator.ts` の `OpusDiffEvaluator`
+  (`claude-opus-4-8`, tool_use 強制) が**差分テキストのみ**(画像なし)から検出挙動を類推:
+  - failureMode = localization (位置ずれ) / recognition (読み違い) / partial / none
+  - hypothesis (なぜその差分か) + suggestedFix (検出器/前処理の改善案) + confidence
+  結果は学習レコードの `evaluation` に追記。`ANTHROPIC_API_KEY` 未設定なら差分のみ保存。
+- **経路**: `POST /v1/receipts/:id/regions` が append → diff 算出 → (差分時) Opus を
+  fire-and-forget で起動 (HTTP 応答はブロックしない)。コストは差分発生時のみ。
+
+蓄積された diff/evaluation は C(自前 YOLO/検出器) の弱点分析 + 学習データの質向上に使う。
