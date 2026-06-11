@@ -7,11 +7,13 @@ import {
   kickOcr,
   commitReceipt,
   tryGetGeo,
+  saveRegions,
 } from "./captureUpload.js";
 import { ReceiptEditor, type EditableReceipt } from "../components/ReceiptEditor.js";
 import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
-import { FallbackFieldLocator } from "../scanner/field-locator.js";
+import { FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
+import { PaddleFieldLocator, ChainedFieldLocator } from "../scanner/paddle-locator.js";
 import type { FieldLocatorEngine } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
@@ -41,8 +43,16 @@ function isComplete(s: Shot): boolean {
   return !!s.date && !!s.payee && s.payee.trim() !== "" && s.total != null;
 }
 
-/** FallbackFieldLocator はシングルトンで OK (ステートレス) */
-const defaultFieldLocator: FieldLocatorEngine = new FallbackFieldLocator();
+/**
+ * 段階フォールバック locator (シングルトン、ステートレス):
+ *   PaddleOCR sidecar (本物 BB+text) → Tesseract (ブラウザ word BB) → Fallback (比率推定)
+ * sidecar 未起動でも Tesseract が本物 BB を返すので点1/点2 は機能する。
+ */
+const defaultFieldLocator: FieldLocatorEngine = new ChainedFieldLocator([
+  new PaddleFieldLocator(),
+  new TesseractFieldLocator("jpn+eng"),
+  new FallbackFieldLocator(),
+]);
 
 /**
  * 手動シャッター撮影画面。
@@ -315,6 +325,29 @@ function ScanAnimation({
     const t = window.setTimeout(onDismiss, dismissDelay);
     return () => window.clearTimeout(t);
   }, [phase, onDismiss, dismissPhase, dismissDelay]);
+
+  // confirm フェーズ到達時、本物 BB (source=real) を学習データへ永続化 (1 回だけ)。
+  const savedRef = useRef(false);
+  useEffect(() => {
+    if (phase !== "confirm" || savedRef.current) return;
+    const reals = regions.filter((r) => r.source === "real");
+    if (reals.length === 0) return;
+    savedRef.current = true;
+    const engine = reals.some((r) => r.polygon) ? "paddle" : "tesseract";
+    void saveRegions(shot.id, {
+      engine,
+      naturalWidth: shot.naturalWidth,
+      naturalHeight: shot.naturalHeight,
+      regions: reals.map((r) => ({
+        label: r.id,
+        x: r.x, y: r.y, width: r.width, height: r.height,
+        recognizedText: r.recognizedText,
+        polygon: r.polygon,
+        confidence: r.confidence,
+        source: r.source,
+      })),
+    });
+  }, [phase, regions, shot.id, shot.naturalWidth, shot.naturalHeight]);
 
   return (
     <div style={{ position: "absolute", inset: 0, borderRadius: 8, overflow: "hidden" }}>

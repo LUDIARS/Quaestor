@@ -661,6 +661,101 @@
 }
 
 /* ------------------------------------------------------------------
+   本物 BB (source=real): 文字位置にタイトな枠だけ。演出は callout 側。
+   ------------------------------------------------------------------ */
+.sc-box.is-real {
+  /* 細い実線の枠でタイトに囲う (学習データの BB を明示) */
+  outline: 1px solid color-mix(in srgb, var(--sc-clr, #00ffc8) 70%, transparent);
+  outline-offset: -1px;
+}
+.sc-box.is-real .sc-corner {
+  width: 9px; height: 9px;
+}
+
+/* ------------------------------------------------------------------
+   リーダー線 (本物 BB → コールアウト)
+   ------------------------------------------------------------------ */
+.sc-leaders {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 8;
+  overflow: visible;
+}
+
+.sc-leader-line {
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+  animation: sc-leader-in 0.4s ease-out both;
+}
+.sc-leader-dot {
+  animation: sc-leader-in 0.4s ease-out both;
+}
+
+@keyframes sc-leader-in {
+  from { opacity: 0; }
+  to   { opacity: 0.7; }
+}
+
+/* ------------------------------------------------------------------
+   コールアウト (演出テキスト: ラベル / 認識テキスト / 値 / 信頼度)
+   BB から離れた画面端に配置される
+   ------------------------------------------------------------------ */
+.sc-callout {
+  position: absolute;
+  z-index: 9;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.86);
+  border: 1px solid color-mix(in srgb, var(--sc-clr, #00ffc8) 45%, transparent);
+  border-left: 2px solid var(--sc-clr, #00ffc8);
+  padding: 2px 6px;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+  animation: sc-callout-in 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+.sc-callout--left  { text-align: right; border-left: none; border-right: 2px solid var(--sc-clr, #00ffc8); }
+
+@keyframes sc-callout-in {
+  0%   { opacity: 0; transform: translateX(var(--sc-cin, -6px)); filter: blur(2px); }
+  100% { opacity: 1; transform: translateX(0); filter: none; }
+}
+.sc-callout--left { --sc-cin: 6px; }
+
+.sc-callout-label {
+  color: var(--sc-clr, #00ffc8);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sc-callout-value {
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sc-callout-bar-wrap {
+  margin-top: 2px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.sc-callout-bar {
+  height: 100%;
+  background: var(--sc-clr, #00ffc8);
+  box-shadow: 0 0 4px var(--sc-clr, #00ffc8);
+  animation: sc-bar-fill 0.6s ease-out both;
+}
+
+/* ------------------------------------------------------------------
    共通ユーティリティ
    ------------------------------------------------------------------ */
 @keyframes sc-blink {

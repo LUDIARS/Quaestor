@@ -17,6 +17,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./ScannerOverlay.css";
 import type { DetectedRegion, ScanPhase } from "./types.js";
 import { DETECT_DURATION_MS } from "./use-scan-pipeline.js";
+import { layoutCallouts, type LayoutInput } from "./callout-layout.js";
+import { ScannerCallouts, type CalloutItem } from "./ScannerCallouts.js";
 
 // ---------------------------------------------------------------------------
 // HEX フリッカーラベル
@@ -159,6 +161,7 @@ export function ScannerOverlay({
   const [imgRect, setImgRect] = useState<{
     x: number; y: number; w: number; h: number;
   } | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   const streamL = useMemo(() => makeStream(60), []);
   const streamR = useMemo(() => makeStream(60), []);
@@ -174,6 +177,7 @@ export function ScannerOverlay({
       const iw = naturalWidth  * s;
       const ih = naturalHeight * s;
       setImgRect({ x: (ew - iw) / 2, y: (eh - ih) / 2, w: iw, h: ih });
+      setContainerSize({ width: ew, height: eh });
     };
     calc();
     const ro = new ResizeObserver(calc);
@@ -213,6 +217,28 @@ export function ScannerOverlay({
     .filter((r) => r.kind !== "noise")
     .reduce((m, r) => Math.max(m, r.delay ?? 0), 0);
   const stampDelay = (phase === "confirm" && animated) ? maxRegionDelay + 800 : 700;
+
+  // ---- 本物 BB (source=real) のコールアウトを BB から離して配置 ----
+  // confirm フェーズのみ。BB 枠は画像上の文字位置にタイトに残し、ラベル/値は端へ逃がす。
+  const calloutItems: CalloutItem[] = useMemo(() => {
+    if (phase !== "confirm" || !imgRect || containerSize.width === 0) return [];
+    const reals = regions.filter((r) => r.source === "real" && r.kind !== "noise");
+    if (reals.length === 0) return [];
+    const inputs: LayoutInput[] = [];
+    for (const r of reals) {
+      const pos = toCSS(r);
+      if (!pos) continue;
+      inputs.push({ id: r.id, rect: pos });
+    }
+    const placements = layoutCallouts(inputs, containerSize);
+    const byId = new Map(placements.map((p) => [p.id, p]));
+    return reals.flatMap((r) => {
+      const placement = byId.get(r.id);
+      if (!placement) return [];
+      return [{ region: r, placement, delay: animated ? (r.delay ?? 0) + 150 : 0 }];
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, regions, imgRect, containerSize, animated]);
 
   // confirm 演出が全て終わったらボックスをフェードアウト
   const [confirmDone, setConfirmDone] = useState(false);
@@ -271,6 +297,8 @@ export function ScannerOverlay({
         const isCo     = phase === "confirm";
         const isNoise  = r.kind === "noise";
         const isDone   = isCo && confirmDone;
+        // 本物 BB はタイト枠のみ。ラベル/値/バーは離れた callout 側で描く。
+        const isReal   = r.source === "real";
 
         return (
           <div
@@ -282,6 +310,7 @@ export function ScannerOverlay({
               isAn    ? "is-analyze" : "",
               isCo    ? "is-confirm" : "",
               isNoise ? "is-noise"   : "",
+              isReal  ? "is-real"    : "",
               isDone  ? "is-confirm-done" : "",
             ].filter(Boolean).join(" ")}
             style={{
@@ -313,20 +342,22 @@ export function ScannerOverlay({
               />
             )}
 
-            {/* TARGET 番号 (ノイズは OBJ_ ラベルのみ表示) */}
-            <div
-              className="sc-target-num"
-              style={{
-                "--sc-clr": clr,
-                background: clr,
-                animationDelay: `${delay}ms`,
-              } as React.CSSProperties}
-            >
-              {isNoise ? r.label : `TARGET ${String(i + 1).padStart(2, "0")}`}
-            </div>
+            {/* TARGET 番号 (ノイズは OBJ_ ラベルのみ表示。本物 BB は callout 側に逃がすので非表示) */}
+            {!isReal && (
+              <div
+                className="sc-target-num"
+                style={{
+                  "--sc-clr": clr,
+                  background: clr,
+                  animationDelay: `${delay}ms`,
+                } as React.CSSProperties}
+              >
+                {isNoise ? r.label : `TARGET ${String(i + 1).padStart(2, "0")}`}
+              </div>
+            )}
 
-            {/* HEX フリッカーラベル */}
-            {(isAn || isRes || isCo) && !isNoise && (
+            {/* HEX フリッカーラベル (本物 BB は callout 側) */}
+            {(isAn || isRes || isCo) && !isNoise && !isReal && (
               <FlickerLabel
                 text={r.label}
                 animated={animated}
@@ -335,8 +366,8 @@ export function ScannerOverlay({
               />
             )}
 
-            {/* 信頼度バー */}
-            {(isAn || isRes || isCo) && (
+            {/* 信頼度バー (本物 BB は callout 側) */}
+            {(isAn || isRes || isCo) && !isReal && (
               <div className="sc-bar-wrap">
                 <div
                   className="sc-bar"
@@ -354,8 +385,8 @@ export function ScannerOverlay({
               <LockOnFlash key={`flash-${r.id}-${phase}`} color={clr} delay={delay + 200} />
             )}
 
-            {/* 値テキスト (result / confirm) */}
-            {(isRes || isCo) && r.value && !isNoise && (
+            {/* 値テキスト (result / confirm。本物 BB は callout 側) */}
+            {(isRes || isCo) && r.value && !isNoise && !isReal && (
               <div
                 className="sc-value"
                 style={{
@@ -374,6 +405,11 @@ export function ScannerOverlay({
           </div>
         );
       })}
+
+      {/* 本物 BB の演出コールアウト (BB から離して描画 + リーダー線) */}
+      {calloutItems.length > 0 && (
+        <ScannerCallouts container={containerSize} items={calloutItems} />
+      )}
 
       {/* CONFIRMED スタンプ */}
       {showStamp && (

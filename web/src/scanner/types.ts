@@ -21,6 +21,20 @@ export interface DetectedRegion {
   delay?: number;
   /** ボックス種別: noise=analyze中ノイズ演出 / item=レシート個別品目 */
   kind?: "noise" | "item";
+  /**
+   * BB の出所。
+   *  - "real":      検出器 (PaddleOCR/Tesseract) が当てた実ピクセル座標。学習に使う本物 BB。
+   *  - "heuristic": レシート比率からの推定 (演出用)。学習に使わない。
+   * 未指定は "heuristic" 相当 (後方互換)。
+   */
+  source?: "real" | "heuristic";
+  /**
+   * 認識した生テキスト (学習ラベル)。
+   * value は表示用に整形済 (¥付き等)、recognizedText は OCR が読んだそのまま。
+   */
+  recognizedText?: string;
+  /** 回転レシート用の 4 点ポリゴン (PaddleOCR が返す)。naturalWidth/Height 座標系。任意。 */
+  polygon?: Array<[number, number]>;
 }
 
 /** 検知エンジン抽象インターフェース。実装を差し替えるための境界。 */

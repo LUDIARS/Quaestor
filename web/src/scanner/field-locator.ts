@@ -110,9 +110,14 @@ function buildFieldRegions(
   const regions: DetectedRegion[] = [];
   let delay = 0;
 
-  const push = (found: { x: number; y: number; width: number; height: number } | null, r: Omit<DetectedRegion, "x" | "y" | "width" | "height">) => {
+  // 本物 BB (検出器が当てた実座標 + 認識テキスト)。学習データとして使う。
+  const push = (
+    found: { x: number; y: number; width: number; height: number; matched: string } | null,
+    r: Omit<DetectedRegion, "x" | "y" | "width" | "height">,
+  ) => {
     if (!found) return;
-    regions.push({ ...found, ...r });
+    const { matched, ...rect } = found;
+    regions.push({ ...rect, source: "real", recognizedText: matched, ...r });
     delay += 500;
   };
 
@@ -162,7 +167,7 @@ function buildFieldRegions(
 function findText(
   words: TesseractWord[],
   text: string | null,
-): { x: number; y: number; width: number; height: number } | null {
+): { x: number; y: number; width: number; height: number; matched: string } | null {
   if (!text) return null;
   const needle = normalize(text);
   let best: TesseractWord | null = null;
@@ -182,10 +187,11 @@ function findText(
 
   const { x0, y0, x1, y1 } = best.bbox;
   return {
-    x:      Math.max(0, x0 - PAD),
-    y:      Math.max(0, y0 - PAD),
-    width:  (x1 - x0) + PAD * 2,
-    height: (y1 - y0) + PAD * 2,
+    x:       Math.max(0, x0 - PAD),
+    y:       Math.max(0, y0 - PAD),
+    width:   (x1 - x0) + PAD * 2,
+    height:  (y1 - y0) + PAD * 2,
+    matched: best.text,
   };
 }
 

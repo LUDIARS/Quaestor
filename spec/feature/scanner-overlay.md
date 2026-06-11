@@ -1,0 +1,124 @@
+# Scanner Overlay — レシート検知演出 & 検出エンジン
+
+シャッター撮影後の「サイバー HUD スキャン演出」と、その裏で動く検出/OCR エンジンの設計。
+
+関連コード:
+- `web/src/scanner/` — 演出ライブラリ (ScannerOverlay / use-scan-pipeline / types / *-locator)
+- `web/src/scan/ManualShutter.tsx` — 撮影画面 (演出を呼ぶ消費側)
+- `src/services/*ocr*` — バックエンド OCR (Claude Vision)
+- `ocr-sidecar/` — PaddleOCR microservice (本物 BB + text 供給源)
+
+---
+
+## 1. フェーズ遷移
+
+```
+idle → detect → analyze → result → locate → confirm
+```
+
+| フェーズ | 演出 | 領域(regions)の出所 |
+|---|---|---|
+| detect | スキャンライン + CRT ノイズ | 比率ヒューリスティック (演出用、source=heuristic) |
+| analyze | ロックオン + 偽 YOLO ノイズ箱 | 同上 + noise 箱 |
+| result | CONFIRMED スタンプ | OCR 値を比率領域に充填 |
+| locate | 再スキャンライン (紫) | — (fieldLocator 実行中) |
+| **confirm** | **本物 BB + 離れたコールアウト** | **fieldLocator が返す実ピクセル BB (source=real)** |
+
+detect/analyze の比率 BB は **演出** であり学習に使わない。
+**学習に使う「検知した文字の BB」は confirm フェーズの `source=real` 領域**。
+
+---
+
+## 2. 検知 BB と演出テキストの分離 (点1)
+
+`source=real` の領域は以下のように **2 レイヤーに分けて** 描画する:
+
+1. **BB レイヤー (`sc-box`)** — 検出器が当てた実ピクセル座標にタイトな枠 (コーナーブラケット + 十字)。
+   画像上の文字位置に正確に重なる。**加工しない** = これがそのまま学習データ。
+2. **コールアウトレイヤー (`sc-callout`)** — ラベル / 認識テキスト / 値 / 信頼度バーを
+   BB から **離した位置** (画面端寄り) に配置し、BB 中心と **リーダー線 (`sc-leader`)** で接続。
+
+配置計算は `callout-layout.ts` が担当 (SRP):
+- BB が画面左半分なら callout を右マージンへ、右半分なら左マージンへ。
+- 複数 callout は縦に積んで重なりを避ける。
+- リーダー線は BB エッジ → callout エッジ。
+
+`source=heuristic` / `noise` 領域は従来どおり box 内にラベルを描く (後方互換、演出のまま)。
+
+---
+
+## 3. 本物 BB を必ず渡す & 学習データ化 (点2)
+
+### データモデル (`types.ts` の `DetectedRegion`)
+
+```ts
+interface DetectedRegion {
+  // ... 既存 (id/label/x/y/width/height/confidence/color/value/delay/kind)
+  /** BB が検出器由来の実座標か、比率推定か。real のみ学習に使う */
+  source?: "real" | "heuristic";
+  /** 認識した生テキスト (学習ラベル)。value は表示整形済、こちらは生 */
+  recognizedText?: string;
+  /** 回転レシート用の 4 点ポリゴン (PaddleOCR が返す)。任意 */
+  polygon?: Array<[number, number]>;
+}
+```
+
+### 永続化 (`src/services/training-dataset.ts`)
+
+confirm 時、web は本物 BB を backend に POST → JSONL データセットに追記する。
+
+- 1 レコード = `{ receiptId, imageRef, naturalWidth, naturalHeight, engine, regions: [{ bbox, polygon?, text, label }], ts }`
+- 保存先: `app_data/training/receipts/<receiptId>.json` + 追記ログ `app_data/training/regions.jsonl`
+- **YOLO 形式エクスポート**: `exportYolo()` が画像コピー + `<class> <cx> <cy> <w> <h>` (正規化) のラベル txt を出力 → C で直接学習に使える。
+
+エンドポイント: `POST /v1/receipts/:id/regions`
+- body: `{ engine, naturalWidth, naturalHeight, regions: DetectedRegion[] }`
+- `source=real` の領域のみ保存。heuristic/noise は破棄。
+
+---
+
+## 4. 検出/OCR エンジン (点3)
+
+### 現状 (改修前)
+- レシート矩形: `SobelReceiptEngine` (エッジ検出ヒューリスティック)
+- フィールド値: Claude Vision (`claude -p`、BB なし)
+- フィールド位置: `FallbackFieldLocator` (比率推定、BB なし) ← 配線中
+
+### B (本 PR): PaddleOCR sidecar
+- `ocr-sidecar/` — FastAPI + PaddleOCR (PP-OCRv5、日本語対応)。
+  - `POST /detect` 画像 (multipart/base64) → `{ lines: [{ polygon, bbox, text, score }] }`
+  - detection(DBNet系) + recognition 一体で **正確な polygon + text** を返す。
+  - ローカル・オフライン・無料。明細表は PP-Structure で拡張可。
+- `web/src/scanner/paddle-locator.ts` — `PaddleFieldLocator implements FieldLocatorEngine`
+  - sidecar を叩いて line BB+text 取得 → OCR fields とマッチングして label 付与
+  - 各領域に `source:"real"` + `recognizedText` を付ける
+  - **sidecar 未到達時はフォールバック**: `TesseractFieldLocator` → `FallbackFieldLocator`
+- 起動: `ocr-sidecar/README.md` 参照 (`uvicorn main:app`、既定 port 17350)
+- 環境変数 `QUAESTOR_OCR_SIDECAR_URL` で web/backend が URL を知る
+
+### フォールバック段
+```
+PaddleFieldLocator (sidecar)  ←本命、正確 BB
+  ↓ 失敗
+TesseractFieldLocator (ブラウザ、word BB)  ←sidecar 無くても本物 BB
+  ↓ 失敗
+FallbackFieldLocator (比率推定、BB なし)  ←最終手段、演出のみ
+```
+
+### C (将来): 自前 YOLO 検出器
+- B が蓄積した JSONL/YOLO データセットでレシート領域/フィールド検出器を学習。
+- recognition は Paddle/Tesseract を併用 (YOLO は領域検出のみ)。
+- データが十分貯まったら別タスクで着手。学習 pipeline は `ocr-sidecar/train/` に置く想定。
+
+---
+
+## 5. 設計判断の評価 (decision-metrics)
+
+| 案 | 学習量 | 作業コスト | 解決度 | 主目的一致 |
+|---|---|---|---|---|
+| A. Vision に bbox も返させる | 2 | 小 | 3 | 3 |
+| **B. PaddleOCR sidecar** | 4 | 中 | 5 | 5 |
+| C. 自前 YOLO 学習 | 5 | 大 | 4 | 4 |
+
+採用: **B→C 段階構成** (2026-06-11 決定)。
+B で正確 BB+text を即供給し点1/点2を達成 → 学習データ蓄積 → 十分貯まったら C。
