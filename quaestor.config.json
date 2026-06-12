@@ -19,6 +19,7 @@
     "port": 17350,
     "lang": "japan",
     "python": null,
+    "venvPython": null,
     "externalUrl": null
   },
   "training": {
