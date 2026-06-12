@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -92,6 +92,37 @@ describe("GaStore 永続", () => {
     store.population("global");
     // ファイルは sanitize されて作られる
     expect(existsSync(join(root, "k", "global.json"))).toBe(true);
+  });
+
+  it("logFile 指定時は recordGeneration ごとに JSONL 学習ログを追記する", () => {
+    const logFile = join(root, "l", "evolution.jsonl");
+    const store = new GaStore<Genome>({ root: join(root, "l"), schema: SCHEMA, size: 4, elite: 1, logFile });
+    const p = store.population("global");
+    const evaluated = p.genomes.map((genome, i) => ({ genome, fitness: i / 4 }));
+
+    store.recordGeneration("global", evaluated);
+    store.recordGeneration("store-a", evaluated.slice(0, 2));
+
+    const lines = readFileSync(logFile, "utf8").trim().split("\n");
+    expect(lines).toHaveLength(2);
+    const rec1 = JSON.parse(lines[0]!) as Record<string, unknown>;
+    expect(rec1.key).toBe("global");
+    expect(rec1.generation).toBe(1);
+    expect(rec1.evaluated).toBe(4);
+    expect(rec1.bestFitness).toBeCloseTo(0.75);
+    expect(rec1.meanFitness).toBeCloseTo((0 + 0.25 + 0.5 + 0.75) / 4);
+    expect(rec1.worstFitness).toBe(0);
+    expect(rec1.bestGenome).toBeTruthy();
+    expect(typeof rec1.ts).toBe("string");
+    const rec2 = JSON.parse(lines[1]!) as Record<string, unknown>;
+    expect(rec2.key).toBe("store-a");
+  });
+
+  it("logFile 未指定ならログを書かない (後方互換)", () => {
+    const store = new GaStore<Genome>({ root: join(root, "n"), schema: SCHEMA, size: 3 });
+    const p = store.population("global");
+    store.recordGeneration("global", p.genomes.map((genome) => ({ genome, fitness: 0.5 })));
+    expect(existsSync(join(root, "n", "evolution.jsonl"))).toBe(false);
   });
 });
 

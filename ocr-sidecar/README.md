@@ -25,15 +25,22 @@ venv + 依存を用意する。これだけやれば以降は **Quaestor 起動�
 
 初回の OCR 実行時にモデルを自動 DL する (~数十MB、`~/.paddleocr` にキャッシュ)。
 
+**python は 3.9〜3.12 を使うこと** (paddlepaddle が 3.13+ の wheel を出していない。
+3.14 では `No matching distribution found for paddlepaddle` で setup が失敗する)。
+PaddleOCR は 2.x / 3.x どちらでも動く (main.py が API を自動判別。3.x は PP-OCRv5)。
+
 ## 自動起動 (Quaestor と同時)
 
 Quaestor backend (`src/server.ts`) が起動時に `OcrSidecarSupervisor` でこの sidecar を
 子プロセスとして立ち上げる (`.venv` の python → 無ければ PATH の python)。
 クラッシュ時は backoff 付きで再起動。ログは `app_data/ocr-sidecar.log`。
 
-- 無効化: `QUAESTOR_OCR_SIDECAR_MANAGE=0`
-- 外部 sidecar を使う: `QUAESTOR_OCR_SIDECAR_URL=http://host:port` (本機は起動しない)
-- port 変更: `QUAESTOR_OCR_SIDECAR_PORT` (既定 17350)
+設定は `quaestor.config.json` の `ocrSidecar` セクション (正本。env は override のみ、
+詳細は `../spec/setup/config-and-secrets.md`):
+
+- 無効化: `"manage": false`
+- 外部 sidecar を使う: `"externalUrl": "http://host:port"` (本機は起動しない)
+- port 変更: `"port"` (既定 17350) / 言語: `"lang"` (既定 japan) / python 明示: `"python"`
 
 ## 手動起動 (任意)
 
@@ -53,7 +60,8 @@ Quaestor backend (`src/server.ts`) が起動時に `OcrSidecarSupervisor` でこ
 
 ## web/backend からの接続
 
-- web (vite): 環境変数 `VITE_OCR_SIDECAR_URL` (既定 `http://127.0.0.1:17350`)
+- web は env を使わない。backend の `GET /v1/config` が `quaestor.config.json` 由来の
+  sidecar URL を返し、`web/src/lib/runtime-config.ts` が解決する。
 - 未起動でも web は Tesseract → Fallback に自動退避する (`ChainedFieldLocator`)。
 
 ## C (将来): YOLO 学習
