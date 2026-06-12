@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ReceiptEditor } from "../components/ReceiptEditor.js";
-import { YearTabs, currentYear } from "../components/YearTabs.js";
+import { MonthTabs, currentYear, currentMonth, monthRange } from "../components/MonthTabs.js";
 import { ReceiptQueue } from "../components/ReceiptQueue.js";
 
 interface ReceiptRow {
@@ -14,6 +14,15 @@ interface ReceiptRow {
   items: string | null;
 }
 
+function sortByDateAsc(rows: ReceiptRow[]): ReceiptRow[] {
+  return [...rows].sort((a, b) => {
+    if (!a.date && !b.date) return 0;
+    if (!a.date) return 1;
+    if (!b.date) return -1;
+    return a.date.localeCompare(b.date);
+  });
+}
+
 export function Receipts() {
   const [rows, setRows] = useState<ReceiptRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -22,20 +31,22 @@ export function Receipts() {
   const [running, setRunning] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [year, setYear] = useState(currentYear());
+  const [month, setMonth] = useState(currentMonth());
 
-  async function load() {
+  async function load(y: string, m: string) {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ limit: "100" });
-      if (year !== "all") {
-        params.set("date_from", `${year}-01-01`);
-        params.set("date_to", `${year}-12-31`);
-      }
+      const r = monthRange(y, m);
+      const params = new URLSearchParams({
+        limit: "100",
+        date_from: r.date_from,
+        date_to: r.date_to,
+      });
       const [list, health] = await Promise.all([
         fetch(`/v1/receipts?${params}`).then((r) => r.json() as Promise<{ items: ReceiptRow[] }>),
         fetch("/health").then((r) => r.json() as Promise<{ ocr_enabled?: boolean }>),
       ]);
-      setRows(list.items);
+      setRows(sortByDateAsc(list.items));
       setOcrEnabled(!!health.ocr_enabled);
       setLoading(false);
     } catch (e: unknown) {
@@ -44,7 +55,7 @@ export function Receipts() {
     }
   }
 
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
+  useEffect(() => { void load(year, month); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year, month]);
 
   async function runOcr(id: string) {
     setRunning(id);
@@ -54,7 +65,7 @@ export function Receipts() {
         const j = await res.json().catch(() => ({})) as { error?: string; message?: string };
         throw new Error(j.message ?? j.error ?? `${res.status}`);
       }
-      await load();
+      await load(year, month);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -67,10 +78,15 @@ export function Receipts() {
     <div>
       <h2>Receipts ({rows.length}) {ocrEnabled ? <small style={{ color: "var(--ok)" }}>OCR enabled</small> : <small style={{ color: "var(--muted)" }}>OCR disabled (Claude Code で解析する想定)</small>}</h2>
       <ReceiptQueue origin="receipts tab" />
-      <YearTabs value={year} onChange={(y) => setYear(y)} />
+      <MonthTabs
+        year={year}
+        month={month}
+        onYearChange={(y) => setYear(y)}
+        onChange={(m) => setMonth(m)}
+      />
       {loading && <p>loading…</p>}
-      {err && <p className="error">{err} <button className="btn secondary" onClick={() => { setErr(null); void load(); }}>retry</button></p>}
-      {!loading && rows.length === 0 && <p className="text-subtle">{year === "all" ? "まだレシートが無い。 scan ページから取り込んで。" : `${year} 年のレシートは無し`}</p>}
+      {err && <p className="error">{err} <button className="btn secondary" onClick={() => { setErr(null); void load(year, month); }}>retry</button></p>}
+      {!loading && rows.length === 0 && <p className="text-subtle">{year}年{parseInt(month)}月のレシートは無し</p>}
       <ul style={{ display: "grid", gap: "0.5rem", listStyle: "none", padding: 0 }}>
         {rows.map((r) => (
           <li key={r.id} className="last-capture">
@@ -100,7 +116,7 @@ export function Receipts() {
             {editing === r.id && (
               <ReceiptEditor
                 receipt={r}
-                onSaved={() => void load()}
+                onSaved={() => void load(year, month)}
                 onClose={() => setEditing(null)}
               />
             )}
