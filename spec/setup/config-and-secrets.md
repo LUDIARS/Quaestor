@@ -19,6 +19,7 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `ocrSidecar.host` / `port` | `127.0.0.1` / `17350` | sidecar bind (supervisor) | `QUAESTOR_OCR_SIDECAR_PORT` |
 | `ocrSidecar.lang` | `japan` | PaddleOCR 言語 (main.py へ起動時注入) | `QUAESTOR_OCR_LANG` |
 | `ocrSidecar.python` | `null` (= .venv 優先) | python 実行体 (supervisor) | `QUAESTOR_OCR_PYTHON` |
+| `ocrSidecar.venvPython` | `null` (= 3.12→3.9 自動探索) | .venv を**作る** python (setup.ps1/sh)。paddlepaddle は 3.9-3.12 のみ wheel 提供 | — |
 | `ocrSidecar.externalUrl` | `null` | 外部 sidecar 利用 (指定時は起動しない) | `QUAESTOR_OCR_SIDECAR_URL` |
 | `training.gaRoot` | `app_data/training/ga` | OCR-GA 永続 + 学習ログ (ocr-ga.ts) | — |
 

@@ -40,14 +40,24 @@ describe("app-config loader (§7.1)", () => {
     const p = join(dir, "q.json");
     writeFileSync(p, JSON.stringify({
       server: { port: 18000 },
-      ocrSidecar: { manage: false, lang: "en", externalUrl: "http://10.0.0.5:17350" },
+      ocrSidecar: {
+        manage: false, lang: "en",
+        venvPython: "C:\\Python39\\python.exe",
+        externalUrl: "http://10.0.0.5:17350",
+      },
     }), "utf8");
     const c = loadAppConfig(p);
     expect(c.server.port).toBe(18000);
     expect(c.server.host).toBe("127.0.0.1"); // 欠けたキーは既定値
     expect(c.ocrSidecar.manage).toBe(false);
     expect(c.ocrSidecar.lang).toBe("en");
+    expect(c.ocrSidecar.venvPython).toBe("C:\\Python39\\python.exe");
     expect(sidecarUrlOf(c)).toBe("http://10.0.0.5:17350");
+  });
+
+  it("venvPython 未指定は null (自動探索)", () => {
+    const c = loadAppConfig(join(dir, "missing.json"));
+    expect(c.ocrSidecar.venvPython).toBeNull();
   });
 
   it("env はファイルより優先 (override のみ)", () => {
