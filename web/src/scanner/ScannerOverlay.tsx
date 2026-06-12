@@ -16,11 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./ScannerOverlay.css";
 import type { DetectedRegion, ScanPhase } from "./types.js";
-import {
-  DETECT_DURATION_MS,
-  RESCAN_SWEEP_MS,
-  CONFIRM_SCAN_DURATION_MS,
-} from "./use-scan-pipeline.js";
+import { DETECT_DURATION_MS } from "./use-scan-pipeline.js";
 import { layoutCallouts, type LayoutInput } from "./callout-layout.js";
 import { ScannerCallouts, type CalloutItem } from "./ScannerCallouts.js";
 import { ScannerSummary } from "./ScannerSummary.js";
@@ -158,12 +154,6 @@ interface Props {
   onExitStart?: () => void;
   /** OCR-GA 評価の進捗 (analyze 中の待機を埋める busy 演出)。null で非表示 */
   evolution?: { generation: number; attempt: number; total: number } | null;
-  /**
-   * 精度替え再スキャン (analyze 中、OCR-GA attempt ごと)。
-   * tick が変わるたびスキャンラインを流し直し、regions (kind=probe) を
-   * ライン通過に同期して置き直す。null で非表示。
-   */
-  rescan?: { tick: number; regions: DetectedRegion[] } | null;
 }
 
 export function ScannerOverlay({
@@ -176,7 +166,6 @@ export function ScannerOverlay({
   onDismiss,
   onExitStart,
   evolution,
-  rescan,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imgRect, setImgRect] = useState<{
@@ -229,15 +218,15 @@ export function ScannerOverlay({
   const showRescan  = animated && phase === "locate";
   // detect フェーズでも箱を描画 (y-based delay で scan line と同期して表示される)
   const showBoxes   = phase !== "idle" && phase !== "locate";
-  // 精度替え再スキャンのマーカーが出ている間はノイズ箱を引っ込めて画面の混雑を抑える
-  const probeActive = animated && phase === "analyze" && !!rescan && rescan.regions.length > 0;
-  const showNoise   = phase === "analyze" && !probeActive;
-  const showProbeScan = animated && phase === "analyze" && !!rescan;
+  const showNoise   = phase === "analyze";
   const showStreams  = phase === "analyze" || phase === "result" || phase === "locate" || phase === "confirm";
   const showStamp   = phase === "result" || phase === "confirm";
 
-  // confirm フェーズ: 余韻スロースキャン (5 秒) が完走したらスタンプ表示
-  const stampDelay = (phase === "confirm" && animated) ? CONFIRM_SCAN_DURATION_MS : 700;
+  // confirm フェーズ: 全リージョン (noise 除く) の最大 delay + 800ms でスタンプ表示
+  const maxRegionDelay = regions
+    .filter((r) => r.kind !== "noise")
+    .reduce((m, r) => Math.max(m, r.delay ?? 0), 0);
+  const stampDelay = (phase === "confirm" && animated) ? maxRegionDelay + 800 : 700;
 
   // ---- 本物 BB (source=real) のコールアウトを BB から離して配置 ----
   // confirm フェーズのみ。BB 枠は画像上の文字位置にタイトに残し、ラベル/値は端へ逃がす。
@@ -261,15 +250,14 @@ export function ScannerOverlay({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, regions, imgRect, containerSize, animated]);
 
-  // confirm 演出 = 余韻スロースキャン (5 秒、1 枠 1 秒の reveal)。
-  // 完走したら「全項目表示のまま待機」しタップで exit。
+  // confirm 演出が全て終わったら「全項目表示のまま待機」(余韻)。タップで exit。
   const [confirmDone, setConfirmDone] = useState(false);
   useEffect(() => {
     if (phase !== "confirm") { setConfirmDone(false); return; }
-    const wait = animated ? CONFIRM_SCAN_DURATION_MS + 200 : 300;
-    const t = window.setTimeout(() => setConfirmDone(true), wait);
+    // LockonShrink 最終完了 (maxDelay + 150ms 開始 + 700ms アニメ) + 400ms 猶予
+    const t = window.setTimeout(() => setConfirmDone(true), maxRegionDelay + 1250);
     return () => window.clearTimeout(t);
-  }, [phase, animated]);
+  }, [phase, maxRegionDelay]);
 
   // exit: 画面タップで上からスキャンラインを流して scanner (カメラ) に戻す。
   // タップで進めるのは「最後の confirm が出揃ったとき (ready)」だけ。
@@ -305,53 +293,6 @@ export function ScannerOverlay({
 
       {/* locate 再スキャンライン (紫) */}
       {showRescan && <div className="sc-rescanline" />}
-
-      {/* 精度替え再スキャン (analyze 中、OCR-GA attempt ごとにライン+マーカーを置き直す) */}
-      {showProbeScan && rescan && (
-        <div
-          key={`evolve-${rescan.tick}`}
-          className="sc-evolveline"
-          style={{ "--sc-dur": `${RESCAN_SWEEP_MS}ms` } as React.CSSProperties}
-        />
-      )}
-      {showProbeScan && rescan && imgRect && (
-        <div key={`probes-${rescan.tick}`} className="sc-probes" aria-hidden>
-          {rescan.regions.map((r) => {
-            const pos = toCSS(r);
-            if (!pos) return null;
-            return (
-              <div
-                key={r.id}
-                className="sc-probe"
-                style={{
-                  left:   pos.left,
-                  top:    pos.top,
-                  width:  pos.width,
-                  height: pos.height,
-                  animationDelay: `${r.delay ?? 0}ms`,
-                } as React.CSSProperties}
-              >
-                {/* 中間 OCR の認識テキスト (LLM 確定前でも出せたら出す) */}
-                {r.recognizedText && (
-                  <span className="sc-probe-text">
-                    {r.recognizedText.length > 14
-                      ? `${r.recognizedText.slice(0, 14)}…`
-                      : r.recognizedText}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* confirm 余韻スロースキャンライン (5 秒かけて全体を流し、枠を順に出す) */}
-      {animated && phase === "confirm" && !confirmDone && !exiting && (
-        <div
-          className="sc-finalline"
-          style={{ "--sc-dur": `${CONFIRM_SCAN_DURATION_MS}ms` } as React.CSSProperties}
-        />
-      )}
 
       {/* データストリーム */}
       {showStreams && (

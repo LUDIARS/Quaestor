@@ -19,24 +19,10 @@ idle → detect → analyze → result → locate → confirm
 | フェーズ | 演出 | 領域(regions)の出所 |
 |---|---|---|
 | detect | スキャンライン + CRT ノイズ | 比率ヒューリスティック (演出用、source=heuristic) |
-| analyze | ロックオン + 偽 YOLO ノイズ箱 + **精度替え再スキャン (下記)** | 同上 + noise 箱 + probe マーカー |
+| analyze | ロックオン + 偽 YOLO ノイズ箱 | 同上 + noise 箱 |
 | result | CONFIRMED スタンプ | OCR 値を比率領域に充填 |
 | locate | 再スキャンライン (紫) | — (fieldLocator 実行中) |
-| **confirm** | **余韻スロースキャン (5 秒) + 本物 BB + 離れたコールアウト** | **fieldLocator が返す実ピクセル BB (source=real)** |
-
-### analyze 中の精度替え再スキャン演出 (2026-06-12)
-
-OCR-GA が attempt (パラメータ個体) ごとに sidecar OCR を回すのに同期して、
-**琥珀色スキャンライン (`sc-evolveline`, `RESCAN_SWEEP_MS`=1.6s) を流し直し、
-ライン通過に合わせて検出位置へ probe マーカー (`kind="probe"`, 最大 24 個) を置いていく**。
-attempt が進むたび key 差し替えで丸ごとやり直す = 「精度を変えて再スキャン」を可視化。
-
-- マーカーには中間 OCR の**認識テキストを小さく添える** (`sc-probe-text`)。
-  LLM 確定前でも読めた情報は出す。確定値は confirm フェーズの callout が出す。
-- probe 表示中は偽 YOLO ノイズ箱を引っ込めて混雑を抑える。
-- データ経路: `OcrEvolver.evaluateAll` の `EvolutionProgress.lines` →
-  `probeRegionsFromLines()` → `ScannerOverlay` の `rescan` prop。
-- probe は演出専用。学習データ保存 (source=real 保存経路) には乗らない。
+| **confirm** | **本物 BB + 離れたコールアウト** | **fieldLocator が返す実ピクセル BB (source=real)** |
 
 detect/analyze の比率 BB は **演出** であり学習に使わない。
 **学習に使う「検知した文字の BB」は confirm フェーズの `source=real` 領域**。
@@ -59,15 +45,10 @@ detect/analyze の比率 BB は **演出** であり学習に使わない。
 
 `source=heuristic` / `noise` 領域は従来どおり box 内にラベルを描く (後方互換、演出のまま)。
 
-### confirm の余韻スロースキャン + 終端演出 (2026-06-12 改訂)
-- LLM 解析確定 (locate 完了) 後、**ゆっくりした全体スキャンライン (`sc-finalline`,
-  `CONFIRM_SCAN_DURATION_MS`=5s) を 1 本流し、ライン通過に同期して枠を順に出す**。
-  - 各枠の delay は `use-scan-pipeline` が y 座標 → 5 秒スキャンの通過時刻に再マップ
-    (spread = 5s − 1s で最後の枠も 5 秒以内に reveal 完了)。
-  - **1 つの枠の演出 (LockonShrink) に 1 秒** (`CONFIRM_REVEAL_MS`)。callout は枠 +150ms。
-- **5 秒後に confirm を出す**: CONFIRMED スタンプ + `ScannerSummary` カード (全項目リスト +
-  呼吸グロー) を表示し、**全項目表示のまま待機**する。
-- **画面タップ**で exit: `sc-exitline` が上から下へ全体スキャンラインを流し、オーバーレイ内容を
+### confirm 完了後の終端演出 (2026-06-11)
+- 全項目を出し切ったら自動で閉じず、**全項目表示のまま待機**する (`ScannerSummary` カード)。
+- サマリーカードは店名/日付/合計/各品目をリスト表示し、**余韻** (呼吸グロー) を出す。
+- **画面タップ**で exit: `sc-exitline` が上から下へスキャンラインを流し、オーバーレイ内容を
   フェードしながら scanner (カメラ) に戻す (`EXIT_DURATION_MS`)。CLOSE ボタンも同じ exit を通る。
 - fieldLocator 無し (result のみ) の経路は従来どおり自動 dismiss。
 
