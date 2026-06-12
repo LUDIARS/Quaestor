@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./ManualShutter.css";
 import { useCamera } from "./useCamera.js";
 import {
@@ -14,7 +14,7 @@ import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
 import { FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
 import { PaddleFieldLocator, ChainedFieldLocator } from "../scanner/paddle-locator.js";
-import { OcrEvolver, type EvolutionProgress } from "../scanner/ocr-evolver.js";
+import { OcrEvolver, EvolvedFieldLocator, type EvolutionProgress } from "../scanner/ocr-evolver.js";
 import type { FieldLocatorEngine } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
@@ -313,6 +313,15 @@ function ScanAnimation({
   onDismiss: () => void;
   onExitStart?: () => void;
 }) {
+  // OCR-GA: 待機中に評価する evolver (ref 先行宣言、effect で生成)
+  const evolverRef = useRef<OcrEvolver | null>(null);
+
+  // confirm の検出には勝ち遺伝子の結果を live 適用。出るまでは fallback locator。
+  const liveLocator = useMemo(
+    () => (fieldLocator ? new EvolvedFieldLocator(() => evolverRef.current, fieldLocator) : undefined),
+    [fieldLocator],
+  );
+
   const { phase, regions } = useScanPipeline({
     imageUrl: shot.imageUrl,
     naturalWidth:  shot.naturalWidth,
@@ -323,7 +332,7 @@ function ScanAnimation({
       total: shot.total, items: shot.items,
     },
     animated,
-    fieldLocator,
+    fieldLocator: liveLocator,
     mode: "receipt",
   });
 
@@ -362,7 +371,6 @@ function ScanAnimation({
   }, [phase, regions, shot.id, shot.naturalWidth, shot.naturalHeight]);
 
   // ---- OCR-GA: LLM 検出待ち (analyze) の間、パラメータ個体を sidecar で評価 ----
-  const evolverRef = useRef<OcrEvolver | null>(null);
   const evoStartedRef = useRef(false);
   const evoFinalizedRef = useRef(false);
   const [evo, setEvo] = useState<EvolutionProgress | null>(null);
@@ -370,7 +378,7 @@ function ScanAnimation({
   useEffect(() => {
     if (phase !== "analyze" || evoStartedRef.current) return;
     evoStartedRef.current = true;
-    const ev = new OcrEvolver("global");
+    const ev = new OcrEvolver();
     evolverRef.current = ev;
     void (async () => {
       await ev.loadPopulation();

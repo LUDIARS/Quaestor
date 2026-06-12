@@ -61,7 +61,8 @@ export class PaddleFieldLocator implements FieldLocatorEngine {
 // マッチング: 認識行 ↔ OCR フィールド
 // ---------------------------------------------------------------------------
 
-function buildRegions(lines: SidecarLine[], fields: OcrFields): DetectedRegion[] {
+/** sidecar の認識行を OCR フィールドにマッチングして DetectedRegion[] にする (evolver でも再利用) */
+export function buildRegions(lines: SidecarLine[], fields: OcrFields): DetectedRegion[] {
   const regions: DetectedRegion[] = [];
   let delay = 0;
 

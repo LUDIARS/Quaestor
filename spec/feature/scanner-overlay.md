@@ -179,6 +179,11 @@ GA ロジックはブラックボックス・アーキテクチャでも使え�
 `ocr-sidecar/main.py` の `/detect` は `genome` (JSON) を受け、その det/rec パラメータの
 PaddleOCR インスタンス (キャッシュ) で実行する。
 
-### 残 (follow-up)
-- 勝ち遺伝子を confirm の検出に live 適用 (現状は集団の進化・永続まで)。
-- 店舗 (payee) 別キーで集団を分ける (現状 global)。
+### 勝ち遺伝子の live 適用
+LLM 真値到着で `OcrEvolver.finalize()` が最良候補を選び、その検出を `buildRegions` で
+confirm 用 region に変換。`EvolvedFieldLocator` が pipeline の locate で勝ち遺伝子の領域を
+返す (出るまで待機、無ければ Chained locator に fallback)。
+
+### 店舗別キー
+評価は撮影時点で店舗不明なので `global` プールで実施。世代の記録・永続は
+`finalize` 時に **payee 由来キー** + `global` の両方へ行い、店舗ごとに best/履歴を蓄積する。

@@ -9,7 +9,8 @@
  */
 
 import { runOcrGenome, type OcrGenome, type OcrLine } from "./ocr-genome.js";
-import type { OcrFields } from "./types.js";
+import { buildRegions } from "./paddle-locator.js";
+import type { OcrFields, DetectedRegion, FieldLocatorEngine } from "./types.js";
 
 export interface OcrCandidate {
   genome: OcrGenome;
@@ -23,24 +24,31 @@ export interface EvolutionProgress {
 }
 
 const GA_BASE = "/v1/ocr-ga";
+/** 評価に使う共通遺伝子プール。店舗は撮影時点で不明なので global を broad search に使う */
+const POP_KEY = "global";
 
 export class OcrEvolver {
   private candidates: OcrCandidate[] = [];
   private generation = 0;
   private genomes: OcrGenome[] = [];
-
-  constructor(private readonly key = "global") {}
+  /** 真値照合で選ばれた勝ち候補の検出領域 (confirm に live 適用)。 */
+  private bestRegions: DetectedRegion[] | null = null;
 
   /** 現世代の個体を取得 (sidecar/backend 未起動なら空) */
   async loadPopulation(): Promise<OcrGenome[]> {
     try {
-      const res = await fetch(`${GA_BASE}/population?key=${encodeURIComponent(this.key)}`);
+      const res = await fetch(`${GA_BASE}/population?key=${POP_KEY}`);
       if (!res.ok) return [];
       const j = (await res.json()) as { generation: number; genomes: OcrGenome[] };
       this.generation = j.generation;
       this.genomes = j.genomes ?? [];
       return this.genomes;
     } catch { return []; }
+  }
+
+  /** 勝ち遺伝子の検出領域 (finalize 後に確定)。未確定なら null。 */
+  getBestRegions(): DetectedRegion[] | null {
+    return this.bestRegions;
   }
 
   /**
@@ -71,22 +79,72 @@ export class OcrEvolver {
       genome: c.genome,
       fitness: fitnessVsTruth(c.lines, fields),
     }));
-    // backend に送って進化+永続 (失敗は握り潰す)
-    try {
-      await fetch(`${GA_BASE}/generation`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key: this.key, evaluated }),
-      });
-    } catch { /* ignore */ }
+
+    // 店舗別キー (payee 由来) で世代を記録・永続。グローバルにも記録して broad search を進める。
+    const storeKey = storeKeyOf(fields.payee);
+    for (const key of new Set([storeKey, POP_KEY])) {
+      try {
+        await fetch(`${GA_BASE}/generation`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ key, evaluated }),
+        });
+      } catch { /* ignore */ }
+    }
 
     let best: OcrCandidate | null = null;
     let bestFit = -1;
     evaluated.forEach((e, i) => {
       if (e.fitness > bestFit) { bestFit = e.fitness; best = this.candidates[i]!; }
     });
+    // 勝ち候補の検出を confirm 用 region に変換 (live 適用)
+    if (best) this.bestRegions = buildRegions((best as OcrCandidate).lines, fields);
     return best;
   }
+}
+
+/** payee → 安全な GA キー。空なら global */
+function storeKeyOf(payee: string | null): string {
+  if (!payee) return POP_KEY;
+  const k = payee.trim().replace(/[^A-Za-z0-9_\-぀-ヿ一-龯]/g, "_").slice(0, 48);
+  return k || POP_KEY;
+}
+
+/**
+ * 勝ち遺伝子の検出結果を confirm に使う FieldLocator。
+ * evolver の finalize が出した best 領域を待ち、無ければ fallback locator に委ねる。
+ */
+export class EvolvedFieldLocator implements FieldLocatorEngine {
+  constructor(
+    private readonly getEvolver: () => OcrEvolver | null,
+    private readonly fallback: FieldLocatorEngine,
+    private readonly waitMs = 2500,
+  ) {}
+
+  async locate(
+    imageUrl: string,
+    nw: number,
+    nh: number,
+    fields: OcrFields,
+    mode: "receipt" | "food",
+  ): Promise<DetectedRegion[]> {
+    const ev = this.getEvolver();
+    if (ev) {
+      const deadline = Date.now() + this.waitMs;
+      // 直接 Date.now を参照できない環境向けにカウンタでも上限を切る
+      for (let i = 0; i < Math.ceil(this.waitMs / 100); i++) {
+        const r = ev.getBestRegions();
+        if (r && r.length > 0) return r;
+        if (Date.now() >= deadline) break;
+        await sleep(100);
+      }
+    }
+    return this.fallback.locate(imageUrl, nw, nh, fields, mode);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ---------------------------------------------------------------------------
