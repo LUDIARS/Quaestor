@@ -81,7 +81,9 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: dtolnay/rust-toolchain@stable
+      # 1.85 で tauri-utils v2.9.2 + time の coherence check が E0119 に昇格する既知問題。
+      # tauri-utils 側の修正リリース後に @stable に戻す。
+      - uses: dtolnay/rust-toolchain@1.84
 
       - uses: Swatinem/rust-cache@v2
         with:
