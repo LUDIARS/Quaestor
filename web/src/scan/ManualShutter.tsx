@@ -14,12 +14,9 @@ import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
 import { FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
 import { PaddleFieldLocator, ChainedFieldLocator } from "../scanner/paddle-locator.js";
-import {
-  OcrEvolver,
-  EvolvedFieldLocator,
-  probeRegionsFromLines,
-  type EvolutionProgress,
-} from "../scanner/ocr-evolver.js";
+import { OcrEvolver, EvolvedFieldLocator, type EvolutionProgress } from "../scanner/ocr-evolver.js";
+import { probesFromLines } from "../scanner/probe-regions.js";
+import { RESCAN_SWEEP_MS } from "../scanner/use-scan-pipeline.js";
 import type { DetectedRegion, FieldLocatorEngine } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
@@ -376,11 +373,12 @@ function ScanAnimation({
   }, [phase, regions, shot.id, shot.naturalWidth, shot.naturalHeight]);
 
   // ---- OCR-GA: LLM 検出待ち (analyze) の間、パラメータ個体を sidecar で評価 ----
-  // attempt (精度替え) ごとに再スキャン演出: ライン 1 本 + 検出位置マーカーを置き直す。
+  // 再スキャン演出自体は ScannerOverlay が自走する。ここは本物の検出行が
+  // 取れた attempt だけ liveProbes に昇格して流し込む (sidecar 死でも演出は回る)。
   const evoStartedRef = useRef(false);
   const evoFinalizedRef = useRef(false);
   const [evo, setEvo] = useState<EvolutionProgress | null>(null);
-  const [rescan, setRescan] = useState<{ tick: number; regions: DetectedRegion[] } | null>(null);
+  const [liveProbes, setLiveProbes] = useState<DetectedRegion[] | null>(null);
 
   useEffect(() => {
     if (phase !== "analyze" || evoStartedRef.current) return;
@@ -391,10 +389,9 @@ function ScanAnimation({
       await ev.loadPopulation();
       await ev.evaluateAll(shot.imageUrl, (p) => {
         setEvo(p);
-        setRescan({
-          tick: p.attempt,
-          regions: probeRegionsFromLines(p.lines, shot.naturalHeight),
-        });
+        if (p.lines.length > 0) {
+          setLiveProbes(probesFromLines(p.lines, shot.naturalHeight, RESCAN_SWEEP_MS));
+        }
       });
     })();
   }, [phase, shot.imageUrl, shot.naturalHeight]);
@@ -422,7 +419,7 @@ function ScanAnimation({
         onDismiss={onDismiss}
         onExitStart={onExitStart}
         evolution={phase === "analyze" ? evo : null}
-        rescan={phase === "analyze" ? rescan : null}
+        liveProbes={phase === "analyze" ? liveProbes : null}
       />
     </div>
   );

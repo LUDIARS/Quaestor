@@ -18,9 +18,11 @@ import "./ScannerOverlay.css";
 import type { DetectedRegion, ScanPhase } from "./types.js";
 import {
   DETECT_DURATION_MS,
+  RESCAN_PERIOD_MS,
   RESCAN_SWEEP_MS,
   CONFIRM_SCAN_DURATION_MS,
 } from "./use-scan-pipeline.js";
+import { synthesizeProbes } from "./probe-regions.js";
 import { layoutCallouts, type LayoutInput } from "./callout-layout.js";
 import { ScannerCallouts, type CalloutItem } from "./ScannerCallouts.js";
 import { ScannerSummary } from "./ScannerSummary.js";
@@ -159,11 +161,11 @@ interface Props {
   /** OCR-GA 評価の進捗 (analyze 中の待機を埋める busy 演出)。null で非表示 */
   evolution?: { generation: number; attempt: number; total: number } | null;
   /**
-   * 精度替え再スキャン (analyze 中、OCR-GA attempt ごと)。
-   * tick が変わるたびスキャンラインを流し直し、regions (kind=probe) を
-   * ライン通過に同期して置き直す。null で非表示。
+   * 本物 OCR の中間マーカー (最新 attempt の検出位置 + 認識テキスト)。
+   * 届いていれば再スキャンの probe をこれに昇格する。null/空なら合成 probe を使う
+   * — 再スキャン演出自体はエンジンの生死に関係なく回る。
    */
-  rescan?: { tick: number; regions: DetectedRegion[] } | null;
+  liveProbes?: DetectedRegion[] | null;
 }
 
 export function ScannerOverlay({
@@ -176,7 +178,7 @@ export function ScannerOverlay({
   onDismiss,
   onExitStart,
   evolution,
-  rescan,
+  liveProbes,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imgRect, setImgRect] = useState<{
@@ -229,12 +231,34 @@ export function ScannerOverlay({
   const showRescan  = animated && phase === "locate";
   // detect フェーズでも箱を描画 (y-based delay で scan line と同期して表示される)
   const showBoxes   = phase !== "idle" && phase !== "locate";
-  // 精度替え再スキャンのマーカーが出ている間はノイズ箱を引っ込めて画面の混雑を抑える
-  const probeActive = animated && phase === "analyze" && !!rescan && rescan.regions.length > 0;
-  const showNoise   = phase === "analyze" && !probeActive;
-  const showProbeScan = animated && phase === "analyze" && !!rescan;
   const showStreams  = phase === "analyze" || phase === "result" || phase === "locate" || phase === "confirm";
   const showStamp   = phase === "result" || phase === "confirm";
+
+  // ---- 精度替え再スキャン (analyze 中、自走ループ) ----
+  // RESCAN_PERIOD_MS ごとに pass を進め、スキャンライン + probe マーカーを置き直す。
+  // 外部エンジンの進捗には依存しない (届いた本物 lines は liveProbes で昇格するだけ)。
+  const [rescanPass, setRescanPass] = useState(0);
+  useEffect(() => {
+    if (!(animated && phase === "analyze")) { setRescanPass(0); return; }
+    setRescanPass(1);
+    const id = window.setInterval(
+      () => setRescanPass((p) => p + 1),
+      RESCAN_PERIOD_MS,
+    );
+    return () => window.clearInterval(id);
+  }, [animated, phase]);
+
+  const probeRegions = useMemo(() => {
+    if (rescanPass === 0) return [];
+    if (liveProbes && liveProbes.length > 0) return liveProbes;
+    return synthesizeProbes(rescanPass, naturalWidth, naturalHeight, RESCAN_SWEEP_MS);
+  }, [rescanPass, liveProbes, naturalWidth, naturalHeight]);
+
+  const showProbeScan = rescanPass > 0 && phase === "analyze";
+  // probe 表示中は偽 YOLO ノイズ箱を引っ込めて混雑を抑える
+  const showNoise   = phase === "analyze" && !showProbeScan;
+  // 「精度を変えて」を伝える演出値 (pass ごとに決定論的に変化)
+  const precisionLabel = (0.3 + ((rescanPass * 17) % 55) / 100).toFixed(2);
 
   // confirm フェーズ: 余韻スロースキャン (5 秒) が完走したらスタンプ表示
   const stampDelay = (phase === "confirm" && animated) ? CONFIRM_SCAN_DURATION_MS : 700;
@@ -274,7 +298,8 @@ export function ScannerOverlay({
   // exit: 画面タップで上からスキャンラインを流して scanner (カメラ) に戻す。
   // タップで進めるのは「最後の confirm が出揃ったとき (ready)」だけ。
   const [exiting, setExiting] = useState(false);
-  const realRegions = regions.filter((r) => r.source === "real" && r.kind !== "noise");
+  // サマリーは値を持つ領域すべて (heuristic 経路でも欠けない)。学習保存は real のみ (消費側)。
+  const summaryRegions = regions.filter((r) => r.kind !== "noise");
   const ready = phase === "confirm" && confirmDone;
   const canExit = ready && !exiting;
   function beginExit() {
@@ -306,17 +331,17 @@ export function ScannerOverlay({
       {/* locate 再スキャンライン (紫) */}
       {showRescan && <div className="sc-rescanline" />}
 
-      {/* 精度替え再スキャン (analyze 中、OCR-GA attempt ごとにライン+マーカーを置き直す) */}
-      {showProbeScan && rescan && (
+      {/* 精度替え再スキャン (analyze 中、pass ごとにライン+マーカーを置き直す) */}
+      {showProbeScan && (
         <div
-          key={`evolve-${rescan.tick}`}
+          key={`evolve-${rescanPass}`}
           className="sc-evolveline"
           style={{ "--sc-dur": `${RESCAN_SWEEP_MS}ms` } as React.CSSProperties}
         />
       )}
-      {showProbeScan && rescan && imgRect && (
-        <div key={`probes-${rescan.tick}`} className="sc-probes" aria-hidden>
-          {rescan.regions.map((r) => {
+      {showProbeScan && imgRect && (
+        <div key={`probes-${rescanPass}`} className="sc-probes" aria-hidden>
+          {probeRegions.map((r) => {
             const pos = toCSS(r);
             if (!pos) return null;
             return (
@@ -331,7 +356,7 @@ export function ScannerOverlay({
                   animationDelay: `${r.delay ?? 0}ms`,
                 } as React.CSSProperties}
               >
-                {/* 中間 OCR の認識テキスト (LLM 確定前でも出せたら出す) */}
+                {/* 中間 OCR の認識テキスト (本物の検出行があるときだけ) */}
                 {r.recognizedText && (
                   <span className="sc-probe-text">
                     {r.recognizedText.length > 14
@@ -490,12 +515,17 @@ export function ScannerOverlay({
         );
       })}
 
-      {/* OCR-GA 評価 busy 演出 (analyze 待機中、画面の暇を埋める) */}
-      {evolution && evolution.total > 0 && (
+      {/* 再スキャンのメタ表示: PASS / 精度 (演出値) / GA 実進捗 (届いていれば) */}
+      {showProbeScan && (
         <div className="sc-evolve">
-          <span className="sc-evolve-tag">OCR EVOLVE</span>
-          <span className="sc-evolve-gen">GEN {evolution.generation}</span>
-          <span className="sc-evolve-prog">{evolution.attempt}/{evolution.total}</span>
+          <span className="sc-evolve-tag">RE-SCAN</span>
+          <span className="sc-evolve-gen">PASS {String(rescanPass).padStart(2, "0")}</span>
+          <span className="sc-evolve-prog">PRECISION {precisionLabel}</span>
+          {evolution && evolution.total > 0 && (
+            <span className="sc-evolve-gen">
+              GEN {evolution.generation} · {evolution.attempt}/{evolution.total}
+            </span>
+          )}
         </div>
       )}
 
@@ -516,7 +546,7 @@ export function ScannerOverlay({
 
       {/* 全項目リスト + 余韻 (confirm 演出完了後に待機) */}
       {phase === "confirm" && confirmDone && (
-        <ScannerSummary regions={realRegions} exiting={exiting} />
+        <ScannerSummary regions={summaryRegions} exiting={exiting} />
       )}
 
       {/* exit スキャンライン: タップで上から下へ流して scanner に戻す */}

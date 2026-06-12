@@ -10,7 +10,6 @@
 
 import { runOcrGenome, type OcrGenome, type OcrLine } from "./ocr-genome.js";
 import { buildRegions } from "./paddle-locator.js";
-import { RESCAN_SWEEP_MS } from "./use-scan-pipeline.js";
 import type { OcrFields, DetectedRegion, FieldLocatorEngine } from "./types.js";
 
 export interface OcrCandidate {
@@ -22,7 +21,7 @@ export interface EvolutionProgress {
   generation: number;
   attempt: number;   // 評価済個体数
   total: number;     // 集団サイズ
-  /** この attempt で検出した行 (精度替え再スキャン演出のマーカー用)。失敗 attempt は空 */
+  /** この attempt で検出した行 (再スキャン演出の本物マーカー供給用)。失敗 attempt は空 */
   lines: OcrLine[];
 }
 
@@ -105,38 +104,6 @@ export class OcrEvolver {
     if (best) this.bestRegions = buildRegions((best as OcrCandidate).lines, fields);
     return best;
   }
-}
-
-// ---------------------------------------------------------------------------
-// 精度替え再スキャン演出: attempt の検出行 → 中間マーカー (probe)
-// ---------------------------------------------------------------------------
-
-/** 1 回の再スキャン演出に置くマーカー数の上限 (置きすぎると画面が潰れる) */
-const PROBE_LIMIT = 24;
-
-/**
- * attempt の検出行を再スキャン演出用の中間マーカーに変換する。
- * delay は y 座標 → スキャンライン (RESCAN_SWEEP_MS) の通過時刻。
- * 認識テキストがあればマーカーに添えて表示する (LLM 確定前の中間情報)。
- */
-export function probeRegionsFromLines(
-  lines: OcrLine[],
-  naturalHeight: number,
-): DetectedRegion[] {
-  if (naturalHeight <= 0) return [];
-  return lines.slice(0, PROBE_LIMIT).map((l, i) => {
-    const [x, y, w, h] = l.bbox;
-    return {
-      id:         `probe-${i}`,
-      label:      l.text,
-      x, y, width: w, height: h,
-      confidence: l.score,
-      color:      "#fbbf24",
-      kind:       "probe" as const,
-      recognizedText: l.text,
-      delay: Math.round(Math.min(1, Math.max(0, y / naturalHeight)) * RESCAN_SWEEP_MS * 0.9),
-    };
-  });
 }
 
 /** payee → 安全な GA キー。空なら global */
