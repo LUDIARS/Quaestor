@@ -124,6 +124,35 @@ export async function commitReceipt(id: string): Promise<CommitResult> {
   };
 }
 
+/**
+ * POST /v1/receipts/:id/regions — confirm フェーズの本物 BB を学習データに保存。
+ * source=real のみ server 側で採用。失敗は握り潰す (演出を止めない)。
+ */
+export async function saveRegions(
+  id: string,
+  payload: {
+    engine: string;
+    naturalWidth: number;
+    naturalHeight: number;
+    regions: Array<{
+      label: string;
+      x: number; y: number; width: number; height: number;
+      recognizedText?: string;
+      polygon?: Array<[number, number]>;
+      confidence?: number;
+      source?: "real" | "heuristic";
+    }>;
+  },
+): Promise<void> {
+  try {
+    await fetch(`/v1/receipts/${id}/regions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch { /* 学習データ保存失敗はユーザ体験に影響させない */ }
+}
+
 /** 端末位置情報 (任意)。 失敗・タイムアウトは null。 */
 export async function tryGetGeo(): Promise<Geo | null> {
   if (!("geolocation" in navigator)) return null;
