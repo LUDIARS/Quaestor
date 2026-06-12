@@ -6,6 +6,10 @@
 .sc-root {
   position: relative;
   width: 100%;
+  /* 親 (scan-stage の inset:0 ラッパ) いっぱいに広げる。
+     height auto だと撮影フレームのアスペクトがステージと違うとき
+     オーバーレイがステージ上部に寄り、 演出領域とカメラ枠がずれて見える */
+  height: 100%;
   background: #000;
   overflow: hidden;
   font-family: ui-monospace, "Cascadia Code", "Source Code Pro", monospace;
@@ -628,6 +632,18 @@
 .sc-box.is-noise .sc-target-num {
   font-size: 7px;
   opacity: 0.75;
+}
+
+/* confirm フェーズ: 余韻スロースキャンラインの通過まで枠ごと隠す。
+   is-real の静的 outline も含めて delay (インライン animation-delay) まで不可視にする */
+.sc-box.is-reveal {
+  opacity: 0;
+  animation: sc-box-reveal 0.45s ease-out both;
+}
+
+@keyframes sc-box-reveal {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* confirm フェーズのコーナーパルス — 丁寧にゆっくり描く (余韻) */

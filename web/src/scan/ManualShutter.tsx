@@ -263,8 +263,12 @@ export function ManualShutter() {
             background: capturing ? "var(--c-accent)" : "rgba(255,255,255,0.35)",
             cursor: (running && !activeShot) ? "pointer" : "not-allowed",
             boxShadow: "0 2px 12px rgba(0,0,0,0.5)",
-            transition: "background 120ms",
+            transition: "background 120ms, opacity 300ms",
             zIndex: 20,
+            // スキャン演出中は disabled ボタンがタップを飲み込み、 下の
+            // オーバーレイ (タップで exit) に届かなくなる → 素通しにする
+            pointerEvents: activeShot ? "none" : "auto",
+            opacity: activeShot ? 0 : 1,
           }}
         />
       </div>
@@ -418,6 +422,7 @@ function ScanAnimation({
         animated={animated}
         onDismiss={onDismiss}
         onExitStart={onExitStart}
+        expectConfirm={!!fieldLocator}
         evolution={phase === "analyze" ? evo : null}
         liveProbes={phase === "analyze" ? liveProbes : null}
       />
