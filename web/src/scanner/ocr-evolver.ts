@@ -21,6 +21,8 @@ export interface EvolutionProgress {
   generation: number;
   attempt: number;   // 評価済個体数
   total: number;     // 集団サイズ
+  /** この attempt で検出した行 (再スキャン演出の本物マーカー供給用)。失敗 attempt は空 */
+  lines: OcrLine[];
 }
 
 const GA_BASE = "/v1/ocr-ga";
@@ -61,11 +63,12 @@ export class OcrEvolver {
   ): Promise<void> {
     for (let i = 0; i < this.genomes.length; i++) {
       const genome = this.genomes[i]!;
+      let lines: OcrLine[] = [];
       try {
-        const lines = await runOcrGenome(imageUrl, genome);
+        lines = await runOcrGenome(imageUrl, genome);
         this.candidates.push({ genome, lines });
       } catch { /* sidecar 失敗はスキップ */ }
-      onProgress?.({ generation: this.generation, attempt: i + 1, total: this.genomes.length });
+      onProgress?.({ generation: this.generation, attempt: i + 1, total: this.genomes.length, lines });
     }
   }
 

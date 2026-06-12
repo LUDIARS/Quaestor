@@ -22,10 +22,30 @@ import {
   fillRegionValues,
   imageDataFromUrl,
 } from "./receipt-engine.js";
+import { FallbackFieldLocator } from "./field-locator.js";
 import type { DetectedRegion, FieldLocatorEngine, OcrFields, ScanPhase } from "./types.js";
 
 /** スキャンライン 1 回の所要時間。CSS の --sc-dur と合わせる */
 export const DETECT_DURATION_MS = 2000;
+
+/** 精度替え再スキャン (analyze 中): 1 パスの間隔。sweep より長くして休符を作る */
+export const RESCAN_PERIOD_MS = 2200;
+
+/** 精度替え再スキャン: スキャンライン 1 本の所要時間 */
+export const RESCAN_SWEEP_MS = 1600;
+
+/** confirm の余韻スロースキャン: 全体スキャンラインの所要時間 (完走後にスタンプ+サマリー) */
+export const CONFIRM_SCAN_DURATION_MS = 5000;
+
+/** confirm の余韻スロースキャン: 1 つの枠の reveal 演出にかける時間 */
+export const CONFIRM_REVEAL_MS = 1000;
+
+/**
+ * locate (fieldLocator 実行) の上限時間。
+ * Tesseract の言語モデル DL ハング等で詰まっても、これを超えたら
+ * FallbackFieldLocator (即時 heuristic) で必ず confirm へ進む。
+ */
+export const LOCATE_TIMEOUT_MS = 6000;
 
 // ---------------------------------------------------------------------------
 // analyze 中のノイズ演出: 実際とは無関係なオブジェクト検知を偽装
@@ -176,13 +196,34 @@ export function useScanPipeline({
 
       setPhase("locate");
 
-      void fl.locate(url, naturalWidth, naturalHeight, fields, m).then((located) => {
-        if (cancelled) return;
-        if (located.length > 0) {
-          setRegions(located);
-          setPhase("confirm");
+      // locate はタイムアウト付き。失敗/空/時間切れでも Fallback (heuristic、常に返る)
+      // で必ず confirm へ進む — 演出をエンジンの生死で止めない。
+      const locateAttempt: Promise<DetectedRegion[]> = Promise.race([
+        fl.locate(url, naturalWidth, naturalHeight, fields, m)
+          .catch(() => [] as DetectedRegion[]),
+        new Promise<DetectedRegion[]>((resolve) => {
+          window.setTimeout(() => resolve([]), LOCATE_TIMEOUT_MS);
+        }),
+      ]);
+
+      void locateAttempt.then(async (located) => {
+        let out = located;
+        if (out.length === 0) {
+          out = await new FallbackFieldLocator()
+            .locate(url, naturalWidth, naturalHeight, fields, m)
+            .catch(() => [] as DetectedRegion[]);
         }
-      }).catch(() => { /* locate 失敗は静かに無視 */ });
+        if (cancelled || out.length === 0) return;
+        // 余韻スロースキャンに同期: delay を y 座標 → 5 秒スキャンラインの
+        // 通過時刻に再マップ。最後の枠の reveal (1 秒) が完走 (5 秒) までに終わるよう
+        // spread を縮める。
+        const spread = CONFIRM_SCAN_DURATION_MS - CONFIRM_REVEAL_MS;
+        setRegions(out.map((r) => ({
+          ...r,
+          delay: Math.round(clamp01(r.y / naturalHeight) * spread),
+        })));
+        setPhase("confirm");
+      });
     }, RESULT_TO_LOCATE_DELAY_MS);
 
     return () => {
@@ -193,6 +234,10 @@ export function useScanPipeline({
   }, [phase, naturalWidth, naturalHeight]);
 
   return { phase, regions };
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
 }
 
 function ocrDone(status: string): boolean {

@@ -19,10 +19,34 @@ idle → detect → analyze → result → locate → confirm
 | フェーズ | 演出 | 領域(regions)の出所 |
 |---|---|---|
 | detect | スキャンライン + CRT ノイズ | 比率ヒューリスティック (演出用、source=heuristic) |
-| analyze | ロックオン + 偽 YOLO ノイズ箱 | 同上 + noise 箱 |
+| analyze | **精度替え再スキャンループ (下記)** | probe マーカー (合成 or 本物 lines) |
 | result | CONFIRMED スタンプ | OCR 値を比率領域に充填 |
-| locate | 再スキャンライン (紫) | — (fieldLocator 実行中) |
-| **confirm** | **本物 BB + 離れたコールアウト** | **fieldLocator が返す実ピクセル BB (source=real)** |
+| locate | 再スキャンライン (紫、ループ。**LOCATE_TIMEOUT_MS=6s 上限**) | — (fieldLocator 実行中) |
+| **confirm** | **余韻スロースキャン (5 秒) + 本物 BB + 離れたコールアウト** | **fieldLocator が返す実ピクセル BB (source=real)** |
+
+### 演出の大原則 (2026-06-12 リワークで確立)
+
+**演出は外部エンジン (sidecar / GA / Tesseract) の生死に依存しない。**
+データが届けば本物に昇格し、届かなければ演出用データで回す。
+locate はタイムアウトで必ず confirm へ前進する (詰まって固まる経路を作らない)。
+
+### analyze 中の精度替え再スキャンループ (2026-06-12)
+
+`ScannerOverlay` が **自走**で `RESCAN_PERIOD_MS` (2.2s) ごとに pass を進め、
+琥珀色スキャンライン (`sc-evolveline`, `RESCAN_SWEEP_MS`=1.6s) を流し直し、
+ライン通過に同期して probe マーカー (`kind="probe"`, 最大 24) を置き直す。
+LLM 解析が終わるまで何度でもくり返す。
+
+- マーカーの出所 (`probe-regions.ts`):
+  - **本物**: OCR-GA attempt の検出行が届けば `probesFromLines()` — 認識テキスト付き
+    (`sc-probe-text`)。LLM 確定前でも読めた情報は出す。
+  - **合成**: 届かなければ `synthesizeProbes(pass)` — pass を seed にレシート行風の
+    マーカーを決定論的に合成。テキストは出さない (嘘の認識結果は出さない)。
+- メタ表示 (`sc-evolve` バッジ): `RE-SCAN PASS nn · PRECISION x.xx` (演出値) +
+  GA 実進捗 (`GEN g · n/N`、届いていれば)。
+- probe 表示中は偽 YOLO ノイズ箱を抑制。probe は演出専用で学習データに乗らない。
+- データ経路: `OcrEvolver.evaluateAll` の `EvolutionProgress.lines` →
+  `ManualShutter` が `probesFromLines()` で変換 → overlay `liveProbes` prop。
 
 detect/analyze の比率 BB は **演出** であり学習に使わない。
 **学習に使う「検知した文字の BB」は confirm フェーズの `source=real` 領域**。
@@ -45,10 +69,22 @@ detect/analyze の比率 BB は **演出** であり学習に使わない。
 
 `source=heuristic` / `noise` 領域は従来どおり box 内にラベルを描く (後方互換、演出のまま)。
 
-### confirm 完了後の終端演出 (2026-06-11)
-- 全項目を出し切ったら自動で閉じず、**全項目表示のまま待機**する (`ScannerSummary` カード)。
-- サマリーカードは店名/日付/合計/各品目をリスト表示し、**余韻** (呼吸グロー) を出す。
-- **画面タップ**で exit: `sc-exitline` が上から下へスキャンラインを流し、オーバーレイ内容を
+### locate のタイムアウト保証 (2026-06-12)
+
+`useScanPipeline` は locate を `Promise.race` で `LOCATE_TIMEOUT_MS` (6s) と競争させる。
+失敗 / 空 / 時間切れの場合は `FallbackFieldLocator` (heuristic、常に返る) を即時実行して
+**必ず confirm に到達**させる。Tesseract の言語モデル DL ハングや sidecar 死で
+locate に居座り続ける経路は存在しない。locate 中の紫ラインはループ再生。
+
+### confirm の余韻スロースキャン + 終端演出 (2026-06-12 改訂)
+- LLM 解析確定 (locate 完了) 後、**ゆっくりした全体スキャンライン (`sc-finalline`,
+  `CONFIRM_SCAN_DURATION_MS`=5s) を 1 本流し、ライン通過に同期して枠を順に出す**。
+  - 各枠の delay は pipeline が y 座標 → 5 秒スキャンの通過時刻に再マップ
+    (spread = 5s − 1s で最後の枠も 5 秒以内に reveal 完了)。
+  - **1 つの枠の演出 (LockonShrink) に 1 秒** (`CONFIRM_REVEAL_MS`)。callout は枠 +150ms。
+- **5 秒後に confirm を出す**: CONFIRMED スタンプ + `ScannerSummary` カード (全項目リスト +
+  呼吸グロー) を表示し、**全項目表示のまま待機**する。
+- **画面タップ**で exit: `sc-exitline` が上から下へ全体スキャンラインを流し、オーバーレイ内容を
   フェードしながら scanner (カメラ) に戻す (`EXIT_DURATION_MS`)。CLOSE ボタンも同じ exit を通る。
 - fieldLocator 無し (result のみ) の経路は従来どおり自動 dismiss。
 
