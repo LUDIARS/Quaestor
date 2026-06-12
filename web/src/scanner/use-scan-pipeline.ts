@@ -27,6 +27,15 @@ import type { DetectedRegion, FieldLocatorEngine, OcrFields, ScanPhase } from ".
 /** スキャンライン 1 回の所要時間。CSS の --sc-dur と合わせる */
 export const DETECT_DURATION_MS = 2000;
 
+/** analyze 中の精度替え再スキャン (OCR-GA attempt ごと) のスキャンライン 1 回の所要時間 */
+export const RESCAN_SWEEP_MS = 1600;
+
+/** confirm の余韻スロースキャン: 全体スキャンラインの所要時間 (この後にスタンプ+サマリー) */
+export const CONFIRM_SCAN_DURATION_MS = 5000;
+
+/** confirm の余韻スロースキャン: 1 つの枠の reveal 演出にかける時間 */
+export const CONFIRM_REVEAL_MS = 1000;
+
 // ---------------------------------------------------------------------------
 // analyze 中のノイズ演出: 実際とは無関係なオブジェクト検知を偽装
 // ---------------------------------------------------------------------------
@@ -179,7 +188,13 @@ export function useScanPipeline({
       void fl.locate(url, naturalWidth, naturalHeight, fields, m).then((located) => {
         if (cancelled) return;
         if (located.length > 0) {
-          setRegions(located);
+          // 余韻スロースキャンに同期: delay を y 座標 → 5 秒スキャンラインの通過時刻に再マップ。
+          // 最後の枠の reveal (1 秒) がスキャンライン完走 (5 秒) までに終わるよう spread を縮める。
+          const spread = CONFIRM_SCAN_DURATION_MS - CONFIRM_REVEAL_MS;
+          setRegions(located.map((r) => ({
+            ...r,
+            delay: Math.round(clamp01(r.y / naturalHeight) * spread),
+          })));
           setPhase("confirm");
         }
       }).catch(() => { /* locate 失敗は静かに無視 */ });
@@ -193,6 +208,10 @@ export function useScanPipeline({
   }, [phase, naturalWidth, naturalHeight]);
 
   return { phase, regions };
+}
+
+function clamp01(v: number): number {
+  return Math.min(1, Math.max(0, v));
 }
 
 function ocrDone(status: string): boolean {

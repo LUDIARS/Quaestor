@@ -19,8 +19,8 @@ export interface DetectedRegion {
   value?: string;
   /** Phase 2 でのアニメーション開始遅延 (ms) */
   delay?: number;
-  /** ボックス種別: noise=analyze中ノイズ演出 / item=レシート個別品目 */
-  kind?: "noise" | "item";
+  /** ボックス種別: noise=analyze中ノイズ演出 / item=レシート個別品目 / probe=精度替え再スキャンの中間マーカー */
+  kind?: "noise" | "item" | "probe";
   /**
    * BB の出所。
    *  - "real":      検出器 (PaddleOCR/Tesseract) が当てた実ピクセル座標。学習に使う本物 BB。
