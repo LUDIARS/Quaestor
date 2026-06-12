@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { YearTabs, currentYear } from "../components/YearTabs.js";
+import { MonthTabs, currentYear, currentMonth, monthRange } from "../components/MonthTabs.js";
 
 interface InvoiceRow {
   id: number;
@@ -34,6 +34,7 @@ export function Invoices() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [year, setYear] = useState(currentYear());
+  const [month, setMonth] = useState(currentMonth());
   const [form, setForm] = useState({
     issued_at: new Date().toISOString().slice(0, 10),
     due_date: "",
@@ -44,19 +45,20 @@ export function Invoices() {
     notes: "",
   });
 
-  async function load() {
+  async function load(y: string, m: string) {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (year !== "all") {
-        params.set("date_from", `${year}-01-01`);
-        params.set("date_to", `${year}-12-31`);
-      }
+      const r = monthRange(y, m);
+      const params = new URLSearchParams({
+        date_from: r.date_from,
+        date_to: r.date_to,
+      });
       const [listJ, sumJ] = await Promise.all([
         fetch(`/v1/invoices?${params}`).then((r) => r.json() as Promise<{ items: InvoiceRow[] }>),
         fetch("/v1/invoices/summary").then((r) => r.json() as Promise<SummaryRes>),
       ]);
-      setList(listJ.items);
+      const sorted = [...listJ.items].sort((a, b) => a.issued_at.localeCompare(b.issued_at));
+      setList(sorted);
       setSummary(sumJ.summary);
       setLoading(false);
     } catch (e: unknown) {
@@ -64,7 +66,7 @@ export function Invoices() {
       setLoading(false);
     }
   }
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
+  useEffect(() => { void load(year, month); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year, month]);
 
   async function create() {
     setErr(null);
@@ -87,7 +89,7 @@ export function Invoices() {
       if (!res.ok) throw new Error(`${res.status}`);
       setCreating(false);
       setForm({ ...form, client: "", work_summary: "", amount: "", notes: "" });
-      await load();
+      await load(year, month);
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     }
@@ -99,7 +101,7 @@ export function Invoices() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ status }),
     });
-    await load();
+    await load(year, month);
   }
 
   if (loading) return <p>loading…</p>;
@@ -107,7 +109,12 @@ export function Invoices() {
     <div>
       <h2>Invoices (請求書)</h2>
 
-      <YearTabs value={year} onChange={(y) => setYear(y)} />
+      <MonthTabs
+        year={year}
+        month={month}
+        onYearChange={(y) => setYear(y)}
+        onChange={(m) => setMonth(m)}
+      />
 
       {summary && (
         <section style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1rem", fontSize: "0.85rem" }}>

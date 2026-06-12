@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { YearTabs, currentYear } from "../components/YearTabs.js";
+import { MonthTabs, currentYear, currentMonth, monthRange } from "../components/MonthTabs.js";
 
 interface TxRow {
   id: string;
@@ -27,12 +27,17 @@ type ViewMode = "all" | "credit-card" | "bank" | "amazon";
 type BankFilter = "both" | "in" | "out";
 
 export function Transactions() {
+  const initYear = currentYear();
+  const initMonth = currentMonth();
+  const initRange = monthRange(initYear, initMonth);
+
   const [data, setData] = useState<ListRes | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [year, setYear] = useState(currentYear());
-  const [from, setFrom] = useState(`${currentYear()}-01-01`);
-  const [to, setTo] = useState(`${currentYear()}-12-31`);
+  const [year, setYear] = useState(initYear);
+  const [month, setMonth] = useState(initMonth);
+  const [from, setFrom] = useState(initRange.date_from);
+  const [to, setTo] = useState(initRange.date_to);
   const [payee, setPayee] = useState("");
   const [view, setView] = useState<ViewMode>("all");
   const [bankFilter, setBankFilter] = useState<BankFilter>("both");
@@ -55,28 +60,40 @@ export function Transactions() {
     }
   }
 
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view, year]);
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [view, from, to]);
+
+  function handleMonthChange(m: string, range: { date_from: string; date_to: string }) {
+    setMonth(m);
+    setFrom(range.date_from);
+    setTo(range.date_to);
+  }
+
+  function handleYearChange(y: string) {
+    setYear(y);
+    const range = monthRange(y, month);
+    setFrom(range.date_from);
+    setTo(range.date_to);
+  }
 
   const filteredItems = useMemo(() => {
     if (!data) return [];
+    let items = [...data.items].sort((a, b) => a.date.localeCompare(b.date));
     if (view === "bank") {
-      if (bankFilter === "in") return data.items.filter((t) => t.amount_in != null && t.amount_in > 0);
-      if (bankFilter === "out") return data.items.filter((t) => t.amount_out != null && t.amount_out > 0);
+      if (bankFilter === "in") items = items.filter((t) => t.amount_in != null && t.amount_in > 0);
+      if (bankFilter === "out") items = items.filter((t) => t.amount_out != null && t.amount_out > 0);
     }
-    return data.items;
+    return items;
   }, [data, view, bankFilter]);
 
   return (
     <div>
       <h2>Transactions</h2>
 
-      <YearTabs
-        value={year}
-        onChange={(y, range) => {
-          setYear(y);
-          setFrom(range?.date_from ?? "");
-          setTo(range?.date_to ?? "");
-        }}
+      <MonthTabs
+        year={year}
+        month={month}
+        onYearChange={handleYearChange}
+        onChange={handleMonthChange}
       />
 
       <div className="flex gap-1 mb-3 border-b border-border">
@@ -123,11 +140,6 @@ export function Transactions() {
   );
 }
 
-/**
- * クレカ向け: 日付 + アカウントでグループ化、 トグルで明細を expand。
- * 「expand 時に内容を fetch」 — ここは既に list で metadata を返してるが、
- * 詳細 view を遅延に分けて読みやすくしている。
- */
 function CreditCardView({ items }: { items: TxRow[] }) {
   const groups = useMemo(() => {
     const m = new Map<string, TxRow[]>();
@@ -136,7 +148,7 @@ function CreditCardView({ items }: { items: TxRow[] }) {
       const g = m.get(key);
       if (g) g.push(t); else m.set(key, [t]);
     }
-    return [...m.entries()].sort(([a], [b]) => b.localeCompare(a));
+    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [items]);
 
   const [opens, setOpens] = useState<Set<string>>(new Set());

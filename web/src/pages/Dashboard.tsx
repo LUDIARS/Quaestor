@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { YearTabs, currentYear } from "../components/YearTabs.js";
+import { MonthTabs, currentYear, currentMonth, monthRange } from "../components/MonthTabs.js";
 
 interface Monthly { month: string; amount_in: number; amount_out: number; count: number }
 interface BySource { source: string; amount_in: number; amount_out: number; count: number }
@@ -17,18 +17,19 @@ interface DashboardRes {
 export function Dashboard() {
   const [data, setData] = useState<DashboardRes | null>(null);
   const [year, setYear] = useState(currentYear());
+  const [month, setMonth] = useState(currentMonth());
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  async function load() {
+  async function load(y: string, m: string) {
     setLoading(true);
     try {
-      const params = new URLSearchParams();
-      if (year !== "all") {
-        params.set("from", `${year}-01`);
-        params.set("to", `${year}-12`);
-      }
-      params.set("top_payees", "10");
+      const r = monthRange(y, m);
+      const params = new URLSearchParams({
+        from: r.date_from.slice(0, 7),
+        to: r.date_to.slice(0, 7),
+        top_payees: "10",
+      });
       const j = await (await fetch(`/v1/dashboard/summary?${params}`)).json() as DashboardRes;
       setData(j);
       setLoading(false);
@@ -37,7 +38,8 @@ export function Dashboard() {
       setLoading(false);
     }
   }
-  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year]);
+
+  useEffect(() => { void load(year, month); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [year, month]);
 
   if (loading) return <p>loading…</p>;
   if (err) return <p className="error">{err}</p>;
@@ -51,7 +53,12 @@ export function Dashboard() {
   return (
     <div>
       <h2>Dashboard</h2>
-      <YearTabs value={year} onChange={(y) => setYear(y)} />
+      <MonthTabs
+        year={year}
+        month={month}
+        onYearChange={(y) => setYear(y)}
+        onChange={(m) => setMonth(m)}
+      />
       <p className="text-xs text-subtle mb-3">{data.range.from} 〜 {data.range.to}</p>
 
       <section className="last-capture" style={{ marginBottom: "1rem" }}>
@@ -64,32 +71,33 @@ export function Dashboard() {
         </div>
       </section>
 
-      <section className="last-capture" style={{ marginBottom: "1rem" }}>
-        <h3 style={{ marginTop: 0, fontSize: "0.95rem" }}>月別</h3>
-        <div style={{ display: "grid", gap: "0.4rem" }}>
-          {data.monthly.map((m) => (
-            <div key={m.month} style={{ display: "grid", gridTemplateColumns: "80px 1fr 1fr 100px", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
-              <span style={{ color: "var(--muted)" }}>{m.month}</span>
-              <div style={{ background: "var(--bg)", borderRadius: 3, position: "relative", height: 16 }}>
-                <div style={{ width: `${(m.amount_in / maxBar) * 100}%`, background: "var(--ok)", height: "100%", borderRadius: 3 }} />
-                <span style={{ position: "absolute", inset: 0, padding: "0 0.4rem", fontSize: "0.7rem", color: "white", display: "flex", alignItems: "center" }}>
-                  in ¥{m.amount_in.toLocaleString()}
+      {data.monthly.length > 1 && (
+        <section className="last-capture" style={{ marginBottom: "1rem" }}>
+          <h3 style={{ marginTop: 0, fontSize: "0.95rem" }}>月別</h3>
+          <div style={{ display: "grid", gap: "0.4rem" }}>
+            {data.monthly.map((m) => (
+              <div key={m.month} style={{ display: "grid", gridTemplateColumns: "80px 1fr 1fr 100px", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
+                <span style={{ color: "var(--muted)" }}>{m.month}</span>
+                <div style={{ background: "var(--bg)", borderRadius: 3, position: "relative", height: 16 }}>
+                  <div style={{ width: `${(m.amount_in / maxBar) * 100}%`, background: "var(--ok)", height: "100%", borderRadius: 3 }} />
+                  <span style={{ position: "absolute", inset: 0, padding: "0 0.4rem", fontSize: "0.7rem", color: "white", display: "flex", alignItems: "center" }}>
+                    in ¥{m.amount_in.toLocaleString()}
+                  </span>
+                </div>
+                <div style={{ background: "var(--bg)", borderRadius: 3, position: "relative", height: 16 }}>
+                  <div style={{ width: `${(m.amount_out / maxBar) * 100}%`, background: "var(--danger)", height: "100%", borderRadius: 3 }} />
+                  <span style={{ position: "absolute", inset: 0, padding: "0 0.4rem", fontSize: "0.7rem", color: "white", display: "flex", alignItems: "center" }}>
+                    out ¥{m.amount_out.toLocaleString()}
+                  </span>
+                </div>
+                <span style={{ textAlign: "right", color: m.amount_in - m.amount_out >= 0 ? "var(--ok)" : "var(--danger)" }}>
+                  {m.amount_in - m.amount_out >= 0 ? "+" : ""}¥{(m.amount_in - m.amount_out).toLocaleString()}
                 </span>
               </div>
-              <div style={{ background: "var(--bg)", borderRadius: 3, position: "relative", height: 16 }}>
-                <div style={{ width: `${(m.amount_out / maxBar) * 100}%`, background: "var(--danger)", height: "100%", borderRadius: 3 }} />
-                <span style={{ position: "absolute", inset: 0, padding: "0 0.4rem", fontSize: "0.7rem", color: "white", display: "flex", alignItems: "center" }}>
-                  out ¥{m.amount_out.toLocaleString()}
-                </span>
-              </div>
-              <span style={{ textAlign: "right", color: m.amount_in - m.amount_out >= 0 ? "var(--ok)" : "var(--danger)" }}>
-                {m.amount_in - m.amount_out >= 0 ? "+" : ""}¥{(m.amount_in - m.amount_out).toLocaleString()}
-              </span>
-            </div>
-          ))}
-          {data.monthly.length === 0 && <span style={{ color: "var(--muted)" }}>該当データなし</span>}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
         <section className="last-capture">
