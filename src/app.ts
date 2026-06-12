@@ -19,6 +19,10 @@ import { StockQuotesRepo } from "./db/stock-quotes-repo.js";
 import { ShareholderPerksRepo } from "./db/shareholder-perks-repo.js";
 import { StatementProfilesRepo } from "./db/statement-profiles-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
+import { TrainingDataset } from "./services/training-dataset.js";
+import { OpusDiffEvaluator, type DiffEvaluator } from "./services/detection-diff-evaluator.js";
+import { createOcrGaStore } from "./services/ocr-ga.js";
+import { ocrGaRouter } from "./api/ocr-ga.js";
 import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { SmartImporter } from "./services/smart-import.js";
@@ -69,6 +73,12 @@ export function buildApp(deps: AppDeps): Hono {
   const perks = new ShareholderPerksRepo(deps.db);
   const statementProfiles = new StatementProfilesRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
+  const trainingDataset = new TrainingDataset("app_data/training/receipts", storage);
+  // 差分の Opus 類推器。ANTHROPIC_API_KEY が無ければ undefined (差分は保存するが類推はしない)
+  let diffEvaluator: DiffEvaluator | undefined;
+  try { diffEvaluator = new OpusDiffEvaluator(); } catch { diffEvaluator = undefined; }
+  // OCR パラメータの遺伝的最適化 (PaddleOCR 進化、待機中に web が評価して進化)
+  const ocrGa = createOcrGaStore("app_data/training/ga");
 
   // 初回起動時の seed (account_codes が先、 apportionment_rules は account_codes に FK 依存)
   accounts.seedIfEmpty();
@@ -111,7 +121,8 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
-  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr }));
+  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator }));
+  app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
   app.route("/v1/invoices", invoicesRouter({ repo: invoices }));

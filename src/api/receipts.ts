@@ -8,6 +8,9 @@ import type { ReceiptStorage } from "../services/receipt-storage.js";
 import type { OcrClient } from "../services/ocr-client.js";
 import { runOcrFor } from "../services/ocr-runner.js";
 import { ClaudeCodeOcr, detectClaudeCli, projectRoot } from "../services/claude-code-ocr.js";
+import type { TrainingDataset } from "../services/training-dataset.js";
+import { computeDetectionDiff } from "../services/detection-eval.js";
+import type { DiffEvaluator } from "../services/detection-diff-evaluator.js";
 
 /**
  * 同一 receipt への OCR 起動 throttle。 2 秒内の再起動 (auto + 手動 + claude-code) は skip。
@@ -72,7 +75,29 @@ export interface ReceiptsApiDeps {
   storage: ReceiptStorage;
   /** OCR が disabled な環境 (key 未設定 / テスト) では undefined */
   ocr?: OcrClient;
+  /** 検出 BB 学習データセット writer (未設定なら /regions は no-op success) */
+  dataset?: TrainingDataset;
+  /** 差分の Opus 類推器 (ANTHROPIC_API_KEY 未設定なら undefined)。差分がある時だけ呼ぶ */
+  diffEvaluator?: DiffEvaluator;
 }
+
+/** confirm フェーズの本物 BB 永続化リクエスト */
+const RegionsSchema = z.object({
+  engine: z.string().max(40),
+  naturalWidth: z.number().int().positive(),
+  naturalHeight: z.number().int().positive(),
+  regions: z.array(z.object({
+    label: z.string().max(80),
+    x: z.number(),
+    y: z.number(),
+    width: z.number().positive(),
+    height: z.number().positive(),
+    recognizedText: z.string().max(2000).optional(),
+    polygon: z.array(z.tuple([z.number(), z.number()])).optional(),
+    confidence: z.number().optional(),
+    source: z.enum(["real", "heuristic"]).optional(),
+  })).max(200),
+});
 
 export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
   const app = new Hono();
@@ -182,6 +207,58 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     deps.repo.setOcrResult(id, parsed.data as Parameters<typeof deps.repo.setOcrResult>[1]);
     return c.json({ receipt: deps.repo.find(id) });
+  });
+
+  // POST /v1/receipts/:id/regions — confirm フェーズの本物 BB を学習データに保存
+  //  source=real の領域のみ採用。heuristic/noise は破棄 (spec §3)。
+  app.post("/:id/regions", async (c) => {
+    const id = c.req.param("id");
+    const r = deps.repo.find(id);
+    if (!r) return c.json({ error: "not_found" }, 404);
+
+    const body = await c.req.json().catch(() => null);
+    const parsed = RegionsSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+
+    const real = parsed.data.regions.filter((rg) => (rg.source ?? "heuristic") === "real");
+    if (!deps.dataset || real.length === 0) {
+      return c.json({ ok: true, saved: 0 });
+    }
+
+    deps.dataset.append({
+      receiptId: id,
+      imageRef: r.image_path ?? null,
+      naturalWidth: parsed.data.naturalWidth,
+      naturalHeight: parsed.data.naturalHeight,
+      engine: parsed.data.engine,
+      regions: real.map((rg) => ({
+        label: rg.label,
+        x: rg.x, y: rg.y, width: rg.width, height: rg.height,
+        text: rg.recognizedText,
+        polygon: rg.polygon,
+        confidence: rg.confidence,
+      })),
+      ts: Math.floor(Date.now() / 1000),
+    });
+
+    // 差分評価: LLM(Vision) 抽出フィールドを絶対正解として検出テキストと突合 (毎回・安価)
+    const diff = computeDetectionDiff(
+      real.map((rg) => ({ label: rg.label, text: rg.recognizedText })),
+      { date: r.date, payee: r.payee, total: r.total, items: r.items },
+    );
+
+    // 差分がある時だけ Opus が検出挙動を類推 (fire-and-forget、応答はブロックしない)
+    if (diff.hasDiff && deps.diffEvaluator) {
+      const evaluator = deps.diffEvaluator;
+      const dataset = deps.dataset;
+      void evaluator.evaluate(diff, parsed.data.engine)
+        .then((inf) => dataset.attachEval(id, diff, inf ?? undefined))
+        .catch(() => dataset.attachEval(id, diff));
+    } else {
+      deps.dataset.attachEval(id, diff);
+    }
+
+    return c.json({ ok: true, saved: real.length, hasDiff: diff.hasDiff });
   });
 
   // POST /v1/receipts/:id/commit — 「投入」: データ完備チェック + (日付-場所-金額) 重複判定 → 確定

@@ -15,6 +15,7 @@ import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { OcrWorker } from "./services/ocr-worker.js";
+import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
 
 const log = pino({
   level: process.env.QUAESTOR_LOG_LEVEL ?? "info",
@@ -50,6 +51,15 @@ if (process.env.ANTHROPIC_API_KEY && process.env.QUAESTOR_OCR_WORKER !== "0") {
   }
 }
 
+// OCR sidecar (PaddleOCR) を同時起動。
+//  - QUAESTOR_OCR_SIDECAR_MANAGE=0 で無効
+//  - QUAESTOR_OCR_SIDECAR_URL (外部 sidecar) 指定時は本機を起動しない
+let ocrSidecar: OcrSidecarSupervisor | null = null;
+if (process.env.QUAESTOR_OCR_SIDECAR_MANAGE !== "0" && !process.env.QUAESTOR_OCR_SIDECAR_URL) {
+  ocrSidecar = new OcrSidecarSupervisor({ logger: log });
+  ocrSidecar.start();
+}
+
 serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {
   log.info(
     { host: HOST, port: info.port, dbPath: DB_PATH, ocrWorker: ocrWorker !== null },
@@ -60,6 +70,7 @@ serve({ fetch: app.fetch, hostname: HOST, port: PORT }, (info) => {
 const shutdown = (signal: string) => {
   log.info({ signal }, "shutting down");
   ocrWorker?.stop();
+  ocrSidecar?.stop();
   db.close();
   process.exit(0);
 };

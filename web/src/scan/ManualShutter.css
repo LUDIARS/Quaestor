@@ -1,0 +1,22 @@
+/* =====================================================================
+   ManualShutter — 撮影 UI 固有スタイル
+   ===================================================================== */
+
+/* ------------------------------------------------------------------
+   シャッターフラッシュ
+   ------------------------------------------------------------------ */
+.shutter-flash {
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  background: white;
+  pointer-events: none;
+  z-index: 30;
+  animation: shutter-flash-out 0.38s ease-out forwards;
+}
+
+@keyframes shutter-flash-out {
+  0%   { opacity: 1; }
+  25%  { opacity: 0.75; }
+  100% { opacity: 0; }
+}
