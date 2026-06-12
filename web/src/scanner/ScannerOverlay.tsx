@@ -159,6 +159,12 @@ interface Props {
   onDismiss?: () => void;
   /** exit 演出開始時 (タップ)。呼び出し側がカメラを裏で復帰させるのに使う */
   onExitStart?: () => void;
+  /**
+   * このあと locate → confirm フェーズが続く (fieldLocator あり) かどうか。
+   * true のとき result フェーズでは CONFIRMED スタンプを出さない
+   * (余韻スロースキャン完走後の confirm 側で 1 回だけ出す)。
+   */
+  expectConfirm?: boolean;
   /** OCR-GA 評価の進捗 (analyze 中の待機を埋める busy 演出)。null で非表示 */
   evolution?: { generation: number; attempt: number; total: number } | null;
   /**
@@ -178,6 +184,7 @@ export function ScannerOverlay({
   animated,
   onDismiss,
   onExitStart,
+  expectConfirm = false,
   evolution,
   liveProbes,
 }: Props) {
@@ -233,7 +240,8 @@ export function ScannerOverlay({
   // detect フェーズでも箱を描画 (y-based delay で scan line と同期して表示される)
   const showBoxes   = phase !== "idle" && phase !== "locate";
   const showStreams  = phase === "analyze" || phase === "result" || phase === "locate" || phase === "confirm";
-  const showStamp   = phase === "result" || phase === "confirm";
+  // confirm が続く場合、result では CONFIRMED を出さない (confirm 完走時の 1 回だけ)
+  const showStamp   = phase === "confirm" || (phase === "result" && !expectConfirm);
 
   // ---- 精度替え再スキャン (analyze 中、自走ループ) ----
   // RESCAN_PERIOD_MS ごとに pass を進め、スキャンライン + probe マーカーを置き直す。
@@ -423,6 +431,8 @@ export function ScannerOverlay({
               isDet   ? "is-detect"  : "",
               isAn    ? "is-analyze" : "",
               isCo    ? "is-confirm" : "",
+              // confirm: 余韻スロースキャンラインの通過 (delay) まで枠ごと隠す
+              isCo && animated ? "is-reveal" : "",
               isNoise ? "is-noise"   : "",
               isReal  ? "is-real"    : "",
             ].filter(Boolean).join(" ")}
@@ -431,7 +441,9 @@ export function ScannerOverlay({
               top:    pos.top,
               width:  pos.width,
               height: pos.height,
-              animationDelay: `${delay}ms`,
+              // exit 中は is-exiting の fade-out が same-property で勝つため、
+              // reveal 用の delay を残すと fade まで遅延してしまう → 0 に戻す
+              animationDelay: exiting ? "0ms" : `${delay}ms`,
               "--sc-clr": clr,
             } as React.CSSProperties}
           >
@@ -571,7 +583,8 @@ export function ScannerOverlay({
               {lockedCount}/{totalCount} LOCKED
             </span>
           )}
-          {onDismiss && (phase === "result" || ready) && (
+          {/* detect 以外は常に CLOSE を出す (エンジンが詰まってもカメラへ戻れる脱出口) */}
+          {onDismiss && phase !== "detect" && (
             <button
               className="sc-close"
               onClick={(e) => { e.stopPropagation(); if (ready) beginExit(); else onDismiss(); }}

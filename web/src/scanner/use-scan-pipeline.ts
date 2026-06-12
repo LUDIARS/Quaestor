@@ -179,41 +179,52 @@ export function useScanPipeline({
     setPhase("result");
   }, [phase, ocrStatus, ocrFields]); // regions は意図的に除外 (循環防止)
 
-  // result → locate → confirm (fieldLocator が有効なときのみ)
+  // result → locate (fieldLocator が有効なときのみ、 RESULT_TO_LOCATE_DELAY_MS 後)
   useEffect(() => {
     if (phase !== "result") return;
     if (!fieldLocatorRef.current) return;
+    const t = window.setTimeout(() => setPhase("locate"), RESULT_TO_LOCATE_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [phase]);
+
+  // locate 実行 → confirm。
+  // 注意: locate の実行は「locate フェーズに入ってから」開始する。
+  // 以前は result フェーズの effect 内で setPhase("locate") → locate 実行としていたが、
+  // phase 遷移で同じ effect の cleanup が走り cancelled=true になるため、
+  // locate 完了後の setPhase("confirm") が一度も実行されない (confirm 永久未達) バグがあった。
+  useEffect(() => {
+    if (phase !== "locate") return;
 
     let cancelled = false;
+    const fl     = fieldLocatorRef.current;
+    const url    = imageUrlRef.current;
+    const fields = ocrFieldsRef.current;
+    const m      = modeRef.current;
 
-    const t = window.setTimeout(() => {
-      const fl     = fieldLocatorRef.current;
-      const url    = imageUrlRef.current;
-      const fields = ocrFieldsRef.current;
-      const m      = modeRef.current;
+    if (!fl || !url || !fields) {
+      setPhase("confirm");
+      return;
+    }
 
-      if (!fl || !url || !fields || cancelled) return;
+    // locate はタイムアウト付き。失敗/空/時間切れでも Fallback (heuristic、常に返る)
+    // で必ず confirm へ進む — 演出をエンジンの生死で止めない。
+    const locateAttempt: Promise<DetectedRegion[]> = Promise.race([
+      fl.locate(url, naturalWidth, naturalHeight, fields, m)
+        .catch(() => [] as DetectedRegion[]),
+      new Promise<DetectedRegion[]>((resolve) => {
+        window.setTimeout(() => resolve([]), LOCATE_TIMEOUT_MS);
+      }),
+    ]);
 
-      setPhase("locate");
-
-      // locate はタイムアウト付き。失敗/空/時間切れでも Fallback (heuristic、常に返る)
-      // で必ず confirm へ進む — 演出をエンジンの生死で止めない。
-      const locateAttempt: Promise<DetectedRegion[]> = Promise.race([
-        fl.locate(url, naturalWidth, naturalHeight, fields, m)
-          .catch(() => [] as DetectedRegion[]),
-        new Promise<DetectedRegion[]>((resolve) => {
-          window.setTimeout(() => resolve([]), LOCATE_TIMEOUT_MS);
-        }),
-      ]);
-
-      void locateAttempt.then(async (located) => {
-        let out = located;
-        if (out.length === 0) {
-          out = await new FallbackFieldLocator()
-            .locate(url, naturalWidth, naturalHeight, fields, m)
-            .catch(() => [] as DetectedRegion[]);
-        }
-        if (cancelled || out.length === 0) return;
+    void locateAttempt.then(async (located) => {
+      let out = located;
+      if (out.length === 0) {
+        out = await new FallbackFieldLocator()
+          .locate(url, naturalWidth, naturalHeight, fields, m)
+          .catch(() => [] as DetectedRegion[]);
+      }
+      if (cancelled) return;
+      if (out.length > 0) {
         // 余韻スロースキャンに同期: delay を y 座標 → 5 秒スキャンラインの
         // 通過時刻に再マップ。最後の枠の reveal (1 秒) が完走 (5 秒) までに終わるよう
         // spread を縮める。
@@ -222,14 +233,13 @@ export function useScanPipeline({
           ...r,
           delay: Math.round(clamp01(r.y / naturalHeight) * spread),
         })));
-        setPhase("confirm");
-      });
-    }, RESULT_TO_LOCATE_DELAY_MS);
+      }
+      // 位置特定が全滅でも confirm へ進む (既存 regions のまま)。
+      // locate に留まると余韻スキャンもタップ復帰も永久に始まらない。
+      setPhase("confirm");
+    });
 
-    return () => {
-      cancelled = true;
-      window.clearTimeout(t);
-    };
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, naturalWidth, naturalHeight]);
 
