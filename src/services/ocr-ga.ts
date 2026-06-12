@@ -44,7 +44,10 @@ export function defaultOcrGenome(): OcrGenome {
 
 export type EvaluatedOcrGenome = Evaluated<OcrGenome>;
 
-/** OCR 用 GA 集団ストアを生成。永続先は app_data/training/ga/<key>.json */
+/**
+ * OCR 用 GA 集団ストアを生成。永続先は app_data/training/ga/<key>.json、
+ * 学習ログは app_data/training/ga/evolution.jsonl (世代ごとの fitness 推移)。
+ */
 export function createOcrGaStore(root = "app_data/training/ga"): GaStore<OcrGenome> {
   return new GaStore<OcrGenome>({
     root,
@@ -52,6 +55,7 @@ export function createOcrGaStore(root = "app_data/training/ga"): GaStore<OcrGeno
     size: 8,
     elite: 2,
     mutationRate: 0.3,
+    logFile: `${root}/evolution.jsonl`,
     // 既定値 + ランダムで初期集団を作る (既知の無難解 + 探索)
     seed: () => [
       defaultOcrGenome(),

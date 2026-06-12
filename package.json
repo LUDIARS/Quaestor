@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "tsc --noEmit -p tsconfig.json",
+    "secret": "tsx src/cli/secret.ts",
     "import:calc": "tsx scripts/import-calc-xlsx.mjs",
     "tauri": "cargo --manifest-path src-tauri/Cargo.toml",
     "tauri:dev": "cargo run --manifest-path src-tauri/Cargo.toml",

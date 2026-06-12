@@ -26,6 +26,10 @@ export interface SidecarSupervisorOptions {
   sidecarDir?: string;
   host?: string;
   port?: number;
+  /** python 実行体の明示指定 (config 由来)。null/未指定は .venv 優先 → PATH */
+  python?: string | null;
+  /** PaddleOCR 言語。子プロセスへ起動時注入する。既定 japan */
+  lang?: string;
   /** ログ出力先。既定 app_data/ocr-sidecar.log */
   logFile?: string;
   /** 連続クラッシュの再起動上限。既定 5 */
@@ -45,6 +49,8 @@ export class OcrSidecarSupervisor {
   private readonly dir: string;
   private readonly host: string;
   private readonly port: number;
+  private readonly python: string | null;
+  private readonly lang: string;
   private readonly logFile: string;
   private readonly maxRestarts: number;
   private readonly log: Logger;
@@ -57,7 +63,9 @@ export class OcrSidecarSupervisor {
   constructor(opts: SidecarSupervisorOptions = {}) {
     this.dir = resolve(opts.sidecarDir ?? "ocr-sidecar");
     this.host = opts.host ?? "127.0.0.1";
-    this.port = opts.port ?? Number(process.env.QUAESTOR_OCR_SIDECAR_PORT ?? 17350);
+    this.port = opts.port ?? 17350;
+    this.python = opts.python ?? null;
+    this.lang = opts.lang ?? "japan";
     this.logFile = resolve(opts.logFile ?? "app_data/ocr-sidecar.log");
     this.maxRestarts = opts.maxRestarts ?? 5;
     this.log = opts.logger ?? { info: () => {}, warn: () => {} };
@@ -69,8 +77,9 @@ export class OcrSidecarSupervisor {
       this.log.warn({ dir: this.dir }, "ocr sidecar dir not found; skipped");
       return;
     }
-    const py = venvPython(this.dir) ?? process.env.QUAESTOR_OCR_PYTHON ?? defaultPython();
-    this.spawnChild(py, venvPython(this.dir) == null);
+    // 明示指定 (config) > .venv > PATH の python
+    const py = this.python ?? venvPython(this.dir) ?? defaultPython();
+    this.spawnChild(py, this.python == null && venvPython(this.dir) == null);
   }
 
   private spawnChild(python: string, noVenv: boolean): void {
@@ -82,7 +91,12 @@ export class OcrSidecarSupervisor {
       child = spawn(
         python,
         ["-m", "uvicorn", "main:app", "--host", this.host, "--port", String(this.port)],
-        { cwd: this.dir, stdio: ["ignore", fd, fd], env: { ...process.env } },
+        {
+          cwd: this.dir,
+          stdio: ["ignore", fd, fd],
+          // lang は config 由来の値を起動時注入 (子は env を読むだけ、正本は config)
+          env: { ...process.env, QUAESTOR_OCR_LANG: this.lang },
+        },
       );
     } catch (e: unknown) {
       this.log.warn({ err: e instanceof Error ? e.message : String(e) }, "ocr sidecar spawn failed");
