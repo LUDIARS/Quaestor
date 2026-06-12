@@ -26,6 +26,7 @@ import { synthesizeProbes } from "./probe-regions.js";
 import { layoutCallouts, type LayoutInput } from "./callout-layout.js";
 import { ScannerCallouts, type CalloutItem } from "./ScannerCallouts.js";
 import { ScannerSummary } from "./ScannerSummary.js";
+import { useScannerAudio } from "./use-scanner-audio.js";
 
 /** exit 演出 (上からスキャンラインで戻る) の所要時間。CSS の sc-exitline と合わせる */
 const EXIT_DURATION_MS = 900;
@@ -294,6 +295,9 @@ export function ScannerOverlay({
     const t = window.setTimeout(() => setConfirmDone(true), wait);
     return () => window.clearTimeout(t);
   }, [phase, animated]);
+
+  // 効果音
+  useScannerAudio({ phase, animated, rescanPass, confirmDone, regions });
 
   // exit: 画面タップで上からスキャンラインを流して scanner (カメラ) に戻す。
   // タップで進めるのは「最後の confirm が出揃ったとき (ready)」だけ。
