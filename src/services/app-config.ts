@@ -34,6 +34,12 @@ export interface AppConfig {
     lang: string;
     /** python 実行体の明示指定 (null = .venv 優先 → PATH) */
     python: string | null;
+    /**
+     * .venv を「作る」ときに使う python (setup.ps1/sh が読む)。
+     * paddlepaddle は 3.9〜3.12 のみ wheel 提供のため、PATH 任せにせず固定できる。
+     * null = setup スクリプトが 3.12→3.9 を自動探索。
+     */
+    venvPython: string | null;
     /** 外部 sidecar URL (指定時は manage を無視して起動しない) */
     externalUrl: string | null;
   };
@@ -48,7 +54,7 @@ const DEFAULTS: AppConfig = {
   ocrWorker: { enabled: true, intervalMs: 30_000 },
   ocrSidecar: {
     manage: true, host: "127.0.0.1", port: 17350,
-    lang: "japan", python: null, externalUrl: null,
+    lang: "japan", python: null, venvPython: null, externalUrl: null,
   },
   training: { gaRoot: "app_data/training/ga" },
 };
@@ -79,6 +85,7 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
       port:   num(env("QUAESTOR_OCR_SIDECAR_PORT"),    fromFile?.ocrSidecar?.port,   DEFAULTS.ocrSidecar.port),
       lang:   str(env("QUAESTOR_OCR_LANG"),            fromFile?.ocrSidecar?.lang,   DEFAULTS.ocrSidecar.lang),
       python: strOrNull(env("QUAESTOR_OCR_PYTHON"),    fromFile?.ocrSidecar?.python),
+      venvPython: strOrNull(undefined,                 fromFile?.ocrSidecar?.venvPython),
       externalUrl: strOrNull(env("QUAESTOR_OCR_SIDECAR_URL"), fromFile?.ocrSidecar?.externalUrl),
     },
     training: {

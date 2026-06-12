@@ -27,6 +27,8 @@ venv + 依存を用意する。これだけやれば以降は **Quaestor 起動�
 
 **python は 3.9〜3.12 を使うこと** (paddlepaddle が 3.13+ の wheel を出していない。
 3.14 では `No matching distribution found for paddlepaddle` で setup が失敗する)。
+setup スクリプトは `quaestor.config.json` の `ocrSidecar.venvPython` を読む
+(null なら 3.12→3.9 を自動探索) ので、PATH の python が新しすぎても安全。
 PaddleOCR は 2.x / 3.x どちらでも動く (main.py が API を自動判別。3.x は PP-OCRv5)。
 
 ## 自動起動 (Quaestor と同時)
