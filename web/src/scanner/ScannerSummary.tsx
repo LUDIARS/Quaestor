@@ -1,8 +1,9 @@
 /**
  * confirm 演出が終わったあとの「全項目リスト」サマリーカード。
  *
- * 検出した本物 BB の値 (店名 / 日付 / 合計 / 各品目) を読みやすいリストで提示し、
+ * 確定値 (店名 / 日付 / 合計 / 各品目) を読みやすいリストで提示し、
  * 余韻 (やわらかい呼吸グロー) を出しながら待機する。画面タップで戻る。
+ * 値さえあれば出す — heuristic (Fallback) 経路でもサマリーは欠けない。
  */
 
 import type { DetectedRegion } from "./types.js";
@@ -21,7 +22,7 @@ function rank(r: DetectedRegion): number {
 
 export function ScannerSummary({ regions, exiting }: Props) {
   const rows = regions
-    .filter((r) => r.source === "real" && r.kind !== "noise" && (r.value || r.recognizedText))
+    .filter((r) => r.kind !== "noise" && (r.value || r.recognizedText))
     .sort((a, b) => rank(a) - rank(b));
 
   if (rows.length === 0) return null;

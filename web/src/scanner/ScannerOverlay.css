@@ -488,7 +488,8 @@
     0 0  8px rgba(124, 143, 255, 0.9),
     0 0 22px rgba(124, 143, 255, 0.5),
     0 0 45px rgba(100, 120, 255, 0.2);
-  animation: sc-rescanline 1.1s cubic-bezier(0.3, 0, 0.7, 1) forwards;
+  /* locate は LOCATE_TIMEOUT_MS まで続き得るのでループさせる (止まって見せない) */
+  animation: sc-rescanline 1.1s cubic-bezier(0.3, 0, 0.7, 1) infinite;
   z-index: 5;
 }
 
@@ -500,9 +501,9 @@
 }
 
 /* ------------------------------------------------------------------
-   精度替え再スキャン (analyze 中、OCR-GA attempt ごと) — 琥珀
+   精度替え再スキャン (analyze 中、pass ごと) — 琥珀
    ライン 1 本を流し、通過に合わせて probe マーカーを置いていく。
-   attempt が進むたび key 差し替えで全体をやり直す (=何度もくり返す)。
+   pass が進むたび key 差し替えで全体をやり直す (=何度もくり返す)。
    ------------------------------------------------------------------ */
 .sc-evolveline {
   position: absolute;
@@ -551,7 +552,7 @@
   100% { opacity: 0.55; transform: none; }
 }
 
-/* 中間 OCR の認識テキスト (確定前の情報。小さく添える) */
+/* 中間 OCR の認識テキスト (本物の検出行があるときだけ。小さく添える) */
 .sc-probe-text {
   position: absolute;
   left: 0;
