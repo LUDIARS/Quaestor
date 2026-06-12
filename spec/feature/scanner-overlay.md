@@ -137,7 +137,8 @@ confirm 時、web は本物 BB を backend に POST → JSONL データセット
   - 各領域に `source:"real"` + `recognizedText` を付ける
   - **sidecar 未到達時はフォールバック**: `TesseractFieldLocator` → `FallbackFieldLocator`
 - 起動: `ocr-sidecar/README.md` 参照 (`uvicorn main:app`、既定 port 17350)
-- 環境変数 `QUAESTOR_OCR_SIDECAR_URL` で web/backend が URL を知る
+- URL は `quaestor.config.json` の `ocrSidecar` が正本 (env は override のみ)。
+  web は `GET /v1/config` → `runtime-config.ts` で受け取る (`spec/setup/config-and-secrets.md`)
 
 ### フォールバック段
 ```

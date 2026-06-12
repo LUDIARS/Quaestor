@@ -11,8 +11,8 @@
  * fitness の計算 (評価) は呼び出し側の責務。本モジュールは「探索の骨格」のみ。
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import { resolve, join, dirname } from "node:path";
 
 /** 遺伝子 1 個の宣言 */
 export type GeneSpec =
@@ -135,6 +135,12 @@ export interface GaStoreOptions<G extends Genome> {
   mutationRate?: number;
   /** 初期集団 (例: 既定値 + ランダム)。未指定はランダム size 個体 */
   seed?: () => G[];
+  /**
+   * 学習ログ (JSONL)。指定すると recordGeneration ごとに 1 行追記する:
+   * { ts, key, generation, evaluated, bestFitness, meanFitness, worstFitness, bestGenome }
+   * 進化が効いているか (fitness の推移) を後から追うための永続ログ。
+   */
+  logFile?: string;
 }
 
 export class GaStore<G extends Genome> {
@@ -144,6 +150,7 @@ export class GaStore<G extends Genome> {
   private readonly elite: number;
   private readonly mutationRate: number;
   private readonly seed: () => G[];
+  private readonly logFile: string | null;
 
   constructor(opts: GaStoreOptions<G>) {
     this.root = resolve(opts.root);
@@ -152,6 +159,7 @@ export class GaStore<G extends Genome> {
     this.elite = opts.elite ?? 2;
     this.mutationRate = opts.mutationRate ?? 0.3;
     this.seed = opts.seed ?? (() => Array.from({ length: this.size }, () => randomGenome<G>(this.schema)));
+    this.logFile = opts.logFile ? resolve(opts.logFile) : null;
     mkdirSync(this.root, { recursive: true });
   }
 
@@ -177,7 +185,33 @@ export class GaStore<G extends Genome> {
       if (st.history.length > 200) st.history = st.history.slice(-200);
     }
     this.save(st);
+    this.appendEvolutionLog(st, evaluated, best);
     return { generation: st.generation, best };
+  }
+
+  /** 学習ログ (JSONL) に 1 世代分を追記。ログ失敗で本処理は止めない。 */
+  private appendEvolutionLog(
+    st: GaStoreState<G>,
+    evaluated: Evaluated<G>[],
+    best: Evaluated<G> | null,
+  ): void {
+    if (!this.logFile) return;
+    const fits = evaluated.map((e) => e.fitness);
+    const sum = fits.reduce((s, v) => s + v, 0);
+    const rec = {
+      ts: new Date().toISOString(),
+      key: st.key,
+      generation: st.generation,
+      evaluated: fits.length,
+      bestFitness:  best ? round3(best.fitness) : null,
+      meanFitness:  fits.length > 0 ? round3(sum / fits.length) : null,
+      worstFitness: fits.length > 0 ? round3(Math.min(...fits)) : null,
+      bestGenome: best?.genome ?? null,
+    };
+    try {
+      mkdirSync(dirname(this.logFile), { recursive: true });
+      appendFileSync(this.logFile, `${JSON.stringify(rec)}\n`, "utf8");
+    } catch { /* ignore */ }
   }
 
   private load(key: string): GaStoreState<G> {

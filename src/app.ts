@@ -55,6 +55,10 @@ export interface AppDeps {
   perkClient?: PerkClient | "auto" | "disabled";
   /** 株価 client。 省略時は Stooq。 "disabled" で無効化 */
   stockClient?: StockClient | "auto" | "disabled";
+  /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
+  gaRoot?: string;
+  /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
+  publicConfig?: { ocrSidecarUrl: string };
 }
 
 export function buildApp(deps: AppDeps): Hono {
@@ -78,7 +82,7 @@ export function buildApp(deps: AppDeps): Hono {
   let diffEvaluator: DiffEvaluator | undefined;
   try { diffEvaluator = new OpusDiffEvaluator(); } catch { diffEvaluator = undefined; }
   // OCR パラメータの遺伝的最適化 (PaddleOCR 進化、待機中に web が評価して進化)
-  const ocrGa = createOcrGaStore("app_data/training/ga");
+  const ocrGa = createOcrGaStore(deps.gaRoot ?? "app_data/training/ga");
 
   // 初回起動時の seed (account_codes が先、 apportionment_rules は account_codes に FK 依存)
   accounts.seedIfEmpty();
@@ -115,6 +119,11 @@ export function buildApp(deps: AppDeps): Hono {
     version: "1.0.0",
     ocr_enabled: ocrEnabled,
     invest_enabled: { mapper: !!securityMapper, stock: !!stockClient, perks: !!perkClient },
+  }));
+
+  // web へ公開する非シークレット設定 (env 非依存化: web は import.meta.env を見ない)
+  app.get("/v1/config", (c) => c.json({
+    ocrSidecarUrl: deps.publicConfig?.ocrSidecarUrl ?? "http://127.0.0.1:17350",
   }));
 
   app.route("/v1/transactions", transactionsRouter({ txs, db: deps.db }));

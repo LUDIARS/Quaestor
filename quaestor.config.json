@@ -1,0 +1,27 @@
+{
+  "$comment": "Quaestor 統合設定 (AIFormat RULE.md §7.1)。非シークレットのみ。env は override 用で既定値はこのファイル。シークレットは `npm run secret -- set NAME VALUE` (app_data/secrets.enc.json、暗号化) へ。",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 17400,
+    "logLevel": "info"
+  },
+  "storage": {
+    "dbPath": "app_data/quaestor.db",
+    "receiptsRoot": "app_data/receipts"
+  },
+  "ocrWorker": {
+    "enabled": true,
+    "intervalMs": 30000
+  },
+  "ocrSidecar": {
+    "manage": true,
+    "host": "127.0.0.1",
+    "port": 17350,
+    "lang": "japan",
+    "python": null,
+    "externalUrl": null
+  },
+  "training": {
+    "gaRoot": "app_data/training/ga"
+  }
+}

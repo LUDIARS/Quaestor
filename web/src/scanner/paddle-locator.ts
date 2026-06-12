@@ -8,6 +8,7 @@
  * sidecar 未到達時は例外を投げる → ChainedFieldLocator が Tesseract/Fallback に退避。
  */
 
+import { ocrSidecarUrl } from "../lib/runtime-config.js";
 import type { DetectedRegion, FieldLocatorEngine, OcrFields } from "./types.js";
 
 /** sidecar が返す 1 行の認識結果 */
@@ -27,14 +28,9 @@ const FIELD_COLORS = {
   total: "#fbbf24",
 } as const;
 
-function sidecarUrl(): string {
-  // Vite 環境変数 or 既定 (同一ホストの 17350)
-  const env = (import.meta as { env?: Record<string, string> }).env;
-  return env?.["VITE_OCR_SIDECAR_URL"] ?? "http://127.0.0.1:17350";
-}
-
 export class PaddleFieldLocator implements FieldLocatorEngine {
-  constructor(private readonly baseUrl: string = sidecarUrl()) {}
+  /** baseUrl 未指定時は backend 公開設定 (/v1/config) から解決する */
+  constructor(private readonly baseUrl?: string) {}
 
   async locate(
     imageUrl: string,
@@ -43,11 +39,12 @@ export class PaddleFieldLocator implements FieldLocatorEngine {
     fields: OcrFields,
     _mode: "receipt" | "food",
   ): Promise<DetectedRegion[]> {
+    const base = this.baseUrl ?? (await ocrSidecarUrl());
     const blob = await (await fetch(imageUrl)).blob();
     const form = new FormData();
     form.append("image", blob, "receipt.jpg");
 
-    const res = await fetch(`${this.baseUrl}/detect`, { method: "POST", body: form });
+    const res = await fetch(`${base}/detect`, { method: "POST", body: form });
     if (!res.ok) throw new Error(`sidecar /detect ${res.status}`);
     const json = (await res.json()) as { lines?: SidecarLine[] };
     const lines = json.lines ?? [];
