@@ -63,6 +63,9 @@ import { NotificationState } from "./services/notification-state.js";
 import { NotificationService } from "./services/notification-service.js";
 import { notificationsRouter } from "./api/notifications.js";
 import { suggestSubsidies } from "./services/subsidy-advisor.js";
+import { ClaudeAllocationAdvisor, type AllocationAdvisor } from "./services/allocation-advisor.js";
+import { AllocationAdviceStore } from "./services/allocation-advice-store.js";
+import { detectClaudeCli as detectCli } from "./services/claude-cli.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -88,6 +91,10 @@ export interface AppDeps {
   discordNotifier?: DiscordNotifier | "auto" | "disabled";
   /** 定期通知の dedup state ファイル。 既定 'app_data/notifications-state.json' */
   notifyStatePath?: string;
+  /** 資産配分アドバイザ。 省略時は claude CLI があれば有効、 無ければ undefined */
+  allocationAdvisor?: AllocationAdvisor | "auto" | "disabled";
+  /** 配分アドバイスのキャッシュファイル。 既定 'app_data/allocation-advice.json' */
+  allocationAdvicePath?: string;
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
   gaRoot?: string;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
@@ -223,6 +230,8 @@ export function buildApp(deps: AppDeps): Hono {
     contributions,
     valuations: holdingValuations,
     dividends: holdingDividends,
+    allocationAdvisor: resolveAllocationAdvisor(deps.allocationAdvisor),
+    adviceStore: new AllocationAdviceStore(deps.allocationAdvicePath ?? "app_data/allocation-advice.json"),
   }));
   app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
 
@@ -272,6 +281,13 @@ function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): Stock
   } catch {
     return undefined;
   }
+}
+
+function resolveAllocationAdvisor(opt: AllocationAdvisor | "auto" | "disabled" | undefined): AllocationAdvisor | undefined {
+  if (opt === "disabled") return undefined;
+  if (opt && typeof opt === "object") return opt;
+  if (!detectCli()) return undefined;
+  return new ClaudeAllocationAdvisor();
 }
 
 function resolveSubsidyCrawler(opt: SubsidyCrawler | "auto" | "disabled" | undefined): SubsidyCrawler | undefined {
