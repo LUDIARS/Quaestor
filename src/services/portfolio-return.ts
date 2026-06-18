@@ -77,8 +77,10 @@ export function computeHoldingReturn(input: ReturnInput): ReturnResult {
   if (plannedRows.length > 0) {
     plannedToDate = sum(plannedRows.filter((c) => c.date <= input.asOf).map((c) => c.amount));
   } else if (input.monthlyContribution && input.startedAt) {
-    const months = monthsBetween(input.startedAt, input.asOf);
-    plannedToDate = months > 0 ? input.monthlyContribution * months : 0;
+    // 起算日に第1回を拠出する月次積立として数える。 開始月を含むため経過月数 + 1。
+    // 例: 2025-12-01 開始を 2026-06-18 時点で見ると 12/1〜6/1 の 7 回 = monthsBetween(=6) + 1。
+    const elapsed = monthsBetween(input.startedAt, input.asOf);
+    plannedToDate = elapsed >= 0 ? input.monthlyContribution * (elapsed + 1) : 0;
   }
   const actualToDate = sum(actuals.filter((c) => c.date <= input.asOf).map((c) => c.amount));
   const variance = plannedToDate != null ? actualToDate - plannedToDate : null;
