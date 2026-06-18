@@ -1,10 +1,15 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import type Database from "better-sqlite3";
 import type { BusinessPlansRepo } from "../db/business-plans-repo.js";
 import type { FinancialStatementsRepo } from "../db/financial-statements-repo.js";
 import type { PlanReviewer } from "../services/plan-reviewer.js";
 import { TEMPLATES } from "../business-plan/templates.js";
-import { runReview, seedFromActuals } from "../services/business-plan-service.js";
+import { runReview, seedFromActuals, computePlanVariance } from "../services/business-plan-service.js";
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const PurposeEnum = z.enum(["funding", "subsidy", "internal"]);
 const StatusEnum = z.enum(["draft", "review", "final"]);
@@ -51,6 +56,7 @@ const ReviewQuery = z.object({ kind: z.enum(["quantitative", "qualitative", "com
 export interface BusinessPlansApiDeps {
   repo: BusinessPlansRepo;
   fs: FinancialStatementsRepo;
+  db: Database.Database;
   reviewer?: PlanReviewer;
 }
 
@@ -124,6 +130,12 @@ export function businessPlansRouter(deps: BusinessPlansApiDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     const count = deps.repo.upsertFigures(id, parsed.data.figures);
     return c.json({ updated: count, plan: full(deps.repo, id) });
+  });
+
+  app.get("/:id/variance", (c) => {
+    const id = c.req.param("id");
+    if (!deps.repo.find(id)) return c.json({ error: "not_found" }, 404);
+    return c.json(computePlanVariance(deps.repo, deps.db, id, today()));
   });
 
   app.post("/:id/seed-from-actuals", (c) => {

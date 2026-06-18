@@ -146,7 +146,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
   app.route("/v1/statement-profiles", statementProfilesRouter({ repo: statementProfiles }));
-  app.route("/v1/business-plans", businessPlansRouter({ repo: businessPlans, fs, reviewer: planReviewer }));
+  app.route("/v1/business-plans", businessPlansRouter({ repo: businessPlans, fs, db: deps.db, reviewer: planReviewer }));
 
   return app;
 }
