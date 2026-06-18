@@ -46,6 +46,9 @@ import { statementProfilesRouter } from "./api/statement-profiles.js";
 import { businessPlansRouter } from "./api/business-plans.js";
 import { ClaudePlanReviewer, type PlanReviewer } from "./services/plan-reviewer.js";
 import { ClaudeCliPlanReviewer, detectClaudeCli } from "./services/plan-reviewer-cli.js";
+import { SubsidiesRepo } from "./db/subsidies-repo.js";
+import { subsidiesRouter } from "./api/subsidies.js";
+import { resolveSubsidyMatcher, type SubsidyMatcher } from "./services/subsidy-matcher.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -61,6 +64,8 @@ export interface AppDeps {
   stockClient?: StockClient | "auto" | "disabled";
   /** 事業計画の定性レビューア。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
   planReviewer?: PlanReviewer | "auto" | "disabled";
+  /** 補助金マッチャ。 省略時は claude CLI があれば有効、 無ければ undefined */
+  subsidyMatcher?: SubsidyMatcher | "auto" | "disabled";
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
   gaRoot?: string;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
@@ -83,6 +88,7 @@ export function buildApp(deps: AppDeps): Hono {
   const perks = new ShareholderPerksRepo(deps.db);
   const statementProfiles = new StatementProfilesRepo(deps.db);
   const businessPlans = new BusinessPlansRepo(deps.db);
+  const subsidies = new SubsidiesRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
   const trainingDataset = new TrainingDataset("app_data/training/receipts", storage);
   // 差分の Opus 類推器。ANTHROPIC_API_KEY が無ければ undefined (差分は保存するが類推はしない)
@@ -108,6 +114,7 @@ export function buildApp(deps: AppDeps): Hono {
   const perkClient = resolvePerkClient(deps.perkClient);
   const stockClient = resolveStock(deps.stockClient);
   const planReviewer = resolvePlanReviewer(deps.planReviewer);
+  const subsidyMatcher = resolveSubsidyMatcher(deps.subsidyMatcher);
   const advisor = new InvestAdvisor({
     db: deps.db,
     securities,
@@ -148,6 +155,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
   app.route("/v1/statement-profiles", statementProfilesRouter({ repo: statementProfiles }));
   app.route("/v1/business-plans", businessPlansRouter({ repo: businessPlans, fs, db: deps.db, reviewer: planReviewer }));
+  app.route("/v1/subsidies", subsidiesRouter({ repo: subsidies, plans: businessPlans, matcher: subsidyMatcher }));
 
   return app;
 }

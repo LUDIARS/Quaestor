@@ -51,6 +51,21 @@ export function buildFinancialSummary(m: QuantMetrics): string {
   return lines.length ? lines.join("\n") : "(数字が未入力です)";
 }
 
+/** 計画の記述 + 数字サマリを 1 つのテキストにまとめる (補助金マッチング等の入力用) */
+export function buildPlanSummaryText(repo: BusinessPlansRepo, planId: string): string {
+  const plan = repo.find(planId);
+  if (!plan) throw new Error("plan not found");
+  const tpl = getTemplate(plan.template);
+  const sections = repo.sections(planId)
+    .map((s) => {
+      const title = tpl?.sections.find((t) => t.key === s.key)?.title ?? s.key;
+      return `## ${title}\n${s.body.trim() || "(未記入)"}`;
+    })
+    .join("\n");
+  const quant = runQuant(toQuantFigures(repo.figures(planId)));
+  return `テンプレート: ${tpl?.name ?? plan.template} / 目的: ${plan.purpose}\n\n# 記述\n${sections}\n\n# 数字\n${buildFinancialSummary(quant.metrics)}`;
+}
+
 export type RunReviewKind = ReviewKind;
 
 export interface RunReviewResult {
