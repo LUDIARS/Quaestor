@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NotifyDiscordButton } from "../components/NotifyDiscordButton.js";
 
 /**
  * 投資 / 優待アドバイザ。
@@ -124,7 +125,10 @@ export function Invest() {
 
   return (
     <div>
-      <h2>投資 / 優待アドバイザ</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <h2>投資 / 優待アドバイザ</h2>
+        <NotifyDiscordButton endpoint="/v1/notify/invest" label="提案を Discord に通知" />
+      </div>
       <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: "-0.4rem" }}>
         よく使う店の運営企業を株主目線で。 まず「① 銘柄マッピング」→「② 株価更新」→「③ 優待更新」を順に実行。
       </p>

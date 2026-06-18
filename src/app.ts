@@ -58,6 +58,11 @@ import { SubsidiesRepo } from "./db/subsidies-repo.js";
 import { subsidiesRouter } from "./api/subsidies.js";
 import { resolveSubsidyMatcher, type SubsidyMatcher } from "./services/subsidy-matcher.js";
 import { JGrantsCrawler, type SubsidyCrawler } from "./services/subsidy-crawler.js";
+import { resolveDiscordNotifier, type DiscordNotifier } from "./services/discord-notifier.js";
+import { NotificationState } from "./services/notification-state.js";
+import { NotificationService } from "./services/notification-service.js";
+import { notificationsRouter } from "./api/notifications.js";
+import { suggestSubsidies } from "./services/subsidy-advisor.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -79,6 +84,10 @@ export interface AppDeps {
   subsidyMatcher?: SubsidyMatcher | "auto" | "disabled";
   /** 補助金クローラ。 省略時は jGrants (鍵不要)。 "disabled" で無効化 */
   subsidyCrawler?: SubsidyCrawler | "auto" | "disabled";
+  /** Discord 通知。 省略時は QUAESTOR_DISCORD_WEBHOOK_URL があれば有効、 無ければ undefined */
+  discordNotifier?: DiscordNotifier | "auto" | "disabled";
+  /** 定期通知の dedup state ファイル。 既定 'app_data/notifications-state.json' */
+  notifyStatePath?: string;
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
   gaRoot?: string;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
@@ -158,6 +167,25 @@ export function buildApp(deps: AppDeps): Hono {
     dividendClient,
   });
 
+  // Discord 通知 (送信専用 webhook)。 アドバイザー出力を整形して push する
+  const notifier = resolveDiscordNotifier(deps.discordNotifier);
+  const notificationState = new NotificationState(deps.notifyStatePath ?? "app_data/notifications-state.json");
+  const notificationService = new NotificationService({
+    notifier,
+    state: notificationState,
+    investSuggestions: () => advisor.suggestions(),
+    dividendCandidates: () => portfolio.dividendCandidates(),
+    subsidySuggest: async (planId) => {
+      const planName = businessPlans.find(planId)?.name ?? planId;
+      if (!subsidyCrawler || !subsidyMatcher) return { planName, suggestions: [] };
+      const { suggestions } = await suggestSubsidies(
+        { plans: businessPlans, repo: subsidies, crawler: subsidyCrawler, matcher: subsidyMatcher },
+        planId,
+      );
+      return { planName, suggestions };
+    },
+  });
+
   const app = new Hono();
 
   app.get("/health", (c) => c.json({
@@ -196,6 +224,7 @@ export function buildApp(deps: AppDeps): Hono {
     valuations: holdingValuations,
     dividends: holdingDividends,
   }));
+  app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
 
   return app;
 }

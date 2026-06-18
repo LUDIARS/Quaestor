@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { NotifyDiscordButton } from "../components/NotifyDiscordButton.js";
 
 /**
  * 積立ポートフォリオ / 配当アドバイザ。
@@ -153,7 +154,10 @@ export function Portfolio() {
 
   return (
     <div>
-      <h2>積立ポートフォリオ / 配当アドバイザ</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+        <h2>積立ポートフォリオ / 配当アドバイザ</h2>
+        <NotifyDiscordButton endpoint="/v1/notify/portfolio" label="配当候補を Discord に通知" />
+      </div>
       <p style={{ color: "var(--muted)", fontSize: "0.85rem", marginTop: "-0.4rem" }}>
         投信・個別株/ETF・保険型の積立を管理し、 利回り (XIRR) / 計画 vs 実績 / 将来見通し / 配当株を提示します。
         株価/配当は公開情報のみ (インサイダー情報は扱いません)。

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { NotifyDiscordButton } from "../components/NotifyDiscordButton.js";
 
 interface SubsidyRow {
   id: number; name: string; agency: string | null; kind: string; url: string | null;
@@ -151,6 +152,7 @@ export function Subsidies() {
           <button className="btn" onClick={() => void runSuggest()} disabled={suggesting || !matchPlan}>
             {suggesting ? "提案中…(クロール+LLM)" : "jGrants から提案"}
           </button>
+          {matchPlan && <NotifyDiscordButton endpoint="/v1/notify/subsidies" body={{ plan_id: matchPlan }} label="提案を Discord に通知" />}
         </div>
         {matches && matches.length > 0 && (
           <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.1rem", fontSize: "0.83rem" }}>
