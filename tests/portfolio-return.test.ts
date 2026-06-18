@@ -71,6 +71,21 @@ describe("computeHoldingReturn", () => {
     expect(r.annualized_xirr_pct!).toBeGreaterThan(0);
   });
 
+  it("does not treat market value as gain when cost basis is unknown (invested=0)", () => {
+    const r = computeHoldingReturn({
+      contributions: [], // 取得原価 未入力 (株だけ登録)
+      dividends: [],
+      marketValue: 545400, // 評価額のみ判明
+      valuationAsOf: "2026-06-17",
+      asOf: "2026-06-18",
+    });
+    expect(r.invested).toBe(0);
+    expect(r.market_value).toBe(545400);
+    expect(r.unrealized_pl).toBeNull(); // 全額を利益にしない
+    expect(r.simple_return_pct).toBeNull();
+    expect(r.annualized_xirr_pct).toBeNull();
+  });
+
   it("adds non-reinvested dividends to total return", () => {
     const r = computeHoldingReturn({
       contributions,

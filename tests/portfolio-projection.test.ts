@@ -92,4 +92,15 @@ describe("aggregateTotals", () => {
     expect(totals.valued_invested).toBe(100000);
     expect(totals.simple_return_pct).toBe(10); // 10000/100000
   });
+
+  it("counts market value but not gain for holdings with unknown cost basis", () => {
+    const totals = aggregateTotals([
+      mk({ invested: 100000, market_value: 110000, unrealized_pl: 10000 }), // 投信: 原価あり
+      mk({ invested: 0, market_value: 545400, unrealized_pl: null }),        // 株: 原価未入力
+    ]);
+    expect(totals.market_value).toBe(655400);    // 総評価額は両方を合算
+    expect(totals.valued_invested).toBe(100000); // 利回り分母は原価既知のみ
+    expect(totals.unrealized_pl).toBe(10000);    // 株の評価額を利益に含めない
+    expect(totals.simple_return_pct).toBe(10);
+  });
 });
