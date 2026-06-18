@@ -311,6 +311,7 @@ function PlanEditor(props: {
         <button className="btn" onClick={() => void loadVariance()} disabled={!!busy}>
           {busy === "variance" ? "集計中…" : "計画vs実績 差異分析"}
         </button>
+        <a className="btn" href={`/v1/business-plans/${plan.id}/export.xlsx`} role="button" style={{ textDecoration: "none" }}>Excel 出力</a>
         <button className="btn" onClick={props.onDelete} style={{ marginLeft: "auto", color: "var(--err, #d33)" }}>削除</button>
       </div>
 

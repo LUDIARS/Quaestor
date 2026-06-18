@@ -4,8 +4,9 @@ import type Database from "better-sqlite3";
 import type { BusinessPlansRepo } from "../db/business-plans-repo.js";
 import type { FinancialStatementsRepo } from "../db/financial-statements-repo.js";
 import type { PlanReviewer } from "../services/plan-reviewer.js";
-import { TEMPLATES } from "../business-plan/templates.js";
+import { TEMPLATES, getTemplate } from "../business-plan/templates.js";
 import { runReview, seedFromActuals, computePlanVariance } from "../services/business-plan-service.js";
+import { buildPlanWorkbook } from "../services/business-plan-export.js";
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -130,6 +131,23 @@ export function businessPlansRouter(deps: BusinessPlansApiDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     const count = deps.repo.upsertFigures(id, parsed.data.figures);
     return c.json({ updated: count, plan: full(deps.repo, id) });
+  });
+
+  app.get("/:id/export.xlsx", async (c) => {
+    const id = c.req.param("id");
+    const plan = deps.repo.find(id);
+    if (!plan) return c.json({ error: "not_found" }, 404);
+    const buf = await buildPlanWorkbook(plan, deps.repo.sections(id), deps.repo.figures(id), getTemplate(plan.template));
+    // content-disposition は Latin1 (ByteString) のみ。 日本語名は filename* (RFC 5987) で UTF-8 を渡し、
+    // filename= には ASCII フォールバックを置く。
+    const asciiName = plan.name.replace(/[^\x20-\x7e]+/g, "").replace(/[^\w.-]+/g, "_").slice(0, 40) || "plan";
+    const utf8Name = encodeURIComponent(`quaestor-plan-${plan.name}.xlsx`);
+    return new Response(buf, {
+      headers: {
+        "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "content-disposition": `attachment; filename="quaestor-plan-${asciiName}.xlsx"; filename*=UTF-8''${utf8Name}`,
+      },
+    });
   });
 
   app.get("/:id/variance", (c) => {
