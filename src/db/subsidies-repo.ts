@@ -79,6 +79,13 @@ export class SubsidiesRepo {
     return this.db.prepare(`SELECT * FROM subsidies WHERE id = ?`).get(id) as SubsidyRow | undefined;
   }
 
+  /** 外部ソース (jGrants 等) の id で既存を探す (クロール取込の重複防止) */
+  findByExternalId(jgrantsId: string): SubsidyRow | undefined {
+    return this.db
+      .prepare(`SELECT * FROM subsidies WHERE json_extract(metadata, '$.jgrants_id') = ? LIMIT 1`)
+      .get(jgrantsId) as SubsidyRow | undefined;
+  }
+
   list(filter: { status?: SubsidyStatus } = {}): SubsidyRow[] {
     if (filter.status) {
       return this.db

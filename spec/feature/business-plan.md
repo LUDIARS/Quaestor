@@ -149,8 +149,20 @@ DB 集計は `computePlanVariance` (service)。 未到来の窓は `elapsed=fals
 fit (high/medium/low) と根拠を JSON 配列で返す。 候補 id 集合に無いものは捨て、 fit 高い順に並べる。
 web 「補助金」タブで CRUD + 計画選択 → マッチング診断。
 
+### 自動収集 (クロール) + サジェスト (`subsidy-crawler.ts` / `subsidy-advisor.ts`)
+
+補助金データを **jGrants 公開 API** (`api.jgrants-portal.go.jp/exp/v1/public/subsidies`、 鍵不要) から自動収集する。
+`JGrantsCrawler` が keyword 検索 (一覧、 acceptance=1 で募集中のみ) → 各件の詳細 API で enrich (補助率/要件/対象) →
+Quaestor の subsidy 形式に正規化 (`normalize`、 補助率テキストは `parseRate` で 0..1 に)。 `fetchImpl` を DI してテスト。
+
+- `POST /v1/subsidies/crawl` {keyword} → 候補プレビュー (保存しない、 `already_saved` フラグ付き)
+- `POST /v1/subsidies/import` {candidates} → subsidies に取込 (`metadata.jgrants_id` で重複防止)
+- `POST /v1/subsidies/suggest` {plan_id, keywords?} → `suggest-advisor`: 計画からキーワード導出 (claude CLI、
+  省略時) → jGrants クロール → dedup → matcher でランク → fit 順に提案。 web 「jGrants から検索/提案」+取込ボタン。
+
 ## 今後 (本 spec 外)
 
-- 補助金データの自動収集 (募集要項のクロール・enrich。 現状は手動登録)
+- 補助金データ収集源の拡張 (現状 jGrants のみ。 ミラサポ plus・自治体個別等の追加)
+- クロール候補の定期取込 (cron で open 補助金を自動更新、 締切切れの自動 close)
 - 公式様式への流し込み (公庫・補助金の指定 Excel/PDF テンプレートへのマッピング。 現状は汎用4シート出力)
 - 差異分析の月次粒度化 (現状は年度窓。 月次トラッキングは未対応)
