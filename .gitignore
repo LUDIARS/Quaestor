@@ -8,6 +8,8 @@ build/
 .turbo/
 *.tsbuildinfo
 
+# vite.config.ts はドメイン名を含むためローカル管理 (vite.config.example.ts を参照)
+web/vite.config.ts
 # vite.config の TS コンパイル副産物 (project references で出る)
 web/vite.config.d.ts
 web/vite.config.js
