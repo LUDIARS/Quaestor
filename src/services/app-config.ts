@@ -17,6 +17,10 @@ export interface AppConfig {
     port: number;
     logLevel: string;
   };
+  web: {
+    /** Vite dev server の allowedHosts (外部ホスト)。localhost / 127.0.0.1 は常に許可。 */
+    allowedHosts: string[];
+  };
   storage: {
     dbPath: string;
     receiptsRoot: string;
@@ -58,6 +62,7 @@ export interface AppConfig {
 
 const DEFAULTS: AppConfig = {
   server:  { host: "127.0.0.1", port: 17400, logLevel: "info" },
+  web: { allowedHosts: [] },
   storage: { dbPath: "app_data/quaestor.db", receiptsRoot: "app_data/receipts" },
   ocrWorker: { enabled: true, intervalMs: 30_000 },
   ocrSidecar: {
@@ -116,6 +121,9 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
         planId:  strOrNull(env("QUAESTOR_NOTIFY_SUBSIDY_PLAN"), fromFile?.notifications?.subsidies?.planId),
       },
     },
+    web: {
+      allowedHosts: arr(fromFile?.web?.allowedHosts, DEFAULTS.web.allowedHosts),
+    },
   };
   return c;
 }
@@ -139,6 +147,7 @@ type PartialConfig = {
   notifications?: Partial<Omit<AppConfig["notifications"], "subsidies">> & {
     subsidies?: Partial<AppConfig["notifications"]["subsidies"]>;
   };
+  web?: Partial<AppConfig["web"]>;
 };
 
 function readConfigFile(path: string): PartialConfig | null {
@@ -175,4 +184,9 @@ function num(envVal: string | undefined, fileVal: number | undefined | null, def
 function flag(envVal: string | undefined, fileVal: boolean | undefined | null, def: boolean): boolean {
   if (envVal !== undefined) return envVal !== "0" && envVal.toLowerCase() !== "false";
   return fileVal ?? def;
+}
+
+function arr(fileVal: string[] | undefined | null, def: string[]): string[] {
+  if (Array.isArray(fileVal)) return fileVal.filter((v): v is string => typeof v === "string");
+  return def;
 }
