@@ -307,6 +307,30 @@ const STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_plan_reviews ON business_plan_reviews(plan_id, created_at)`,
+
+  // subsidies — 補助金・助成金・制度融資の情報管理 (手動登録 + 計画への要件マッチング元データ)
+  `CREATE TABLE IF NOT EXISTS subsidies (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    agency       TEXT,                                                  -- 実施機関 (例: 中小企業庁)
+    kind         TEXT NOT NULL DEFAULT 'subsidy'
+                 CHECK (kind IN ('subsidy','grant','loan','other')),    -- 補助金/助成金/融資/その他
+    url          TEXT,
+    summary      TEXT,                                                  -- 概要
+    target       TEXT,                                                  -- 対象者 (例: 創業5年以内の小規模事業者)
+    requirements TEXT,                                                  -- 要件 (改行区切りテキスト)
+    max_amount   INTEGER,                                               -- 上限額 (円)
+    subsidy_rate REAL,                                                  -- 補助率 (0..1)
+    deadline     TEXT,                                                  -- 締切 ISO yyyy-mm-dd
+    status       TEXT NOT NULL DEFAULT 'open'
+                 CHECK (status IN ('open','upcoming','closed')),
+    notes        TEXT,
+    metadata     TEXT,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_subsidies_status ON subsidies(status, deadline)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -324,7 +348,7 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 6");
+  db.pragma("user_version = 7");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */
