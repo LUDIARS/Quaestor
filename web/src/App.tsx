@@ -13,6 +13,7 @@ import { Portfolio } from "./pages/Portfolio.js";
 import { StatementProfiles } from "./pages/StatementProfiles.js";
 import { BusinessPlan } from "./pages/BusinessPlan.js";
 import { Subsidies } from "./pages/Subsidies.js";
+import { Settings } from "./pages/Settings.js";
 
 type Page =
   | "dashboard"
@@ -28,7 +29,8 @@ type Page =
   | "invoices"
   | "invest"
   | "portfolio"
-  | "export";
+  | "export"
+  | "settings";
 
 const PAGES: { key: Page; label: string }[] = [
   { key: "dashboard", label: "dashboard" },
@@ -45,6 +47,7 @@ const PAGES: { key: Page; label: string }[] = [
   { key: "invest", label: "投資/優待" },
   { key: "portfolio", label: "積立/資産" },
   { key: "export", label: "export" },
+  { key: "settings", label: "設定" },
 ];
 
 export function App() {
@@ -75,6 +78,7 @@ export function App() {
       {page === "invest" && <Invest />}
       {page === "portfolio" && <Portfolio />}
       {page === "export" && <ExportPage />}
+      {page === "settings" && <Settings />}
     </div>
   );
 }

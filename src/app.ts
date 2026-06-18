@@ -66,6 +66,7 @@ import { suggestSubsidies } from "./services/subsidy-advisor.js";
 import { ClaudeAllocationAdvisor, type AllocationAdvisor } from "./services/allocation-advisor.js";
 import { AllocationAdviceStore } from "./services/allocation-advice-store.js";
 import { detectClaudeCli as detectCli } from "./services/claude-cli.js";
+import { configRouter } from "./api/config.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -234,6 +235,7 @@ export function buildApp(deps: AppDeps): Hono {
     adviceStore: new AllocationAdviceStore(deps.allocationAdvicePath ?? "app_data/allocation-advice.json"),
   }));
   app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
+  app.route("/v1/config", configRouter());
 
   return app;
 }
