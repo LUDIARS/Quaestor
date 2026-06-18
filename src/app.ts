@@ -57,6 +57,7 @@ import { ClaudeCliPlanReviewer, detectClaudeCli } from "./services/plan-reviewer
 import { SubsidiesRepo } from "./db/subsidies-repo.js";
 import { subsidiesRouter } from "./api/subsidies.js";
 import { resolveSubsidyMatcher, type SubsidyMatcher } from "./services/subsidy-matcher.js";
+import { JGrantsCrawler, type SubsidyCrawler } from "./services/subsidy-crawler.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -76,6 +77,8 @@ export interface AppDeps {
   planReviewer?: PlanReviewer | "auto" | "disabled";
   /** 補助金マッチャ。 省略時は claude CLI があれば有効、 無ければ undefined */
   subsidyMatcher?: SubsidyMatcher | "auto" | "disabled";
+  /** 補助金クローラ。 省略時は jGrants (鍵不要)。 "disabled" で無効化 */
+  subsidyCrawler?: SubsidyCrawler | "auto" | "disabled";
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
   gaRoot?: string;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
@@ -131,6 +134,7 @@ export function buildApp(deps: AppDeps): Hono {
   const dividendClient = resolveDividendClient(deps.dividendClient);
   const planReviewer = resolvePlanReviewer(deps.planReviewer);
   const subsidyMatcher = resolveSubsidyMatcher(deps.subsidyMatcher);
+  const subsidyCrawler = resolveSubsidyCrawler(deps.subsidyCrawler);
   const advisor = new InvestAdvisor({
     db: deps.db,
     securities,
@@ -184,7 +188,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
   app.route("/v1/statement-profiles", statementProfilesRouter({ repo: statementProfiles }));
   app.route("/v1/business-plans", businessPlansRouter({ repo: businessPlans, fs, db: deps.db, reviewer: planReviewer }));
-  app.route("/v1/subsidies", subsidiesRouter({ repo: subsidies, plans: businessPlans, matcher: subsidyMatcher }));
+  app.route("/v1/subsidies", subsidiesRouter({ repo: subsidies, plans: businessPlans, matcher: subsidyMatcher, crawler: subsidyCrawler }));
   app.route("/v1/portfolio", portfolioRouter({
     service: portfolio,
     holdings,
@@ -239,6 +243,13 @@ function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): Stock
   } catch {
     return undefined;
   }
+}
+
+function resolveSubsidyCrawler(opt: SubsidyCrawler | "auto" | "disabled" | undefined): SubsidyCrawler | undefined {
+  if (opt === "disabled") return undefined;
+  if (opt && typeof opt === "object") return opt;
+  // jGrants は鍵不要。 既定で有効化する
+  try { return new JGrantsCrawler(); } catch { return undefined; }
 }
 
 function resolveDividendClient(opt: DividendClient | "auto" | "disabled" | undefined): DividendClient | undefined {
