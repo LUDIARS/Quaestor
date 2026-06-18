@@ -29,7 +29,7 @@ export interface PlanReviewer {
   review(input: PlanReviewInput): Promise<PlanReviewResult>;
 }
 
-const SYSTEM_PROMPT = `あなたは日本の創業融資・補助金審査に精通した中小企業診断士。
+export const SYSTEM_PROMPT = `あなたは日本の創業融資・補助金審査に精通した中小企業診断士。
 与えられた事業計画 (記述セクション + 数字サマリ) を審査側の視点でレビューする。
 
 観点:
@@ -93,13 +93,7 @@ export class ClaudePlanReviewer implements PlanReviewer {
   }
 
   async review(input: PlanReviewInput): Promise<PlanReviewResult> {
-    const sectionsText = input.sections
-      .map((s) => `## ${s.title}\n${s.body.trim() || "(未記入)"}`)
-      .join("\n\n");
-    const userText =
-      `テンプレート: ${input.templateName} / 目的: ${input.purpose}\n\n` +
-      `# 記述\n${sectionsText}\n\n# 数字サマリ\n${input.financialSummary}\n\n` +
-      `report_review ツールでレビュー結果を返してください。`;
+    const userText = `${buildReviewUserText(input)}\n\nreport_review ツールでレビュー結果を返してください。`;
 
     const res = await this.client.messages.create({
       model: this.model,
@@ -114,6 +108,17 @@ export class ClaudePlanReviewer implements PlanReviewer {
     if (!tu) throw new Error("no tool_use in response");
     return normalizeReview(tu.input as Record<string, unknown>);
   }
+}
+
+/** 記述 + 数字サマリを user メッセージ本文に整形 (SDK / CLI 共通) */
+export function buildReviewUserText(input: PlanReviewInput): string {
+  const sectionsText = input.sections
+    .map((s) => `## ${s.title}\n${s.body.trim() || "(未記入)"}`)
+    .join("\n\n");
+  return (
+    `テンプレート: ${input.templateName} / 目的: ${input.purpose}\n\n` +
+    `# 記述\n${sectionsText}\n\n# 数字サマリ\n${input.financialSummary}`
+  );
 }
 
 /** LLM 出力を型に正規化 */

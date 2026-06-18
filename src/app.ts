@@ -45,6 +45,7 @@ import { investRouter } from "./api/invest.js";
 import { statementProfilesRouter } from "./api/statement-profiles.js";
 import { businessPlansRouter } from "./api/business-plans.js";
 import { ClaudePlanReviewer, type PlanReviewer } from "./services/plan-reviewer.js";
+import { ClaudeCliPlanReviewer, detectClaudeCli } from "./services/plan-reviewer-cli.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -199,10 +200,13 @@ function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): Stock
 function resolvePlanReviewer(opt: PlanReviewer | "auto" | "disabled" | undefined): PlanReviewer | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  if (!process.env.ANTHROPIC_API_KEY) return undefined;
-  try {
-    return new ClaudePlanReviewer();
-  } catch {
-    return undefined;
+  // 1) API key があれば SDK 経路 (高速)
+  if (process.env.ANTHROPIC_API_KEY) {
+    try { return new ClaudePlanReviewer(); } catch { /* fall through */ }
   }
+  // 2) API key 無しでも claude CLI (サブスク) があれば CLI 経路で定性レビュー可能
+  if (detectClaudeCli()) {
+    try { return new ClaudeCliPlanReviewer(); } catch { return undefined; }
+  }
+  return undefined;
 }
