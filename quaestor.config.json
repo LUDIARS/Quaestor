@@ -24,5 +24,13 @@
   },
   "training": {
     "gaRoot": "app_data/training/ga"
+  },
+  "notifications": {
+    "$comment": "アドバイザーのアドバイスを Discord webhook に定期通知。 webhook URL は `npm run secret -- set QUAESTOR_DISCORD_WEBHOOK_URL <url>` で登録。 subsidies は crawl+LLM が走るため既定 off (planId 指定で有効化)。",
+    "enabled": false,
+    "intervalMs": 21600000,
+    "invest": true,
+    "portfolio": true,
+    "subsidies": { "enabled": false, "planId": null }
   }
 }

@@ -21,6 +21,7 @@ import { OcrWorker } from "./services/ocr-worker.js";
 import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
 import { loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
 import { SecretStore } from "./services/secret-store.js";
+import { NotificationWorker } from "./services/notification-worker.js";
 
 const config = loadAppConfig();
 
@@ -81,17 +82,36 @@ if (config.ocrSidecar.manage && !config.ocrSidecar.externalUrl) {
   ocrSidecar.start();
 }
 
+// 定期 Discord 通知ワーカー: notifications.enabled かつ webhook URL がある時のみ起動
+let notificationWorker: NotificationWorker | null = null;
+
 serve({ fetch: app.fetch, hostname: config.server.host, port: config.server.port }, (info) => {
   log.info(
     { host: config.server.host, port: info.port, dbPath: DB_PATH, ocrWorker: ocrWorker !== null },
     "Quaestor listening",
   );
+  const hasWebhook = !!(process.env.QUAESTOR_DISCORD_WEBHOOK_URL ?? process.env.DISCORD_WEBHOOK_URL);
+  if (config.notifications.enabled && hasWebhook) {
+    notificationWorker = new NotificationWorker({
+      baseUrl: `http://${config.server.host}:${info.port}`,
+      intervalMs: config.notifications.intervalMs,
+      invest: config.notifications.invest,
+      portfolio: config.notifications.portfolio,
+      subsidies: config.notifications.subsidies,
+      logger: log,
+    });
+    notificationWorker.start();
+    log.info({ intervalMs: config.notifications.intervalMs }, "notification worker started");
+  } else if (config.notifications.enabled && !hasWebhook) {
+    log.warn("notifications.enabled だが QUAESTOR_DISCORD_WEBHOOK_URL 未設定のため通知ワーカーは起動しません");
+  }
 });
 
 const shutdown = (signal: string) => {
   log.info({ signal }, "shutting down");
   ocrWorker?.stop();
   ocrSidecar?.stop();
+  notificationWorker?.stop();
   db.close();
   process.exit(0);
 };

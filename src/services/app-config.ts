@@ -46,6 +46,14 @@ export interface AppConfig {
   training: {
     gaRoot: string;
   };
+  /** 定期 Discord 通知 (アドバイザーのアドバイス push)。 webhook URL はシークレット側 */
+  notifications: {
+    enabled: boolean;        // 定期 worker の master switch (既定 false)
+    intervalMs: number;      // 既定 6 時間
+    invest: boolean;         // 投資/優待アドバイス
+    portfolio: boolean;      // 配当アドバイス
+    subsidies: { enabled: boolean; planId: string | null }; // 補助金は crawl+LLM が走るので既定 off
+  };
 }
 
 const DEFAULTS: AppConfig = {
@@ -57,6 +65,13 @@ const DEFAULTS: AppConfig = {
     lang: "japan", python: null, venvPython: null, externalUrl: null,
   },
   training: { gaRoot: "app_data/training/ga" },
+  notifications: {
+    enabled: false,
+    intervalMs: 21_600_000, // 6h
+    invest: true,
+    portfolio: true,
+    subsidies: { enabled: false, planId: null },
+  },
 };
 
 /**
@@ -91,6 +106,16 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
     training: {
       gaRoot: str(undefined, fromFile?.training?.gaRoot, DEFAULTS.training.gaRoot),
     },
+    notifications: {
+      enabled:    flag(env("QUAESTOR_NOTIFY"),             fromFile?.notifications?.enabled,    DEFAULTS.notifications.enabled),
+      intervalMs: num(env("QUAESTOR_NOTIFY_INTERVAL_MS"),  fromFile?.notifications?.intervalMs, DEFAULTS.notifications.intervalMs),
+      invest:     flag(undefined,                          fromFile?.notifications?.invest,     DEFAULTS.notifications.invest),
+      portfolio:  flag(undefined,                          fromFile?.notifications?.portfolio,  DEFAULTS.notifications.portfolio),
+      subsidies: {
+        enabled: flag(undefined, fromFile?.notifications?.subsidies?.enabled, DEFAULTS.notifications.subsidies.enabled),
+        planId:  strOrNull(env("QUAESTOR_NOTIFY_SUBSIDY_PLAN"), fromFile?.notifications?.subsidies?.planId),
+      },
+    },
   };
   return c;
 }
@@ -111,6 +136,9 @@ type PartialConfig = {
   ocrWorker?: Partial<AppConfig["ocrWorker"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
+  notifications?: Partial<Omit<AppConfig["notifications"], "subsidies">> & {
+    subsidies?: Partial<AppConfig["notifications"]["subsidies"]>;
+  };
 };
 
 function readConfigFile(path: string): PartialConfig | null {
