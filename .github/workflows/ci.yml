@@ -54,6 +54,12 @@ jobs:
         working-directory: web
         run: npm ci
 
+      # vite.config.ts はドメイン情報を含むため gitignore 対象 (#21)。
+      # CI は sanitized な example をコピーして build に使う (react plugin / proxy 定義のため)。
+      - name: Provision vite config
+        working-directory: web
+        run: cp vite.config.example.ts vite.config.ts
+
       - name: Build
         working-directory: web
         run: npm run build

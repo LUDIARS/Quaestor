@@ -11,7 +11,6 @@
  * Windows では claude CLI に CLAUDE_CODE_GIT_BASH_PATH が要る。
  */
 
-import { spawn } from "node:child_process";
 import {
   type PlanReviewer,
   type PlanReviewInput,
@@ -20,6 +19,10 @@ import {
   buildReviewUserText,
   normalizeReview,
 } from "./plan-reviewer.js";
+import { spawnClaude, extractEnvelopeResult, extractJsonObject } from "./claude-cli.js";
+
+// 既存テスト互換のため claude-cli の抽出ヘルパーを再 export
+export { extractEnvelopeResult, extractJsonObject } from "./claude-cli.js";
 
 export interface ClaudeCliReviewerOptions {
   /** CLI 実行名。 既定 "claude" */
@@ -68,94 +71,6 @@ export function buildCliPrompt(input: PlanReviewInput): string {
     `}\n` +
     `\`\`\``
   );
-}
-
-/**
- * `claude -p --output-format json` の stdout から result テキストを取り出す。
- * バージョンにより形が変わる: (a) 単一 `{type:"result", result}` オブジェクト、
- * (b) イベント配列 `[{type:"system"...}, ..., {type:"result", result}]`、
- * (c) NDJSON (1行1イベント)。 いずれも result 要素の `.result` を返す。
- */
-export function extractEnvelopeResult(stdout: string): string {
-  const trimmed = stdout.trim();
-  const fromEvent = (e: unknown): string | null => {
-    if (e && typeof e === "object" && (e as { type?: string }).type === "result") {
-      const r = (e as { result?: unknown }).result;
-      if (typeof r === "string") return r;
-    }
-    return null;
-  };
-  // (a)/(b): 全体が JSON
-  try {
-    const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) {
-      for (let i = parsed.length - 1; i >= 0; i--) {
-        const r = fromEvent(parsed[i]);
-        if (r !== null) return r;
-      }
-    } else {
-      const r = fromEvent(parsed);
-      if (r !== null) return r;
-      if (typeof (parsed as { result?: unknown }).result === "string") {
-        return (parsed as { result: string }).result;
-      }
-    }
-  } catch {
-    // (c) NDJSON: 行ごとに parse して result イベントを探す
-    const lines = trimmed.split(/\r?\n/).filter(Boolean);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const r = fromEvent(JSON.parse(lines[i]!));
-        if (r !== null) return r;
-      } catch { /* skip non-JSON line */ }
-    }
-  }
-  // JSON でなければ生 stdout (--output-format text fallback)
-  return trimmed;
-}
-
-/** テキストから最初の JSON オブジェクトを抽出 (```フェンス or 生テキストの { .. } ) */
-export function extractJsonObject(text: string): Record<string, unknown> | null {
-  // ```json ... ``` フェンス優先
-  const fence = /```(?:json)?\s*([\s\S]*?)```/.exec(text);
-  const candidates: string[] = [];
-  if (fence?.[1]) candidates.push(fence[1].trim());
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first !== -1 && last > first) candidates.push(text.slice(first, last + 1));
-  for (const c of candidates) {
-    try { return JSON.parse(c) as Record<string, unknown>; } catch { /* try next */ }
-  }
-  return null;
-}
-
-function spawnClaude(prompt: string, opts: ClaudeCliReviewerOptions): Promise<string> {
-  return new Promise((resolveOut, reject) => {
-    const env = { ...process.env };
-    const bashPath = opts.bashPath ?? process.env.CLAUDE_CODE_GIT_BASH_PATH;
-    if (bashPath) env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
-
-    const child = spawn(opts.cliPath ?? "claude", ["-p", "--output-format", "json"], {
-      env,
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: true,
-    });
-
-    let out = "";
-    let errOut = "";
-    child.stdout?.on("data", (d) => { out += d.toString(); });
-    child.stderr?.on("data", (d) => { errOut += d.toString(); });
-    child.once("error", (e) => reject(e));
-    child.on("close", (code) => {
-      if (code === 0 || out.trim()) resolveOut(out);
-      else reject(new Error(`claude CLI exited ${code}: ${errOut.slice(0, 300)}`));
-    });
-
-    child.stdin.end(prompt);
-
-    const t = setTimeout(() => { try { child.kill("SIGTERM"); } catch { /* noop */ } }, opts.timeoutMs ?? 120_000);
-    t.unref();
-  });
 }
 
 /** claude CLI が使えそうか (明示 disable のみ判定、 実態は spawn error で判明) */

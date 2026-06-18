@@ -139,8 +139,18 @@ DB 集計は `computePlanVariance` (service)。 未到来の窓は `elapsed=fals
 - 定性レビューで Claude に送るのは事業計画の記述と集計数字のみ。 口座番号・個人特定情報は送らない
 - レビューは POST 操作でのみ外部 (Claude) アクセス。 GET は DB キャッシュ (保存済 review) を返す
 
+## 補助金情報の管理 + 要件マッチング (`subsidies`)
+
+補助金・助成金・制度融資を手動登録し (`subsidies` テーブル、 名称/実施機関/対象者/要件/上限額/補助率/締切/status)、
+事業計画との要件マッチングにかける。 API `/v1/subsidies` (CRUD) + `POST /v1/subsidies/match` (body `{plan_id}`)。
+
+マッチングは `subsidy-matcher.ts` (`ClaudeSubsidyMatcher`、 claude-cli.ts 経由でサブスク auth、 API key 不要)。
+計画の記述+数字サマリ (`buildPlanSummaryText`) と open な補助金リストを Claude に渡し、 各補助金の
+fit (high/medium/low) と根拠を JSON 配列で返す。 候補 id 集合に無いものは捨て、 fit 高い順に並べる。
+web 「補助金」タブで CRUD + 計画選択 → マッチング診断。
+
 ## 今後 (本 spec 外)
 
-- 補助金情報の管理 (募集中の補助金 DB・締切・要件マッチング) — 次フェーズ
+- 補助金データの自動収集 (募集要項のクロール・enrich。 現状は手動登録)
 - 公式様式への流し込み (公庫・補助金の指定 Excel/PDF テンプレートへのマッピング。 現状は汎用4シート出力)
 - 差異分析の月次粒度化 (現状は年度窓。 月次トラッキングは未対応)
