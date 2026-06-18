@@ -19,6 +19,11 @@ import { StockQuotesRepo } from "./db/stock-quotes-repo.js";
 import { ShareholderPerksRepo } from "./db/shareholder-perks-repo.js";
 import { StatementProfilesRepo } from "./db/statement-profiles-repo.js";
 import { BusinessPlansRepo } from "./db/business-plans-repo.js";
+import { HoldingsRepo } from "./db/holdings-repo.js";
+import { ContributionsRepo } from "./db/contributions-repo.js";
+import { HoldingValuationsRepo } from "./db/holding-valuations-repo.js";
+import { HoldingDividendsRepo } from "./db/holding-dividends-repo.js";
+import { DividendCandidatesRepo } from "./db/dividend-candidates-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import { TrainingDataset } from "./services/training-dataset.js";
 import { OpusDiffEvaluator, type DiffEvaluator } from "./services/detection-diff-evaluator.js";
@@ -31,6 +36,8 @@ import { ClaudeSecurityMapper, type SecurityMapper } from "./services/security-m
 import { ClaudePerkClient, type PerkClient } from "./services/perk-client.js";
 import { StooqStockClient, type StockClient } from "./services/stock-client.js";
 import { InvestAdvisor } from "./services/invest-advisor.js";
+import { ClaudeDividendClient, type DividendClient } from "./services/dividend-client.js";
+import { PortfolioService } from "./services/portfolio-service.js";
 import { transactionsRouter } from "./api/transactions.js";
 import { importsRouter } from "./api/imports.js";
 import { accountCodesRouter } from "./api/account-codes.js";
@@ -44,6 +51,7 @@ import { financialStatementsRouter } from "./api/financial-statements.js";
 import { investRouter } from "./api/invest.js";
 import { statementProfilesRouter } from "./api/statement-profiles.js";
 import { businessPlansRouter } from "./api/business-plans.js";
+import { portfolioRouter } from "./api/portfolio.js";
 import { ClaudePlanReviewer, type PlanReviewer } from "./services/plan-reviewer.js";
 import { ClaudeCliPlanReviewer, detectClaudeCli } from "./services/plan-reviewer-cli.js";
 import { SubsidiesRepo } from "./db/subsidies-repo.js";
@@ -62,6 +70,8 @@ export interface AppDeps {
   perkClient?: PerkClient | "auto" | "disabled";
   /** 株価 client。 省略時は Stooq。 "disabled" で無効化 */
   stockClient?: StockClient | "auto" | "disabled";
+  /** 配当データ client。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
+  dividendClient?: DividendClient | "auto" | "disabled";
   /** 事業計画の定性レビューア。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
   planReviewer?: PlanReviewer | "auto" | "disabled";
   /** 補助金マッチャ。 省略時は claude CLI があれば有効、 無ければ undefined */
@@ -89,6 +99,11 @@ export function buildApp(deps: AppDeps): Hono {
   const statementProfiles = new StatementProfilesRepo(deps.db);
   const businessPlans = new BusinessPlansRepo(deps.db);
   const subsidies = new SubsidiesRepo(deps.db);
+  const holdings = new HoldingsRepo(deps.db);
+  const contributions = new ContributionsRepo(deps.db);
+  const holdingValuations = new HoldingValuationsRepo(deps.db);
+  const holdingDividends = new HoldingDividendsRepo(deps.db);
+  const dividendCandidates = new DividendCandidatesRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
   const trainingDataset = new TrainingDataset("app_data/training/receipts", storage);
   // 差分の Opus 類推器。ANTHROPIC_API_KEY が無ければ undefined (差分は保存するが類推はしない)
@@ -113,6 +128,7 @@ export function buildApp(deps: AppDeps): Hono {
   const securityMapper = resolveMapper(deps.securityMapper);
   const perkClient = resolvePerkClient(deps.perkClient);
   const stockClient = resolveStock(deps.stockClient);
+  const dividendClient = resolveDividendClient(deps.dividendClient);
   const planReviewer = resolvePlanReviewer(deps.planReviewer);
   const subsidyMatcher = resolveSubsidyMatcher(deps.subsidyMatcher);
   const advisor = new InvestAdvisor({
@@ -125,6 +141,18 @@ export function buildApp(deps: AppDeps): Hono {
     stock: stockClient,
     perkClient,
   });
+  // 積立ポートフォリオ / 配当アドバイザ (株価=Stooq 共有、 配当データ=Claude)
+  const portfolio = new PortfolioService({
+    holdings,
+    contributions,
+    valuations: holdingValuations,
+    dividends: holdingDividends,
+    dividendCandidates,
+    securities,
+    quotes: stockQuotes,
+    stock: stockClient,
+    dividendClient,
+  });
 
   const app = new Hono();
 
@@ -134,6 +162,7 @@ export function buildApp(deps: AppDeps): Hono {
     version: "1.0.0",
     ocr_enabled: ocrEnabled,
     invest_enabled: { mapper: !!securityMapper, stock: !!stockClient, perks: !!perkClient },
+    portfolio_enabled: { stock: !!stockClient, dividends: !!dividendClient },
   }));
 
   // web へ公開する非シークレット設定 (env 非依存化: web は import.meta.env を見ない)
@@ -156,6 +185,13 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/statement-profiles", statementProfilesRouter({ repo: statementProfiles }));
   app.route("/v1/business-plans", businessPlansRouter({ repo: businessPlans, fs, db: deps.db, reviewer: planReviewer }));
   app.route("/v1/subsidies", subsidiesRouter({ repo: subsidies, plans: businessPlans, matcher: subsidyMatcher }));
+  app.route("/v1/portfolio", portfolioRouter({
+    service: portfolio,
+    holdings,
+    contributions,
+    valuations: holdingValuations,
+    dividends: holdingDividends,
+  }));
 
   return app;
 }
@@ -200,6 +236,17 @@ function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): Stock
   // 株価は鍵不要。 既定で Stooq を有効化する
   try {
     return new StooqStockClient();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveDividendClient(opt: DividendClient | "auto" | "disabled" | undefined): DividendClient | undefined {
+  if (opt === "disabled") return undefined;
+  if (opt && typeof opt === "object") return opt;
+  if (!process.env.ANTHROPIC_API_KEY) return undefined;
+  try {
+    return new ClaudeDividendClient();
   } catch {
     return undefined;
   }
