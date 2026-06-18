@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NotifyDiscordButton } from "../components/NotifyDiscordButton.js";
+import { AllocationPanel } from "../components/AllocationPanel.js";
 
 /**
  * 積立ポートフォリオ / 配当アドバイザ。
@@ -162,6 +163,8 @@ export function Portfolio() {
         投信・個別株/ETF・保険型の積立を管理し、 利回り (XIRR) / 計画 vs 実績 / 将来見通し / 配当株を提示します。
         株価/配当は公開情報のみ (インサイダー情報は扱いません)。
       </p>
+
+      <AllocationPanel />
 
       {/* ポートフォリオ合計 */}
       {totals && (
