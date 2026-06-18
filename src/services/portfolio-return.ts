@@ -55,7 +55,9 @@ export function computeHoldingReturn(input: ReturnInput): ReturnResult {
   const dividendsReceived = sum(input.dividends.filter((d) => !d.reinvested).map((d) => d.amount));
   const mv = input.marketValue;
 
-  const unrealized = mv != null ? mv - invested : null;
+  // 取得原価が未入力 (invested<=0) の銘柄は「評価額=全額が利益」と誤計上しないよう
+  // 含み損益を算出しない (null)。 取得原価を入れると損益が出る。
+  const unrealized = mv != null && invested > 0 ? mv - invested : null;
   const totalReturn = unrealized != null ? unrealized + dividendsReceived : null;
   const simpleReturnPct =
     totalReturn != null && invested > 0 ? round2((totalReturn / invested) * 100) : null;
