@@ -241,6 +241,72 @@ const STATEMENTS: string[] = [
     fetched_at       INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL
   )`,
+
+  // ── 事業計画レビュー (spec/feature/business-plan.md) ──
+
+  // business_plans — 事業計画インスタンス。 template から sections/figures を seed する
+  `CREATE TABLE IF NOT EXISTS business_plans (
+    id            TEXT PRIMARY KEY,                                   -- uuid
+    name          TEXT NOT NULL,
+    template      TEXT NOT NULL,                                      -- jfc_startup / jizokuka / monodukuri / freeform
+    purpose       TEXT NOT NULL DEFAULT 'funding'
+                  CHECK (purpose IN ('funding','subsidy','internal')),
+    status        TEXT NOT NULL DEFAULT 'draft'
+                  CHECK (status IN ('draft','review','final')),
+    fiscal_start  TEXT,                                               -- 開始年月 ISO yyyy-mm
+    horizon_years INTEGER NOT NULL DEFAULT 3,
+    notes         TEXT,
+    metadata      TEXT,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_plans_status ON business_plans(status, updated_at)`,
+
+  // business_plan_sections — 記述セクション本文 (template.sections に対応)
+  `CREATE TABLE IF NOT EXISTS business_plan_sections (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id       TEXT NOT NULL REFERENCES business_plans(id) ON DELETE CASCADE,
+    key           TEXT NOT NULL,                                      -- template-defined section key
+    body          TEXT NOT NULL DEFAULT '',
+    display_order INTEGER NOT NULL DEFAULT 0,
+    updated_at    INTEGER NOT NULL,
+    UNIQUE(plan_id, key)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_plan_sections ON business_plan_sections(plan_id, display_order)`,
+
+  // business_plan_figures — 数字 (template.figures に対応)。 category 語彙は quant.ts が解釈
+  `CREATE TABLE IF NOT EXISTS business_plan_figures (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id       TEXT NOT NULL REFERENCES business_plans(id) ON DELETE CASCADE,
+    category      TEXT NOT NULL,                                      -- sales/cogs/sga/funding/use_of_funds/...
+    label         TEXT NOT NULL,
+    period        TEXT NOT NULL,                                      -- base / Y1.. / M1..
+    amount        INTEGER,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    source        TEXT NOT NULL DEFAULT 'manual'
+                  CHECK (source IN ('manual','from_actuals')),
+    metadata      TEXT,                                               -- JSON: { tag?: 'own_funds'|'subsidy_grant' }
+    UNIQUE(plan_id, category, label, period)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_plan_figures ON business_plan_figures(plan_id, category, display_order)`,
+
+  // business_plan_reviews — レビュー実行結果 (定量 / 定性 / 結合)
+  `CREATE TABLE IF NOT EXISTS business_plan_reviews (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id       TEXT NOT NULL REFERENCES business_plans(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL CHECK (kind IN ('quantitative','qualitative','combined')),
+    score         INTEGER,                                            -- 0..100
+    summary       TEXT,
+    findings      TEXT NOT NULL DEFAULT '[]',                         -- JSON: Finding[]
+    metrics       TEXT,                                               -- JSON: QuantMetrics snapshot
+    model         TEXT,                                               -- 定性レビューの model
+    created_at    INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_plan_reviews ON business_plan_reviews(plan_id, created_at)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -258,7 +324,7 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 5");
+  db.pragma("user_version = 6");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */
