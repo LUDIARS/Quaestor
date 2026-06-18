@@ -86,7 +86,7 @@ describe("computeHoldingReturn", () => {
     expect(r.total_return).toBe(25000); // 20000 含み益 + 5000 配当
   });
 
-  it("plan-variance from monthly_contribution schedule", () => {
+  it("plan-variance from monthly_contribution schedule (start month inclusive)", () => {
     const r = computeHoldingReturn({
       contributions: [{ date: "2024-01-01", amount: 100000, kind: "actual" }], // 1 回しか積めていない
       dividends: [],
@@ -96,9 +96,26 @@ describe("computeHoldingReturn", () => {
       monthlyContribution: 100000,
       startedAt: "2024-01-01",
     });
-    expect(r.planned_to_date).toBe(200000); // 2 ヶ月分の計画
+    expect(r.planned_to_date).toBe(300000); // 1/1・2/1・3/1 の 3 回が計画 (起算月込み)
     expect(r.actual_to_date).toBe(100000);
-    expect(r.variance).toBe(-100000); // 計画より 10 万円 不足
+    expect(r.variance).toBe(-200000); // 計画より 20 万円 不足
+  });
+
+  it("on-plan monthly 積立 shows zero variance (start month counted)", () => {
+    // 2025-12 開始・月3万を毎月実行 → 2026-06-18 時点で計画通り (差異 0)
+    const months = ["2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06"];
+    const r = computeHoldingReturn({
+      contributions: months.map((m) => ({ date: `${m}-01`, amount: 30000, kind: "actual" as const })),
+      dividends: [],
+      marketValue: null,
+      valuationAsOf: null,
+      asOf: "2026-06-18",
+      monthlyContribution: 30000,
+      startedAt: "2025-12-01",
+    });
+    expect(r.actual_to_date).toBe(210000);
+    expect(r.planned_to_date).toBe(210000);
+    expect(r.variance).toBe(0);
   });
 
   it("plan-variance prefers explicit planned rows over schedule", () => {

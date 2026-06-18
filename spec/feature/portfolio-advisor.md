@@ -47,7 +47,8 @@ invest-advisor とは株価インフラ (stooq `StockClient` / `securities` / `s
 
 ### 計画 vs 実績 (plan-variance)
 
-- `planned_to_date` = `planned` 拠出行の合計 (基準日まで)。 行が無ければ `monthly_contribution × 経過月数` で合成
+- `planned_to_date` = `planned` 拠出行の合計 (基準日まで)。 行が無ければ `monthly_contribution × (経過月数 + 1)` で合成
+  (起算月に第1回を拠出する月次積立として数えるため開始月を含む。 例: 12/1 開始を 6/18 に見ると 7 回)
 - `actual_to_date` = `actual` 拠出の合計 (基準日まで)
 - `variance` = actual − planned (マイナス = 計画より積めていない)
 
