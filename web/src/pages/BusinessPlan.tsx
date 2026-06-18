@@ -23,6 +23,13 @@ interface PlanDetail {
   sections: SectionRow[]; figures: FigureRow[]; latest_review: ReviewRow | null;
 }
 interface PlanListItem { id: string; name: string; template: string; purpose: string; status: string; updated_at: number }
+interface VarianceRow {
+  period: string; window: { from: string; to: string }; elapsed: boolean;
+  plannedSales: number; actualSales: number; salesVariance: number; salesAchievedPct: number | null;
+  plannedExpenses: number; actualExpenses: number; expenseVariance: number;
+  plannedProfit: number; actualProfit: number;
+}
+interface VarianceRes { available: boolean; rows: VarianceRow[]; reason?: string }
 
 const PURPOSE_LABEL: Record<string, string> = { funding: "融資", subsidy: "補助金", internal: "社内" };
 const STATUS_LABEL: Record<string, string> = { draft: "下書き", review: "レビュー中", final: "確定" };
@@ -194,6 +201,27 @@ function PlanEditor(props: {
       : null,
   );
 
+  const [fiscalStart, setFiscalStart] = useState(plan.fiscal_start ?? "");
+  const [variance, setVariance] = useState<VarianceRes | null>(null);
+
+  async function saveFiscalStart(v: string) {
+    setFiscalStart(v);
+    await fetch(`/v1/business-plans/${plan.id}`, {
+      method: "PATCH", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ fiscal_start: v || null }),
+    });
+  }
+
+  async function loadVariance() {
+    setBusy("variance"); setErr(null);
+    try {
+      const r = await fetch(`/v1/business-plans/${plan.id}/variance`).then((r) => r.json() as Promise<VarianceRes>);
+      setVariance(r);
+      if (!r.available && r.reason) setErr(r.reason);
+    } catch (e: unknown) { setErr(e instanceof Error ? e.message : String(e)); }
+    setBusy(null);
+  }
+
   function sectionTitle(key: string): string {
     return tpl?.sections.find((s) => s.key === key)?.title ?? key;
   }
@@ -265,6 +293,11 @@ function PlanEditor(props: {
         {tpl?.name} ・ {PURPOSE_LABEL[plan.purpose] ?? plan.purpose} ・ {plan.horizon_years}期計画
       </p>
 
+      <label style={{ fontSize: "0.8rem", display: "inline-flex", alignItems: "center", gap: "0.4rem", marginBottom: "0.5rem" }}>
+        開始年月 (差異分析の起点)
+        <input type="month" value={fiscalStart} onChange={(e) => void saveFiscalStart(e.target.value)} />
+      </label>
+
       {err && <p className="error">{err}</p>}
 
       <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", margin: "0.5rem 0 1rem" }}>
@@ -275,10 +308,14 @@ function PlanEditor(props: {
         <button className="btn" onClick={() => void runReview("combined")} disabled={!!busy}>
           {busy === "review:combined" ? "レビュー中…" : "レビュー実行 (定量+定性)"}
         </button>
+        <button className="btn" onClick={() => void loadVariance()} disabled={!!busy}>
+          {busy === "variance" ? "集計中…" : "計画vs実績 差異分析"}
+        </button>
         <button className="btn" onClick={props.onDelete} style={{ marginLeft: "auto", color: "var(--err, #d33)" }}>削除</button>
       </div>
 
       {review && <ReviewPanel review={review} />}
+      {variance?.available && <VariancePanel rows={variance.rows} />}
 
       {/* 数字 */}
       <h3>数字</h3>
@@ -379,6 +416,51 @@ function ReviewPanel({ review }: { review: { score: number; summary: string; fin
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+function VariancePanel({ rows }: { rows: VarianceRow[] }) {
+  const yen = (n: number) => `¥${n.toLocaleString()}`;
+  const vcolor = (v: number) => (v >= 0 ? "var(--ok)" : "var(--err, #d33)");
+  return (
+    <section className="last-capture" style={{ marginBottom: "1rem", padding: "0.75rem 1rem", overflowX: "auto" }}>
+      <h3 style={{ margin: "0 0 0.5rem" }}>計画 vs 実績</h3>
+      <table style={{ fontSize: "0.8rem", borderCollapse: "collapse", minWidth: 520 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+            <th style={{ textAlign: "left", padding: "0.3rem 0.5rem" }}>年度</th>
+            <th style={{ textAlign: "left", padding: "0.3rem 0.5rem" }}>期間</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>計画売上</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>実績売上</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>達成率</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>計画利益</th>
+            <th style={{ textAlign: "right", padding: "0.3rem 0.5rem" }}>実績利益</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.period} style={{ borderBottom: "1px solid var(--border)", opacity: r.elapsed ? 1 : 0.5 }}>
+              <td style={{ padding: "0.3rem 0.5rem" }}>{r.period.slice(1)}期</td>
+              <td style={{ padding: "0.3rem 0.5rem", color: "var(--muted)", whiteSpace: "nowrap" }}>
+                {r.window.from}〜{r.window.to}{!r.elapsed && " (未到来)"}
+              </td>
+              <td style={{ padding: "0.3rem 0.5rem", textAlign: "right" }}>{yen(r.plannedSales)}</td>
+              <td style={{ padding: "0.3rem 0.5rem", textAlign: "right" }}>{r.elapsed ? yen(r.actualSales) : "—"}</td>
+              <td style={{ padding: "0.3rem 0.5rem", textAlign: "right", color: r.salesAchievedPct !== null ? vcolor(r.salesAchievedPct - 100) : "var(--muted)" }}>
+                {r.elapsed && r.salesAchievedPct !== null ? `${r.salesAchievedPct.toFixed(0)}%` : "—"}
+              </td>
+              <td style={{ padding: "0.3rem 0.5rem", textAlign: "right" }}>{yen(r.plannedProfit)}</td>
+              <td style={{ padding: "0.3rem 0.5rem", textAlign: "right", color: r.elapsed ? vcolor(r.actualProfit) : "var(--muted)" }}>
+                {r.elapsed ? yen(r.actualProfit) : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p style={{ color: "var(--muted)", fontSize: "0.72rem", margin: "0.4rem 0 0" }}>
+        売上=請求書(invoices)、 経費=取引の出金(振替除く)。 開始年月からの各年度窓で集計。
+      </p>
     </section>
   );
 }

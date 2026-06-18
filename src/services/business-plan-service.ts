@@ -3,10 +3,12 @@
  * figure 行 → quant 入力変換、 数字サマリ生成、 レビュー実行 (定量/定性/結合)、 実績取り込み。
  */
 
+import type Database from "better-sqlite3";
 import type { BusinessPlansRepo, FigureRow, ReviewKind } from "../db/business-plans-repo.js";
 import type { FinancialStatementsRepo } from "../db/financial-statements-repo.js";
 import { runQuant, type QuantFigure, type QuantMetrics, type Finding } from "../business-plan/quant.js";
 import { getTemplate } from "../business-plan/templates.js";
+import { planWindows, buildVariance, type VarianceResult, type PeriodActuals } from "../business-plan/variance.js";
 import type { PlanReviewer } from "./plan-reviewer.js";
 
 /** DB figure 行を quant 入力に射影 (metadata.tag を展開) */
@@ -179,4 +181,47 @@ export function seedFromActuals(
     repo.upsertFigures(planId, updates.map((u) => ({ ...u, source: "from_actuals" as const })));
   }
   return { year, applied };
+}
+
+/**
+ * 計画 vs 実績の差異分析。 fiscal_start 起点で各年度の窓を作り、 実績
+ * (売上=invoices, 経費=transactions出金) を集計して計画と突合する。
+ */
+export function computePlanVariance(
+  repo: BusinessPlansRepo,
+  db: Database.Database,
+  planId: string,
+  today: string,
+): VarianceResult {
+  const plan = repo.find(planId);
+  if (!plan) throw new Error("plan not found");
+  if (!plan.fiscal_start) {
+    return { available: false, rows: [], reason: "開始年月 (fiscal_start) が未設定です。計画のメタ情報で設定してください。" };
+  }
+
+  const windows = planWindows(plan.fiscal_start, plan.horizon_years);
+  if (windows.length === 0) {
+    return { available: false, rows: [], reason: "fiscal_start の形式が不正です (yyyy-mm)。" };
+  }
+
+  const pnl = runQuant(toQuantFigures(repo.figures(planId))).metrics.pnl;
+
+  const salesStmt = db.prepare(
+    `SELECT COALESCE(SUM(amount), 0) AS s FROM invoices
+     WHERE issued_at >= ? AND issued_at <= ? AND status != 'cancelled'`,
+  );
+  const expenseStmt = db.prepare(
+    `SELECT COALESCE(SUM(amount_out), 0) AS s FROM transactions
+     WHERE date >= ? AND date <= ? AND is_transfer = 0`,
+  );
+
+  const actualsByPeriod: Record<string, PeriodActuals> = {};
+  for (const w of windows) {
+    if (w.from > today) continue; // 未到来の窓は実績ゼロのまま (elapsed=false で表示側が判別)
+    const sales = (salesStmt.get(w.from, w.to) as { s: number }).s;
+    const expenses = (expenseStmt.get(w.from, w.to) as { s: number }).s;
+    actualsByPeriod[w.period] = { sales, expenses };
+  }
+
+  return { available: true, rows: buildVariance(pnl, windows, actualsByPeriod, today) };
 }

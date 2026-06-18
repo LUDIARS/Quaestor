@@ -106,8 +106,16 @@ findings は `{ severity: error|warning|info, area, code, message, suggestion }`
 | `PUT /:id/sections/:key` | 記述セクション本文 upsert |
 | `PUT /:id/figures` | 数字 bulk upsert |
 | `POST /:id/seed-from-actuals` | 実績 (前年 financial_statements) を baseline に取り込み |
+| `GET /:id/variance` | 計画 vs 実績 差異分析 (fiscal_start 起点の年度窓で突合) |
 | `POST /:id/review` | レビュー実行 (`?kind=quantitative\|qualitative\|combined`)、 結果を永続 |
 | `GET /:id/reviews` | レビュー履歴 |
+
+### 計画 vs 実績 差異分析 (`variance.ts`)
+
+`fiscal_start` (yyyy-mm) を起点に各年度を 12ヶ月のカレンダー窓に割り当て、 窓が経過 (or 進行中) なら
+実績と突合する。 実績 = 売上 (`invoices` の amount、 cancelled 除く) / 経費 (`transactions` の amount_out、
+振替除く)。 計画売上・利益との差異と達成率を年度ごとに返す。 純計算は `src/business-plan/variance.ts`、
+DB 集計は `computePlanVariance` (service)。 未到来の窓は `elapsed=false` で表示側が判別。
 
 ## フロントエンド
 
@@ -115,8 +123,9 @@ findings は `{ severity: error|warning|info, area, code, message, suggestion }`
 
 - 計画一覧 + テンプレ選択して新規作成
 - 計画エディタ: 記述セクション (`.foundation-form` textarea) + 数字テーブル (年次 / 資金調達 / 月次資金繰り)
-- 「実績から取り込み」ボタン
+- 「実績から取り込み」ボタン / 開始年月 (fiscal_start) 設定
 - 「レビュー実行」→ 定量メトリクス (損益分岐・資金ショート警告・自己資金比率) + 定性 findings (severity バッジ) + スコア
+- 「計画vs実績 差異分析」→ 年度ごとの計画/実績売上・達成率・利益テーブル
 
 ## 個人データ・セキュリティ
 
@@ -128,4 +137,4 @@ findings は `{ severity: error|warning|info, area, code, message, suggestion }`
 
 - 補助金情報の管理 (募集中の補助金 DB・締切・要件マッチング) — 次フェーズ
 - 書類の PDF/Excel 出力 (公庫様式・補助金様式への流し込み)
-- 計画 vs 実績の差異分析 (月次トラッキング)
+- 差異分析の月次粒度化 (現状は年度窓。 月次トラッキングは未対応)
