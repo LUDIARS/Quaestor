@@ -82,8 +82,13 @@ findings は `{ severity: error|warning|info, area, code, message, suggestion }`
 
 ## 定性レビュー (plan-reviewer.ts — Claude tool_use)
 
-`security-mapper.ts` と同じ DI 流儀: `PlanReviewer` interface + `ClaudePlanReviewer` (model=sonnet)、
-`buildApp` で `"auto" | "disabled"` 解決 (ANTHROPIC_API_KEY 無ければ disabled)。
+`security-mapper.ts` と同じ DI 流儀: `PlanReviewer` interface + 2 つの実装。
+`buildApp` の `resolvePlanReviewer` が `"auto" | "disabled"` を解決し、
+**① ANTHROPIC_API_KEY あり → `ClaudePlanReviewer` (SDK, model=sonnet)**、
+**② key 無しでも claude CLI あり → `ClaudeCliPlanReviewer` (サブスク, `claude -p --output-format json`)** の順に選ぶ。
+これにより API キー無しのサブスク環境でも定性レビューが動く (`QUAESTOR_PLAN_REVIEWER_CLI_DISABLE=1` で②を無効化)。
+CLI 版は tool_use の代わりに「厳密 JSON のみ出力」を指示し、 stdout エンベロープ
+(単一オブジェクト / イベント配列 / NDJSON のいずれも) から result を取り出して `normalizeReview` で正規化する。
 
 入力 = 記述セクション全文 + 数字サマリ (定量 metrics)。 出力 (tool_use 強制):
 - `score` 0..100
