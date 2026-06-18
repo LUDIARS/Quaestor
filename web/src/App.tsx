@@ -10,10 +10,12 @@ import { Dashboard } from "./pages/Dashboard.js";
 import { FinancialStatement } from "./pages/FinancialStatement.js";
 import { Invest } from "./pages/Invest.js";
 import { StatementProfiles } from "./pages/StatementProfiles.js";
+import { BusinessPlan } from "./pages/BusinessPlan.js";
 
 type Page =
   | "dashboard"
   | "financial"
+  | "business-plan"
   | "scan"
   | "receipts"
   | "imports"
@@ -27,6 +29,7 @@ type Page =
 const PAGES: { key: Page; label: string }[] = [
   { key: "dashboard", label: "dashboard" },
   { key: "financial", label: "決算書" },
+  { key: "business-plan", label: "事業計画" },
   { key: "scan", label: "scan" },
   { key: "receipts", label: "receipts" },
   { key: "imports", label: "imports" },
@@ -54,6 +57,7 @@ export function App() {
       </header>
       {page === "dashboard" && <Dashboard />}
       {page === "financial" && <FinancialStatement />}
+      {page === "business-plan" && <BusinessPlan />}
       {page === "scan" && <Scan />}
       {page === "receipts" && <Receipts />}
       {page === "imports" && <Imports />}

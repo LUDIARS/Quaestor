@@ -18,6 +18,7 @@ import { PayeeSecuritiesRepo } from "./db/payee-securities-repo.js";
 import { StockQuotesRepo } from "./db/stock-quotes-repo.js";
 import { ShareholderPerksRepo } from "./db/shareholder-perks-repo.js";
 import { StatementProfilesRepo } from "./db/statement-profiles-repo.js";
+import { BusinessPlansRepo } from "./db/business-plans-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import { TrainingDataset } from "./services/training-dataset.js";
 import { OpusDiffEvaluator, type DiffEvaluator } from "./services/detection-diff-evaluator.js";
@@ -42,6 +43,8 @@ import { dashboardRouter } from "./api/dashboard.js";
 import { financialStatementsRouter } from "./api/financial-statements.js";
 import { investRouter } from "./api/invest.js";
 import { statementProfilesRouter } from "./api/statement-profiles.js";
+import { businessPlansRouter } from "./api/business-plans.js";
+import { ClaudePlanReviewer, type PlanReviewer } from "./services/plan-reviewer.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -55,6 +58,8 @@ export interface AppDeps {
   perkClient?: PerkClient | "auto" | "disabled";
   /** 株価 client。 省略時は Stooq。 "disabled" で無効化 */
   stockClient?: StockClient | "auto" | "disabled";
+  /** 事業計画の定性レビューア。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
+  planReviewer?: PlanReviewer | "auto" | "disabled";
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
   gaRoot?: string;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
@@ -76,6 +81,7 @@ export function buildApp(deps: AppDeps): Hono {
   const stockQuotes = new StockQuotesRepo(deps.db);
   const perks = new ShareholderPerksRepo(deps.db);
   const statementProfiles = new StatementProfilesRepo(deps.db);
+  const businessPlans = new BusinessPlansRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
   const trainingDataset = new TrainingDataset("app_data/training/receipts", storage);
   // 差分の Opus 類推器。ANTHROPIC_API_KEY が無ければ undefined (差分は保存するが類推はしない)
@@ -100,6 +106,7 @@ export function buildApp(deps: AppDeps): Hono {
   const securityMapper = resolveMapper(deps.securityMapper);
   const perkClient = resolvePerkClient(deps.perkClient);
   const stockClient = resolveStock(deps.stockClient);
+  const planReviewer = resolvePlanReviewer(deps.planReviewer);
   const advisor = new InvestAdvisor({
     db: deps.db,
     securities,
@@ -139,6 +146,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
   app.route("/v1/statement-profiles", statementProfilesRouter({ repo: statementProfiles }));
+  app.route("/v1/business-plans", businessPlansRouter({ repo: businessPlans, fs, reviewer: planReviewer }));
 
   return app;
 }
@@ -183,6 +191,17 @@ function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): Stock
   // 株価は鍵不要。 既定で Stooq を有効化する
   try {
     return new StooqStockClient();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolvePlanReviewer(opt: PlanReviewer | "auto" | "disabled" | undefined): PlanReviewer | undefined {
+  if (opt === "disabled") return undefined;
+  if (opt && typeof opt === "object") return opt;
+  if (!process.env.ANTHROPIC_API_KEY) return undefined;
+  try {
+    return new ClaudePlanReviewer();
   } catch {
     return undefined;
   }
