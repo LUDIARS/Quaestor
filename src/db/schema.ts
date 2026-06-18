@@ -331,6 +331,102 @@ const STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_subsidies_status ON subsidies(status, deadline)`,
+
+  // ── 積立ポートフォリオ / 配当アドバイザ (spec/feature/portfolio-advisor.md) ──
+
+  // holdings — 保有/積立投資商品。 投信(fund) / 個別株(stock) / ETF(etf) / 保険型(insurance) を 1 テーブルに合流。
+  // 価格源は kind で変わる: stock/etf=stooq 自動、 fund/insurance=手動評価額。
+  `CREATE TABLE IF NOT EXISTS holdings (
+    id                   TEXT PRIMARY KEY,                                  -- ulid
+    kind                 TEXT NOT NULL
+                         CHECK (kind IN ('fund','stock','etf','insurance','other')),
+    name                 TEXT NOT NULL,                                     -- 商品名 例 "eMAXIS Slim 全世界株式"
+    account              TEXT,                                             -- 口座/契約先 例 "SBI つみたてNISA"
+    ticker               TEXT,                                             -- 個別株/ETF の証券コード (任意)
+    fund_code            TEXT,                                             -- 投信の協会コード/ISIN (任意)
+    currency             TEXT NOT NULL DEFAULT 'JPY',                       -- 評価通貨 (外貨建保険は USD 等)
+    tax_wrapper          TEXT
+                         CHECK (tax_wrapper IS NULL OR tax_wrapper IN
+                           ('nisa_tsumitate','nisa_growth','ideco','taxable','insurance')),
+    target_amount        INTEGER,                                          -- 目標額 (見通しのゴール, 円)
+    monthly_contribution INTEGER,                                          -- 計画積立額 (円/月) = plan-variance の plan
+    status               TEXT NOT NULL DEFAULT 'active'
+                         CHECK (status IN ('active','paused','closed')),
+    started_at           TEXT,                                             -- 積立開始 yyyy-mm-dd
+    notes                TEXT,
+    metadata             TEXT,                                             -- JSON 自由領域
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_holdings_kind ON holdings(kind, status)`,
+
+  // contributions — 拠出 (積立) の計画/実績。 plan-variance の基礎データ。
+  // amount は投資家視点の拠出額 (入金=正)、 取崩しは負。
+  `CREATE TABLE IF NOT EXISTS contributions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    holding_id  TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE,
+    date        TEXT NOT NULL,                                            -- yyyy-mm-dd
+    amount      INTEGER NOT NULL,                                         -- 拠出額 (円)。 取崩しは負
+    kind        TEXT NOT NULL DEFAULT 'actual'
+                CHECK (kind IN ('planned','actual')),
+    units       REAL,                                                     -- 取得口数/株数 (任意)
+    unit_price  REAL,                                                     -- 取得単価/基準価額 (任意)
+    note        TEXT,
+    created_at  INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_contrib_holding ON contributions(holding_id, date)`,
+
+  // holding_valuations — 時価スナップショット (手動入力 or stooq)。 1 holding × as_of。
+  `CREATE TABLE IF NOT EXISTS holding_valuations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    holding_id   TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE,
+    as_of        TEXT NOT NULL,                                           -- yyyy-mm-dd
+    market_value INTEGER NOT NULL,                                        -- 評価額 (円, JPY 換算後)
+    unit_price   REAL,                                                    -- 基準価額/株価 (任意, 元通貨)
+    units        REAL,                                                    -- 保有口数/株数 (任意)
+    fx_rate      REAL,                                                    -- 外貨建の対円レート (任意)
+    source       TEXT NOT NULL DEFAULT 'manual'
+                 CHECK (source IN ('manual','stooq','import')),
+    note         TEXT,
+    created_at   INTEGER NOT NULL,
+    UNIQUE (holding_id, as_of)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_holdval_holding ON holding_valuations(holding_id, as_of)`,
+
+  // holding_dividends — 受取分配金/配当の実績。 トータルリターン (再投資しない分の cashflow) に効く。
+  `CREATE TABLE IF NOT EXISTS holding_dividends (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    holding_id  TEXT NOT NULL REFERENCES holdings(id) ON DELETE CASCADE,
+    pay_date    TEXT NOT NULL,                                            -- yyyy-mm-dd
+    amount      INTEGER NOT NULL,                                         -- 受取額 (円)
+    per_share   REAL,                                                     -- 1株/口あたり (任意)
+    reinvested  INTEGER NOT NULL DEFAULT 0,                               -- 1=再投資 (評価額に内包済)
+    note        TEXT,
+    created_at  INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_holddiv_holding ON holding_dividends(holding_id, pay_date)`,
+
+  // dividend_candidates — 配当株サジェスト (公開情報ベース, Claude + stooq)。 1 ticker = 1 行。
+  // ※ 公開・過去実績データのみ。 未公表情報 (MNPI) は扱わない方針 (spec 参照)。
+  `CREATE TABLE IF NOT EXISTS dividend_candidates (
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker                     TEXT NOT NULL UNIQUE REFERENCES securities(ticker) ON DELETE CASCADE,
+    dividend_yield_pct         REAL,                                     -- 配当利回り %
+    dps_annual                 REAL,                                     -- 年間 1 株配当 (円)
+    payout_ratio_pct           REAL,                                     -- 配当性向 %
+    consecutive_increase_years INTEGER,                                  -- 連続増配年数
+    ex_rights_months           TEXT,                                     -- JSON [3,9] 権利確定月
+    stability_note             TEXT,                                     -- 減配リスク等の所見
+    rationale                  TEXT,                                     -- 推奨理由 (公開情報のみ)
+    source                     TEXT NOT NULL DEFAULT 'claude'
+                               CHECK (source IN ('claude','manual')),
+    fetched_at                 INTEGER NOT NULL,
+    updated_at                 INTEGER NOT NULL
+  )`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -348,7 +444,7 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 7");
+  db.pragma("user_version = 8");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */
