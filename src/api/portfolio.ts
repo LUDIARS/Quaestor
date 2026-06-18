@@ -17,6 +17,8 @@ import {
   StockUnavailable,
   DividendUnavailable,
 } from "../services/portfolio-service.js";
+import { buildPortfolioSnapshot, type AllocationAdvisor } from "../services/allocation-advisor.js";
+import type { AllocationAdviceStore } from "../services/allocation-advice-store.js";
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const KIND = z.enum(["fund", "stock", "etf", "insurance", "other"]);
@@ -75,12 +77,21 @@ const SuggestBody = z.object({
   tickers: z.array(TICKER).optional(),
 });
 
+const AllocationBody = z.object({
+  as_of: DATE.optional(),
+  risk: z.enum(["conservative", "balanced", "aggressive"]).optional(),
+  goal: z.string().max(500).optional(),
+  monthly_budget: z.number().int().min(0).optional(),
+});
+
 export function portfolioRouter(deps: {
   service: PortfolioService;
   holdings: HoldingsRepo;
   contributions: ContributionsRepo;
   valuations: HoldingValuationsRepo;
   dividends: HoldingDividendsRepo;
+  allocationAdvisor?: AllocationAdvisor;
+  adviceStore?: AllocationAdviceStore;
 }): Hono {
   const app = new Hono();
 
@@ -219,6 +230,32 @@ export function portfolioRouter(deps: {
       if (e instanceof DividendUnavailable) return c.json({ error: e.message }, 503);
       throw e;
     }
+  });
+
+  // GET /allocation — 最新の資産配分アドバイス (キャッシュ。 無ければ available:false)
+  app.get("/allocation", (c) => {
+    const stored = deps.adviceStore?.get() ?? null;
+    if (!stored) return c.json({ available: false });
+    return c.json({ available: true, ...stored });
+  });
+
+  // POST /allocation/recommend — 現在のポートフォリオから配分・投資幅・金融資産を Claude で提案
+  app.post("/allocation/recommend", async (c) => {
+    const parsed = AllocationBody.safeParse(await safeJson(c));
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    if (!deps.allocationAdvisor) {
+      return c.json({ disabled: true, reason: "配分アドバイザ未設定 (claude CLI 要)" });
+    }
+    const asOf = parsed.data.as_of ?? today();
+    const snapshot = buildPortfolioSnapshot(asOf, deps.service.summary(asOf, { status: "active" }));
+    if (snapshot.holdings.length === 0) {
+      return c.json({ error: "保有がありません。先にポートフォリオを登録してください。" }, 400);
+    }
+    const profile = { risk: parsed.data.risk, goal: parsed.data.goal, monthlyBudget: parsed.data.monthly_budget };
+    const advice = await deps.allocationAdvisor.recommend(snapshot, profile);
+    const entry = { snapshot, advice, profile, generated_at: Math.floor(Date.now() / 1000) };
+    deps.adviceStore?.save(entry);
+    return c.json(entry);
   });
 
   return app;
