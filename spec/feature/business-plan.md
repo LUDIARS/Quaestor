@@ -107,6 +107,7 @@ findings は `{ severity: error|warning|info, area, code, message, suggestion }`
 | `PUT /:id/figures` | 数字 bulk upsert |
 | `POST /:id/seed-from-actuals` | 実績 (前年 financial_statements) を baseline に取り込み |
 | `GET /:id/variance` | 計画 vs 実績 差異分析 (fiscal_start 起点の年度窓で突合) |
+| `GET /:id/export.xlsx` | 事業計画を Excel (概要/記述/数字/検算 の4シート) で出力 |
 | `POST /:id/review` | レビュー実行 (`?kind=quantitative\|qualitative\|combined`)、 結果を永続 |
 | `GET /:id/reviews` | レビュー履歴 |
 
@@ -136,5 +137,5 @@ DB 集計は `computePlanVariance` (service)。 未到来の窓は `elapsed=fals
 ## 今後 (本 spec 外)
 
 - 補助金情報の管理 (募集中の補助金 DB・締切・要件マッチング) — 次フェーズ
-- 書類の PDF/Excel 出力 (公庫様式・補助金様式への流し込み)
+- 公式様式への流し込み (公庫・補助金の指定 Excel/PDF テンプレートへのマッピング。 現状は汎用4シート出力)
 - 差異分析の月次粒度化 (現状は年度窓。 月次トラッキングは未対応)
