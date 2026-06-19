@@ -1,7 +1,8 @@
 /**
  * 株価取得クライアント。
  *
- * 既定実装は stooq (無料・登録不要)。 日足 CSV を取得してパースする。
+ * 既定実装は Yahoo Finance v8 chart API (無料・登録不要、東証株は ".T" suffix)。
+ * stooq は 2026-06 より JS PoW anti-bot ゲートが掛かり CSV fetch が失敗するため非既定。
  * J-Quants 等へ差し替えられるよう StockClient interface で抽象化している。
  */
 
@@ -49,6 +50,67 @@ export function summarizeQuote(history: PriceHistory, periodDays: number): Quote
     bars: windowBars.length > 0 ? windowBars : bars.slice(-2),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Yahoo Finance v8 chart API (既定の株価取得源)
+// ---------------------------------------------------------------------------
+
+export interface YahooFinanceOptions {
+  /** テスト用差し替え。既定 https://query1.finance.yahoo.com */
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+interface YFChartResponse {
+  chart: {
+    result: Array<{
+      timestamp: number[];
+      indicators: { quote: Array<{ close: (number | null)[] }> };
+    }> | null;
+    error: unknown;
+  };
+}
+
+export class YahooFinanceStockClient implements StockClient {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(opts: YahooFinanceOptions = {}) {
+    this.baseUrl = (opts.baseUrl ?? process.env.YAHOO_FINANCE_BASE_URL ?? "https://query1.finance.yahoo.com").replace(/\/$/, "");
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  async history(ticker: string): Promise<PriceHistory | null> {
+    const symbol = encodeURIComponent(`${ticker}.T`);
+    const url = `${this.baseUrl}/v8/finance/chart/${symbol}?interval=1d&range=6mo`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        headers: { "User-Agent": "Mozilla/5.0 Quaestor/1.0", "Accept": "application/json" },
+      });
+    } catch { return null; }
+    if (!res.ok) return null;
+    let json: YFChartResponse;
+    try { json = (await res.json()) as YFChartResponse; } catch { return null; }
+    const result = json.chart?.result?.[0];
+    if (!result) return null;
+    const timestamps = result.timestamp ?? [];
+    const closes = result.indicators?.quote?.[0]?.close ?? [];
+    const bars: QuoteBar[] = [];
+    for (let i = 0; i < timestamps.length; i++) {
+      const ts = timestamps[i];
+      const close = closes[i];
+      if (!ts || close == null || !Number.isFinite(close)) continue;
+      const date = new Date(ts * 1000).toISOString().slice(0, 10);
+      bars.push({ date, close });
+    }
+    bars.sort((a, b) => a.date.localeCompare(b.date));
+    if (bars.length === 0) return null;
+    return { ticker, as_of: bars[bars.length - 1]!.date, bars };
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 /** ISO yyyy-mm-dd から days 日前の ISO 文字列。 */
 function isoMinusDays(iso: string, days: number): string {

@@ -50,6 +50,13 @@ export interface AppConfig {
   training: {
     gaRoot: string;
   };
+  /** 補助金の定期クロール (#278)。 */
+  subsidyCrawl: {
+    enabled: boolean;       // master switch (既定 false)
+    intervalMs: number;     // 既定 24h
+    keywords: string[];     // クロール対象キーワード
+    perKeywordLimit: number; // 1 キーワードあたりの取込上限 (既定 10)
+  };
   /** 定期 Discord 通知 (アドバイザーのアドバイス push)。 webhook URL はシークレット側 */
   notifications: {
     enabled: boolean;        // 定期 worker の master switch (既定 false)
@@ -70,6 +77,12 @@ const DEFAULTS: AppConfig = {
     lang: "japan", python: null, venvPython: null, externalUrl: null,
   },
   training: { gaRoot: "app_data/training/ga" },
+  subsidyCrawl: {
+    enabled: false,
+    intervalMs: 86_400_000,   // 24h
+    keywords: ["創業", "補助金", "助成金", "小規模事業者"],
+    perKeywordLimit: 10,
+  },
   notifications: {
     enabled: false,
     intervalMs: 21_600_000, // 6h
@@ -111,6 +124,12 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
     training: {
       gaRoot: str(undefined, fromFile?.training?.gaRoot, DEFAULTS.training.gaRoot),
     },
+    subsidyCrawl: {
+      enabled:         flag(env("QUAESTOR_SUBSIDY_CRAWL"),          fromFile?.subsidyCrawl?.enabled,         DEFAULTS.subsidyCrawl.enabled),
+      intervalMs:      num(env("QUAESTOR_SUBSIDY_CRAWL_INTERVAL_MS"), fromFile?.subsidyCrawl?.intervalMs,    DEFAULTS.subsidyCrawl.intervalMs),
+      keywords:        arr(fromFile?.subsidyCrawl?.keywords,         DEFAULTS.subsidyCrawl.keywords),
+      perKeywordLimit: num(env("QUAESTOR_SUBSIDY_CRAWL_LIMIT"),      fromFile?.subsidyCrawl?.perKeywordLimit, DEFAULTS.subsidyCrawl.perKeywordLimit),
+    },
     notifications: {
       enabled:    flag(env("QUAESTOR_NOTIFY"),             fromFile?.notifications?.enabled,    DEFAULTS.notifications.enabled),
       intervalMs: num(env("QUAESTOR_NOTIFY_INTERVAL_MS"),  fromFile?.notifications?.intervalMs, DEFAULTS.notifications.intervalMs),
@@ -142,6 +161,7 @@ type PartialConfig = {
   server?: Partial<AppConfig["server"]>;
   storage?: Partial<AppConfig["storage"]>;
   ocrWorker?: Partial<AppConfig["ocrWorker"]>;
+  subsidyCrawl?: Partial<AppConfig["subsidyCrawl"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
   notifications?: Partial<Omit<AppConfig["notifications"], "subsidies">> & {
