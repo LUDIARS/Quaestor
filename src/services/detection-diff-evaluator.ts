@@ -1,17 +1,16 @@
 /**
- * 検出差分の Opus 類推。
+ * 検出差分の LLM 類推 (Claude CLI 経由)。
  *
  * computeDetectionDiff() が差分 (検出テキスト vs 真値) を出したとき、
- * Claude Opus 4.8 に「検出器がどう検出したか」を差分から類推させる。
+ * Claude CLI に「検出器がどう検出したか」を差分から類推させる。
  *  - 失敗種別 (localization=位置ずれ / recognition=読み違い / partial / none)
  *  - 仮説 (なぜその差分が出たか)
  *  - 改善案 (検出器/前処理をどう直すと精度が上がるか)
  *
  * 画像は渡さない (ユーザ指示「差分から類推」)。差分テキストのみを根拠にする。
- * tool_use で構造化出力を強制。ANTHROPIC_API_KEY 未設定なら生成しない (DI で undefined)。
  */
 
-import Anthropic from "@anthropic-ai/sdk";
+import { runClaudeCliJson, type ClaudeCliOptions } from "./claude-cli.js";
 import type { DetectionDiff, FieldDiff } from "./detection-eval.js";
 
 export interface FieldInference {
@@ -48,81 +47,59 @@ const SYSTEM_PROMPT = `あなたはレシート検出パイプラインの品質
 
 hypothesis は差分の具体形に即して簡潔に。suggestedFix は検出器/前処理の具体的改善 (二値化・行マージ・言語モデル・解像度・bbox padding 等)。`;
 
-const TOOL: Anthropic.Tool = {
-  name: "report_detection_inference",
-  description: "Report per-field inference of how the detector behaved, from the diff.",
-  input_schema: {
-    type: "object",
-    properties: {
-      summary: { type: "string", description: "全体所見 (1〜2 文)" },
-      fields: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            field: { type: "string" },
-            failureMode: { type: "string", enum: ["localization", "recognition", "partial", "none"] },
-            hypothesis: { type: "string" },
-            suggestedFix: { type: "string" },
-            confidence: { type: "string", enum: ["high", "medium", "low"] },
-          },
-          required: ["field", "failureMode", "hypothesis", "suggestedFix", "confidence"],
-        },
-      },
-    },
-    required: ["summary", "fields"],
-  },
-};
-
-export interface OpusDiffEvaluatorOptions {
-  apiKey?: string;
-  model?: string;
+export interface OpusDiffEvaluatorOptions extends ClaudeCliOptions {
+  runner?: (prompt: string) => Promise<unknown>;
 }
 
 export class OpusDiffEvaluator implements DiffEvaluator {
-  private readonly client: Anthropic;
-  private readonly model: string;
-
-  constructor(opts: OpusDiffEvaluatorOptions = {}) {
-    const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
-    this.client = new Anthropic({ apiKey });
-    this.model = opts.model ?? "claude-opus-4-8";
-  }
+  constructor(private readonly opts: OpusDiffEvaluatorOptions = {}) {}
 
   async evaluate(diff: DetectionDiff, engine: string): Promise<DiffInference | null> {
-    // 真値があり、かつ差分のあるフィールドだけ渡す (一致のみは送らない)
     const targets = diff.fields.filter(
       (f) => f.status === "mismatch" || f.status === "missing",
     );
     if (targets.length === 0) return null;
 
-    const res = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 1500,
-      system: SYSTEM_PROMPT,
-      tools: [TOOL],
-      tool_choice: { type: "tool", name: "report_detection_inference" },
-      messages: [
-        {
-          role: "user",
-          content: `検出エンジン: ${engine}\n\n差分 (検出テキスト vs 真値):\n${formatDiff(targets)}\n\nreport_detection_inference ツールで各フィールドの検出挙動を類推してください。`,
-        },
-      ],
-    });
-
-    const tu = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
-    if (!tu) return null;
-    const input = tu.input as { summary?: unknown; fields?: unknown };
+    const prompt = buildEvalPrompt(engine, targets);
+    const json = this.opts.runner
+      ? await this.opts.runner(prompt)
+      : await runClaudeCliJson(prompt, this.opts);
+    if (!json || typeof json !== "object" || Array.isArray(json)) return null;
+    const input = json as { summary?: unknown; fields?: unknown };
     const fields = Array.isArray(input.fields)
       ? input.fields.filter(isFieldInference)
       : [];
     return {
       summary: typeof input.summary === "string" ? input.summary : "",
       fields,
-      model: this.model,
+      model: "claude-cli",
     };
   }
+}
+
+function buildEvalPrompt(engine: string, targets: FieldDiff[]): string {
+  return (
+    `${SYSTEM_PROMPT}\n\n` +
+    `検出エンジン: ${engine}\n\n` +
+    `差分 (検出テキスト vs 真値):\n${formatDiff(targets)}\n\n` +
+    `各フィールドの検出挙動を類推してください。\n\n` +
+    `# 出力形式 (厳守)\n` +
+    `説明や前置きは一切書かず、以下のスキーマの JSON オブジェクトだけを出力すること。\n` +
+    `\`\`\`\n` +
+    `{\n` +
+    `  "summary": "<全体所見 1〜2 文>",\n` +
+    `  "fields": [\n` +
+    `    {\n` +
+    `      "field": "<フィールド名>",\n` +
+    `      "failureMode": "<localization|recognition|partial|none>",\n` +
+    `      "hypothesis": "<差分の具体形に即した仮説>",\n` +
+    `      "suggestedFix": "<検出器/前処理の具体的改善>",\n` +
+    `      "confidence": "<high|medium|low>"\n` +
+    `    }\n` +
+    `  ]\n` +
+    `}\n` +
+    `\`\`\``
+  );
 }
 
 function formatDiff(fields: FieldDiff[]): string {

@@ -52,7 +52,7 @@ import { investRouter } from "./api/invest.js";
 import { statementProfilesRouter } from "./api/statement-profiles.js";
 import { businessPlansRouter } from "./api/business-plans.js";
 import { portfolioRouter } from "./api/portfolio.js";
-import { ClaudePlanReviewer, type PlanReviewer } from "./services/plan-reviewer.js";
+import type { PlanReviewer } from "./services/plan-reviewer.js";
 import { ClaudeCliPlanReviewer, detectClaudeCli } from "./services/plan-reviewer-cli.js";
 import { SubsidiesRepo } from "./db/subsidies-repo.js";
 import { subsidiesRouter } from "./api/subsidies.js";
@@ -74,15 +74,15 @@ export interface AppDeps {
   receiptsRoot?: string;
   /** OCR client。 省略時は ANTHROPIC_API_KEY があれば AnthropicOcrClient、 無ければ undefined */
   ocr?: OcrClient | "auto" | "disabled";
-  /** 銘柄マッピング client。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
+  /** 銘柄マッピング client。 省略時は claude CLI があれば Claude、 無ければ undefined */
   securityMapper?: SecurityMapper | "auto" | "disabled";
-  /** 優待取得 client。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
+  /** 優待取得 client。 省略時は claude CLI があれば Claude、 無ければ undefined */
   perkClient?: PerkClient | "auto" | "disabled";
   /** 株価 client。 省略時は Stooq。 "disabled" で無効化 */
   stockClient?: StockClient | "auto" | "disabled";
-  /** 配当データ client。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
+  /** 配当データ client。 省略時は claude CLI があれば Claude、 無ければ undefined */
   dividendClient?: DividendClient | "auto" | "disabled";
-  /** 事業計画の定性レビューア。 省略時は ANTHROPIC_API_KEY があれば Claude、 無ければ undefined */
+  /** 事業計画の定性レビューア。 省略時は claude CLI があれば有効、 無ければ undefined */
   planReviewer?: PlanReviewer | "auto" | "disabled";
   /** 補助金マッチャ。 省略時は claude CLI があれば有効、 無ければ undefined */
   subsidyMatcher?: SubsidyMatcher | "auto" | "disabled";
@@ -126,9 +126,8 @@ export function buildApp(deps: AppDeps): Hono {
   const dividendCandidates = new DividendCandidatesRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
   const trainingDataset = new TrainingDataset("app_data/training/receipts", storage);
-  // 差分の Opus 類推器。ANTHROPIC_API_KEY が無ければ undefined (差分は保存するが類推はしない)
-  let diffEvaluator: DiffEvaluator | undefined;
-  try { diffEvaluator = new OpusDiffEvaluator(); } catch { diffEvaluator = undefined; }
+  // 差分の LLM 類推器。claude CLI が使えない場合は undefined (差分は保存するが類推はしない)
+  const diffEvaluator: DiffEvaluator | undefined = detectCli() ? new OpusDiffEvaluator() : undefined;
   // OCR パラメータの遺伝的最適化 (PaddleOCR 進化、待機中に web が評価して進化)
   const ocrGa = createOcrGaStore(deps.gaRoot ?? "app_data/training/ga");
 
@@ -255,23 +254,15 @@ function resolveOcr(opt: OcrClient | "auto" | "disabled" | undefined): OcrClient
 function resolveMapper(opt: SecurityMapper | "auto" | "disabled" | undefined): SecurityMapper | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  if (!process.env.ANTHROPIC_API_KEY) return undefined;
-  try {
-    return new ClaudeSecurityMapper();
-  } catch {
-    return undefined;
-  }
+  if (!detectCli()) return undefined;
+  return new ClaudeSecurityMapper();
 }
 
 function resolvePerkClient(opt: PerkClient | "auto" | "disabled" | undefined): PerkClient | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  if (!process.env.ANTHROPIC_API_KEY) return undefined;
-  try {
-    return new ClaudePerkClient();
-  } catch {
-    return undefined;
-  }
+  if (!detectCli()) return undefined;
+  return new ClaudePerkClient();
 }
 
 function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): StockClient | undefined {
@@ -302,24 +293,13 @@ function resolveSubsidyCrawler(opt: SubsidyCrawler | "auto" | "disabled" | undef
 function resolveDividendClient(opt: DividendClient | "auto" | "disabled" | undefined): DividendClient | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  if (!process.env.ANTHROPIC_API_KEY) return undefined;
-  try {
-    return new ClaudeDividendClient();
-  } catch {
-    return undefined;
-  }
+  if (!detectCli()) return undefined;
+  return new ClaudeDividendClient();
 }
 
 function resolvePlanReviewer(opt: PlanReviewer | "auto" | "disabled" | undefined): PlanReviewer | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  // 1) API key があれば SDK 経路 (高速)
-  if (process.env.ANTHROPIC_API_KEY) {
-    try { return new ClaudePlanReviewer(); } catch { /* fall through */ }
-  }
-  // 2) API key 無しでも claude CLI (サブスク) があれば CLI 経路で定性レビュー可能
-  if (detectClaudeCli()) {
-    try { return new ClaudeCliPlanReviewer(); } catch { return undefined; }
-  }
-  return undefined;
+  if (!detectClaudeCli()) return undefined;
+  try { return new ClaudeCliPlanReviewer(); } catch { return undefined; }
 }
