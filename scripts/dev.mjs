@@ -7,11 +7,28 @@
 import { spawn, execFileSync } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readFileSync, existsSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
 const DEV_PORTS = [17400, 5177];
+
+// quaestor.config.json の web.allowedHosts を VITE_ALLOWED_HOSTS に注入。
+// vite.config.ts での import.meta.url / process.cwd() の解決に依存しない確実な方法。
+try {
+  const cfgPath = resolve(ROOT, 'quaestor.config.json');
+  if (existsSync(cfgPath)) {
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const hosts = cfg?.web?.allowedHosts;
+    if (Array.isArray(hosts) && hosts.length > 0) {
+      const existing = process.env.VITE_ALLOWED_HOSTS ?? '';
+      const all = [...new Set([...existing.split(',').filter(Boolean), ...hosts])];
+      process.env.VITE_ALLOWED_HOSTS = all.join(',');
+      console.log(`[dev] VITE_ALLOWED_HOSTS=${process.env.VITE_ALLOWED_HOSTS}`);
+    }
+  }
+} catch { /* 読み取り失敗は無視 */ }
 
 // ── ポート掃除 ────────────────────────────────────────
 function killPort(port) {
