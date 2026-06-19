@@ -22,6 +22,9 @@ import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
 import { loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
 import { SecretStore } from "./services/secret-store.js";
 import { NotificationWorker } from "./services/notification-worker.js";
+import { SubsidyCrawlWorker } from "./services/subsidy-crawl-worker.js";
+import { SubsidiesRepo } from "./db/subsidies-repo.js";
+import { JGrantsCrawler, MirasapoPlusCrawler, CompositeCrawler } from "./services/subsidy-crawler.js";
 
 const config = loadAppConfig();
 
@@ -82,6 +85,21 @@ if (config.ocrSidecar.manage && !config.ocrSidecar.externalUrl) {
   ocrSidecar.start();
 }
 
+// 補助金定期クロールワーカー: subsidyCrawl.enabled の時のみ起動
+let subsidyCrawlWorker: SubsidyCrawlWorker | null = null;
+if (config.subsidyCrawl.enabled) {
+  subsidyCrawlWorker = new SubsidyCrawlWorker({
+    crawler: new CompositeCrawler([new JGrantsCrawler(), new MirasapoPlusCrawler()]),
+    repo: new SubsidiesRepo(db),
+    keywords: config.subsidyCrawl.keywords,
+    perKeywordLimit: config.subsidyCrawl.perKeywordLimit,
+    intervalMs: config.subsidyCrawl.intervalMs,
+    logger: log,
+  });
+  subsidyCrawlWorker.start();
+  log.info({ intervalMs: config.subsidyCrawl.intervalMs, keywords: config.subsidyCrawl.keywords }, "subsidy crawl worker started");
+}
+
 // 定期 Discord 通知ワーカー: notifications.enabled かつ webhook URL がある時のみ起動
 let notificationWorker: NotificationWorker | null = null;
 
@@ -112,6 +130,7 @@ const shutdown = (signal: string) => {
   ocrWorker?.stop();
   ocrSidecar?.stop();
   notificationWorker?.stop();
+  subsidyCrawlWorker?.stop();
   db.close();
   process.exit(0);
 };

@@ -34,7 +34,7 @@ import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { SmartImporter } from "./services/smart-import.js";
 import { ClaudeSecurityMapper, type SecurityMapper } from "./services/security-mapper.js";
 import { ClaudePerkClient, type PerkClient } from "./services/perk-client.js";
-import { StooqStockClient, type StockClient } from "./services/stock-client.js";
+import { YahooFinanceStockClient, type StockClient } from "./services/stock-client.js";
 import { InvestAdvisor } from "./services/invest-advisor.js";
 import { ClaudeDividendClient, type DividendClient } from "./services/dividend-client.js";
 import { PortfolioService } from "./services/portfolio-service.js";
@@ -57,7 +57,7 @@ import { ClaudeCliPlanReviewer, detectClaudeCli } from "./services/plan-reviewer
 import { SubsidiesRepo } from "./db/subsidies-repo.js";
 import { subsidiesRouter } from "./api/subsidies.js";
 import { resolveSubsidyMatcher, type SubsidyMatcher } from "./services/subsidy-matcher.js";
-import { JGrantsCrawler, type SubsidyCrawler } from "./services/subsidy-crawler.js";
+import { JGrantsCrawler, MirasapoPlusCrawler, CompositeCrawler, type SubsidyCrawler } from "./services/subsidy-crawler.js";
 import { resolveDiscordNotifier, type DiscordNotifier } from "./services/discord-notifier.js";
 import { NotificationState } from "./services/notification-state.js";
 import { NotificationService } from "./services/notification-service.js";
@@ -268,12 +268,8 @@ function resolvePerkClient(opt: PerkClient | "auto" | "disabled" | undefined): P
 function resolveStock(opt: StockClient | "auto" | "disabled" | undefined): StockClient | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  // 株価は鍵不要。 既定で Stooq を有効化する
-  try {
-    return new StooqStockClient();
-  } catch {
-    return undefined;
-  }
+  // Yahoo Finance v8 chart API (stooq は 2026-06 より anti-bot ゲートで失敗)
+  return new YahooFinanceStockClient();
 }
 
 function resolveAllocationAdvisor(opt: AllocationAdvisor | "auto" | "disabled" | undefined): AllocationAdvisor | undefined {
@@ -286,8 +282,8 @@ function resolveAllocationAdvisor(opt: AllocationAdvisor | "auto" | "disabled" |
 function resolveSubsidyCrawler(opt: SubsidyCrawler | "auto" | "disabled" | undefined): SubsidyCrawler | undefined {
   if (opt === "disabled") return undefined;
   if (opt && typeof opt === "object") return opt;
-  // jGrants は鍵不要。 既定で有効化する
-  try { return new JGrantsCrawler(); } catch { return undefined; }
+  // jGrants + ミラサポ plus を複合クローラで束ねる
+  return new CompositeCrawler([new JGrantsCrawler(), new MirasapoPlusCrawler()]);
 }
 
 function resolveDividendClient(opt: DividendClient | "auto" | "disabled" | undefined): DividendClient | undefined {

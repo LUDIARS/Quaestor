@@ -119,4 +119,28 @@ export class SubsidiesRepo {
     const r = this.db.prepare(`DELETE FROM subsidies WHERE id = ?`).run(id);
     return r.changes > 0;
   }
+
+  /** metadata.jgrants_id または metadata.external_id でソースを問わず既存を探す (汎用 dedup) */
+  findByAnyExternalId(externalId: string): SubsidyRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM subsidies WHERE
+          json_extract(metadata, '$.jgrants_id') = ? OR
+          json_extract(metadata, '$.external_id') = ?
+         LIMIT 1`,
+      )
+      .get(externalId, externalId) as SubsidyRow | undefined;
+  }
+
+  /** deadline < date かつ status='open' の補助金を 'closed' に一括更新。変更件数を返す */
+  closeExpiredBefore(date: string): number {
+    const now = Math.floor(Date.now() / 1000);
+    const r = this.db
+      .prepare(
+        `UPDATE subsidies SET status = 'closed', updated_at = ?
+         WHERE status = 'open' AND deadline IS NOT NULL AND deadline < ?`,
+      )
+      .run(now, date);
+    return r.changes;
+  }
 }

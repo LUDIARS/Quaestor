@@ -145,3 +145,163 @@ function truncate(s: string | null | undefined, n: number): string | null {
   const t = s.trim();
   return t.length > n ? `${t.slice(0, n)}…` : t;
 }
+
+// ---------------------------------------------------------------------------
+// ミラサポ plus クローラ
+// ---------------------------------------------------------------------------
+
+export interface MirasapoPlusOptions {
+  /** テスト用差し替え。既定 https://www.mirasapo-plus.go.jp */
+  baseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+interface MirasapoItem {
+  id: string;
+  name: string;
+  ministerialDepartment: string | null;
+  deadline: string | null;
+  summary: string | null;
+  target: string | null;
+  maxAmount: number | null;
+  url: string | null;
+}
+
+/** ミラサポ plus (METI 中小企業向け補助金ナビ) から補助金を取得する。
+ *
+ *  公開 API は仕様非公開のため HTML レスポンスをパースする。
+ *  URL 構造: GET /subsidy/result?keyword={kw}&page=1
+ *  サイト改修で壊れる場合は baseUrl / parseHtml を調整する。
+ */
+export class MirasapoPlusCrawler implements SubsidyCrawler {
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(opts: MirasapoPlusOptions = {}) {
+    this.baseUrl = (opts.baseUrl ?? "https://www.mirasapo-plus.go.jp").replace(/\/$/, "");
+    this.fetchImpl = opts.fetchImpl ?? fetch;
+  }
+
+  async search(keyword: string, opts: { limit?: number } = {}): Promise<CrawledSubsidy[]> {
+    if (keyword.trim().length < 2) return [];
+    const limit = opts.limit ?? 10;
+    const url = `${this.baseUrl}/subsidy/result?keyword=${encodeURIComponent(keyword)}&page=1`;
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        headers: { "User-Agent": "Mozilla/5.0 Quaestor/1.0", "Accept": "text/html" },
+      });
+    } catch { return []; }
+    if (!res.ok) return [];
+    const html = await res.text();
+    return parseMirasapoHtml(html, this.baseUrl).slice(0, limit);
+  }
+}
+
+/** ミラサポ plus の検索結果 HTML から補助金リストを抽出する。 */
+export function parseMirasapoHtml(html: string, baseUrl: string): CrawledSubsidy[] {
+  const out: CrawledSubsidy[] = [];
+  // 補助金カード: <article> or <li class="...subsidy..."> or <div class="...item...">
+  // タイトルと詳細リンクを持つブロックを正規表現で抽出する
+  const cardRe = /<(?:article|li)[^>]*>([\s\S]*?)<\/(?:article|li)>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = cardRe.exec(html)) !== null && out.length < 50) {
+    const block = m[1]!;
+    const item = extractMirasapoCard(block, baseUrl);
+    if (item) out.push(normalizeMirasapo(item));
+  }
+  return out;
+}
+
+function extractMirasapoCard(block: string, baseUrl: string): MirasapoItem | null {
+  // href から id と URL
+  const hrefM = /href="([^"]*\/subsidy\/[^"?#]+(?:\/(\d+)[^"]*)?)"/.exec(block);
+  if (!hrefM) return null;
+  const rawHref = hrefM[1]!;
+  const detailUrl = rawHref.startsWith("http") ? rawHref : `${baseUrl}${rawHref}`;
+  // id: URL末尾の数字 or UUIDっぽい文字列
+  const idM = /\/(\d{5,}|[a-f0-9]{8}-[a-f0-9-]{27})\/?(?:\?|$)/.exec(rawHref);
+  const id = idM ? idM[1]! : rawHref.replace(/[^a-zA-Z0-9_-]/g, "_").slice(-32);
+
+  // タイトル: <h2>/<h3>/<a> の最初のテキスト
+  const titleM = /<(?:h[23]|a)[^>]*>([\s\S]*?)<\/(?:h[23]|a)>/.exec(block);
+  const name = titleM ? stripTags(titleM[1]!).trim() : null;
+  if (!name || name.length < 4) return null;
+
+  // 省庁・機関名
+  const agencyM = /(?:省庁|機関|実施機関|補助機関|主務官庁)[^<]*?[：:](.*?)(?:<|$)/.exec(block)
+    ?? /class="[^"]*(?:agency|institution|ministry)[^"]*"[^>]*>([\s\S]*?)<\//.exec(block);
+  const agency = agencyM ? stripTags(agencyM[1]!).trim() : null;
+
+  // 締切日: yyyy/mm/dd または yyyy-mm-dd
+  const dlM = /(\d{4})[\/\-](\d{2})[\/\-](\d{2})/.exec(block);
+  const deadline = dlM ? `${dlM[1]}-${dlM[2]}-${dlM[3]}` : null;
+
+  // 上限金額
+  const amtM = /(?:上限|最大|補助上限)[^\d]*(\d[\d,]+)万?円/.exec(block);
+  const maxAmount = amtM ? parseJpAmount(amtM[1]!, block) : null;
+
+  // 概要
+  const summaryM = /class="[^"]*(?:summary|description|overview|catch)[^"]*"[^>]*>([\s\S]*?)<\//.exec(block);
+  const summary = summaryM ? stripTags(summaryM[1]!).slice(0, 300).trim() : null;
+
+  return { id, name, ministerialDepartment: agency, deadline, summary, target: null, maxAmount, url: detailUrl };
+}
+
+function normalizeMirasapo(item: MirasapoItem): CrawledSubsidy {
+  const kind = /融資|貸付/.test(item.name) ? "loan" : /助成/.test(item.name) ? "grant" : "subsidy";
+  return {
+    external_id: item.id,
+    name: item.name,
+    agency: item.ministerialDepartment,
+    kind,
+    url: item.url,
+    summary: item.summary,
+    target: item.target,
+    requirements: null,
+    max_amount: item.maxAmount,
+    subsidy_rate: null,
+    deadline: item.deadline,
+    status: "open",
+    metadata: { source: "mirasapo", external_id: item.id },
+  };
+}
+
+function stripTags(s: string): string {
+  return s.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").replace(/\s+/g, " ");
+}
+
+function parseJpAmount(numStr: string, block: string): number | null {
+  const n = Number(numStr.replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  // "万円" が後続するかどうか判定
+  return /万円/.test(block) ? n * 10000 : n;
+}
+
+// ---------------------------------------------------------------------------
+// CompositeCrawler — 複数ソースを並列実行して外部 ID で dedup
+// ---------------------------------------------------------------------------
+
+export class CompositeCrawler implements SubsidyCrawler {
+  constructor(private readonly sources: SubsidyCrawler[]) {}
+
+  async search(keyword: string, opts: { limit?: number } = {}): Promise<CrawledSubsidy[]> {
+    const limit = opts.limit ?? 20;
+    const perSource = Math.ceil(limit / this.sources.length);
+    const results = await Promise.allSettled(
+      this.sources.map((s) => s.search(keyword, { limit: perSource })),
+    );
+    const seen = new Set<string>();
+    const out: CrawledSubsidy[] = [];
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      for (const item of r.value) {
+        if (!seen.has(item.external_id)) {
+          seen.add(item.external_id);
+          out.push(item);
+        }
+      }
+    }
+    return out.slice(0, limit);
+  }
+}
