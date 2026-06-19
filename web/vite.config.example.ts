@@ -1,7 +1,10 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // このファイルをコピーして vite.config.ts を作成してください。
 // cp vite.config.example.ts vite.config.ts
@@ -19,7 +22,7 @@ import { resolve } from "node:path";
 // Backend は 17400 で listen するので /v1/* と /health を proxy する。
 
 function loadConfigHosts(): string[] {
-  const path = resolve(process.cwd(), "../quaestor.config.json");
+  const path = resolve(__dirname, "../quaestor.config.json");
   if (!existsSync(path)) return [];
   try {
     const cfg = JSON.parse(readFileSync(path, "utf8")) as { web?: { allowedHosts?: unknown } };
