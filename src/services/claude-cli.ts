@@ -6,6 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { reportConcordiaCostOneShot } from "./concordia-cost.js";
 
 export interface ClaudeCliOptions {
   cliPath?: string;       // 既定 "claude"
@@ -78,11 +79,13 @@ export function extractJsonObject(text: string): Record<string, unknown> | null 
 /** claude CLI を spawn し stdout 文字列を返す */
 export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promise<string> {
   return new Promise((resolveOut, reject) => {
+    const startedAt = Date.now();
+    const cliPath = opts.cliPath ?? "claude";
     const env = { ...process.env };
     const bashPath = opts.bashPath ?? process.env.CLAUDE_CODE_GIT_BASH_PATH;
     if (bashPath) env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
 
-    const child = spawn(opts.cliPath ?? "claude", ["-p", "--output-format", "json"], {
+    const child = spawn(cliPath, ["-p", "--output-format", "json"], {
       env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: true,
@@ -90,17 +93,67 @@ export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promis
 
     let out = "";
     let errOut = "";
+    let recorded = false;
+    let timer: NodeJS.Timeout | null = null;
     child.stdout?.on("data", (d) => { out += d.toString(); });
     child.stderr?.on("data", (d) => { errOut += d.toString(); });
-    child.once("error", (e) => reject(e));
+    child.once("error", (e) => {
+      if (timer) clearTimeout(timer);
+      if (!recorded) {
+        recorded = true;
+        void reportConcordiaCostOneShot({
+          service: "quaestor",
+          provider: "claude",
+          command: `${cliPath} -p --output-format json`,
+          cwd: process.cwd(),
+          prompt,
+          status: "error",
+          exit_code: -1,
+          duration_ms: Date.now() - startedAt,
+          metadata: { error: e.message },
+        });
+      }
+      reject(e);
+    });
     child.on("close", (code) => {
+      if (timer) clearTimeout(timer);
+      const ok = code === 0 || out.trim().length > 0;
+      if (!recorded) {
+        recorded = true;
+        void reportConcordiaCostOneShot({
+          service: "quaestor",
+          provider: "claude",
+          command: `${cliPath} -p --output-format json`,
+          cwd: process.cwd(),
+          prompt,
+          status: ok ? "ok" : "error",
+          exit_code: code,
+          duration_ms: Date.now() - startedAt,
+          metadata: { stderr: errOut.slice(0, 1000) },
+        });
+      }
       if (code === 0 || out.trim()) resolveOut(out);
       else reject(new Error(`claude CLI exited ${code}: ${errOut.slice(0, 300)}`));
     });
 
     child.stdin.end(prompt);
-    const t = setTimeout(() => { try { child.kill("SIGTERM"); } catch { /* noop */ } }, opts.timeoutMs ?? 120_000);
-    t.unref();
+    timer = setTimeout(() => {
+      if (!recorded) {
+        recorded = true;
+        void reportConcordiaCostOneShot({
+          service: "quaestor",
+          provider: "claude",
+          command: `${cliPath} -p --output-format json`,
+          cwd: process.cwd(),
+          prompt,
+          status: "timeout",
+          exit_code: -1,
+          duration_ms: Date.now() - startedAt,
+        });
+      }
+      try { child.kill("SIGTERM"); } catch { /* noop */ }
+    }, opts.timeoutMs ?? 120_000);
+    timer.unref();
   });
 }
 
