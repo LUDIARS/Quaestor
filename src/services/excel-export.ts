@@ -1,7 +1,7 @@
 /**
  * 仕訳帳 Excel ファイル生成。 calc/2025.xlsx の「仕訳帳」シート互換レイアウト。
  *
- * 列構造 (calc/spec/calc-lessons.md 仕訳帳列構造):
+ * 列構造 (calc/spec/data/calc-lessons.md 仕訳帳列構造):
  *   B: 日付 (Excel シリアル)
  *   C: 仕訳番号
  *   D: 借方科目コード
