@@ -1,7 +1,7 @@
 /**
  * transactions + apportionment_rules.resolve から「仕訳帳」 (calc 互換) を生成。
  *
- * 仕訳生成ロジック (spec/account-codes.md より):
+ * 仕訳生成ロジック (spec/data/account-codes.md より):
  *   rate=1.0 (100% 経費):
  *     借方 <経費code>(amount) / 貸方 102 当座預金 (amount)、 摘要=店名
  *   0 < rate < 1 (一部経費):
