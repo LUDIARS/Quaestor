@@ -66,6 +66,8 @@ import { suggestSubsidies } from "./services/subsidy-advisor.js";
 import { ClaudeAllocationAdvisor, type AllocationAdvisor } from "./services/allocation-advisor.js";
 import { AllocationAdviceStore } from "./services/allocation-advice-store.js";
 import { detectClaudeCli as detectCli } from "./services/claude-cli.js";
+import { ApportionmentAdvisor, ClaudeCliApportionmentLlm, type ApportionmentLlm } from "./services/apportionment-advisor.js";
+import { apportionmentAdvisorRouter } from "./api/apportionment-advisor.js";
 import { configRouter } from "./api/config.js";
 
 export interface AppDeps {
@@ -94,6 +96,8 @@ export interface AppDeps {
   notifyStatePath?: string;
   /** 資産配分アドバイザ。 省略時は claude CLI があれば有効、 無ければ undefined */
   allocationAdvisor?: AllocationAdvisor | "auto" | "disabled";
+  /** 未知 payee の科目学習 LLM。 省略時は claude CLI があれば有効、 無ければ undefined */
+  apportionmentLlm?: ApportionmentLlm | "auto" | "disabled";
   /** 配分アドバイスのキャッシュファイル。 既定 'app_data/allocation-advice.json' */
   allocationAdvicePath?: string;
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
@@ -174,6 +178,15 @@ export function buildApp(deps: AppDeps): Hono {
     dividendClient,
   });
 
+  // 未知 payee の科目学習 (成長型ブラックボックス @ludiars/blackbox)
+  const apportionmentLlm: ApportionmentLlm | undefined =
+    deps.apportionmentLlm === "disabled" ? undefined
+    : deps.apportionmentLlm && deps.apportionmentLlm !== "auto" ? deps.apportionmentLlm
+    : detectCli() ? new ClaudeCliApportionmentLlm(accounts) : undefined;
+  const apportionmentAdvisor = new ApportionmentAdvisor({
+    db: deps.db, rules, accounts, llm: apportionmentLlm,
+  });
+
   // Discord 通知 (送信専用 webhook)。 アドバイザー出力を整形して push する
   const notifier = resolveDiscordNotifier(deps.discordNotifier);
   const notificationState = new NotificationState(deps.notifyStatePath ?? "app_data/notifications-state.json");
@@ -213,6 +226,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
+  app.route("/v1/apportionment-advisor", apportionmentAdvisorRouter({ advisor: apportionmentAdvisor }));
   app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator }));
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
