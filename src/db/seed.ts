@@ -1,5 +1,5 @@
 /**
- * 初期 seed データ。 calc/spec/account-codes.md と同じ内容。
+ * 初期 seed データ。 calc/spec/data/account-codes.md と同じ内容。
  * DB 起動時に「account_codes が空なら」 seed する (冪等)。
  */
 
@@ -34,7 +34,7 @@ export const SEED_ACCOUNTS: SeedAccount[] = [
  * 按分率ルール初期 seed。 priority は **小さいほど優先**。
  * pattern は regex (i flag 既定で付与)、 全角・半角両対応の表現を入れている。
  *
- * 詳細出典: spec/account-codes.md。 calc/convert-all-with-rate.js RATE_RULES を移植。
+ * 詳細出典: spec/data/account-codes.md。 calc/convert-all-with-rate.js RATE_RULES を移植。
  */
 export interface SeedRule {
   pattern: string;
