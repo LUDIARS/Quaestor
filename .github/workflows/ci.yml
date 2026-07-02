@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 # 同一 PR / branch に新 push があれば古い run はキャンセル
 concurrency:
@@ -22,14 +23,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # @ludiars scope (GitHub Packages) は組織内パッケージをビルトイン
+      # GITHUB_TOKEN (packages:read) で取得する。
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: package-lock.json
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@ludiars'
 
       - name: Install
         run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check (lint)
         run: npm run lint
