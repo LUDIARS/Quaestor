@@ -192,7 +192,7 @@ AR scanner 経由で生成された `Receipt` を `transactions` には複製し
 
 ## 過去資産 (calc) からの継承
 
-`E:\calc` で確定申告 2025 用に作った personal toolset から学びを抽出済。 詳細は [`spec/calc-lessons.md`](./spec/calc-lessons.md)、 標準科目体系と按分率初期 seed は [`spec/account-codes.md`](./spec/account-codes.md) 参照。
+`E:\calc` で確定申告 2025 用に作った personal toolset から学びを抽出済。 詳細は [`spec/data/calc-lessons.md`](./spec/data/calc-lessons.md)、 標準科目体系と按分率初期 seed は [`spec/data/account-codes.md`](./spec/data/account-codes.md) 参照。
 
 主な継承ポイント:
 - SJIS CSV (iconv-lite)、 日付 4 形式、 金額正規化
