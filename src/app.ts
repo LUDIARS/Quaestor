@@ -69,6 +69,7 @@ import { detectClaudeCli as detectCli } from "./services/claude-cli.js";
 import { ApportionmentAdvisor, ClaudeCliApportionmentLlm, type ApportionmentLlm } from "./services/apportionment-advisor.js";
 import { apportionmentAdvisorRouter } from "./api/apportionment-advisor.js";
 import { configRouter } from "./api/config.js";
+import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -249,6 +250,7 @@ export function buildApp(deps: AppDeps): Hono {
   }));
   app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
   app.route("/v1/config", configRouter());
+  app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
 
   return app;
 }
