@@ -25,6 +25,11 @@
   "training": {
     "gaRoot": "app_data/training/ga"
   },
+  "invoiceShare": {
+    "$comment": "請求書の公開マジックリンク (spec/feature/invoice-public-magic-link.md)。 publicUrl は Cloudflare 経由の HTTPS origin のみ (path/query/credential 不可)。 null の間はリンク発行が 503 で失敗する。 roots はこの PDF 以外を共有させないための許可ルート。",
+    "publicUrl": null,
+    "roots": ["data", "app_data/invoices"]
+  },
   "notifications": {
     "$comment": "アドバイザーのアドバイスを Discord webhook に定期通知。 webhook URL は `npm run secret -- set QUAESTOR_DISCORD_WEBHOOK_URL <url>` で登録。 subsidies は crawl+LLM が走るため既定 off (planId 指定で有効化)。",
     "enabled": false,

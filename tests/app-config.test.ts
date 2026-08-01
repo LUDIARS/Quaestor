@@ -10,6 +10,7 @@ const ENV_KEYS = [
   "QUAESTOR_OCR_WORKER", "QUAESTOR_OCR_INTERVAL_MS",
   "QUAESTOR_OCR_SIDECAR_MANAGE", "QUAESTOR_OCR_SIDECAR_PORT",
   "QUAESTOR_OCR_SIDECAR_URL", "QUAESTOR_OCR_LANG", "QUAESTOR_OCR_PYTHON",
+  "QUAESTOR_PUBLIC_URL", "QUAESTOR_INVOICE_SHARE_ROOTS",
 ];
 
 describe("app-config loader (§7.1)", () => {
@@ -68,6 +69,24 @@ describe("app-config loader (§7.1)", () => {
     const c = loadAppConfig(p);
     expect(c.server.port).toBe(19000);
     expect(c.ocrWorker.enabled).toBe(false);
+  });
+
+  it("invoiceShare: 既定は publicUrl 未設定、 env/ファイルで解決する", () => {
+    const bare = loadAppConfig(join(dir, "missing.json"));
+    expect(bare.invoiceShare.publicUrl).toBeNull();
+    expect(bare.invoiceShare.roots).toEqual(["data", "app_data/invoices"]);
+
+    const p = join(dir, "q.json");
+    writeFileSync(p, JSON.stringify({
+      invoiceShare: { publicUrl: "https://from-file.example.com", roots: ["app_data/invoices"] },
+    }), "utf8");
+    expect(loadAppConfig(p).invoiceShare.publicUrl).toBe("https://from-file.example.com");
+
+    process.env.QUAESTOR_PUBLIC_URL = "https://qs.example.com";
+    process.env.QUAESTOR_INVOICE_SHARE_ROOTS = " data ; app_data/invoices ;";
+    const c = loadAppConfig(p);
+    expect(c.invoiceShare.publicUrl).toBe("https://qs.example.com");
+    expect(c.invoiceShare.roots).toEqual(["data", "app_data/invoices"]);
   });
 
   it("壊れた JSON は既定値で起動を止めない", () => {

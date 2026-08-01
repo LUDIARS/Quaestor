@@ -22,6 +22,8 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `ocrSidecar.venvPython` | `null` (= 3.12→3.9 自動探索) | .venv を**作る** python (setup.ps1/sh)。paddlepaddle は 3.9-3.12 のみ wheel 提供 | — |
 | `ocrSidecar.externalUrl` | `null` | 外部 sidecar 利用 (指定時は起動しない) | `QUAESTOR_OCR_SIDECAR_URL` |
 | `training.gaRoot` | `app_data/training/ga` | OCR-GA 永続 + 学習ログ (ocr-ga.ts) | — |
+| `invoiceShare.publicUrl` | `null` | 請求書マジックリンクの公開 HTTPS origin。 `null` = 発行不可 (503) | `QUAESTOR_PUBLIC_URL` |
+| `invoiceShare.roots` | `["data","app_data/invoices"]` | 共有を許可する PDF ルート (invoice-share-service.ts) | `QUAESTOR_INVOICE_SHARE_ROOTS` (`;` 区切り) |
 
 web (ブラウザ) は `import.meta.env` を使わない。非シークレット設定は
 `GET /v1/config` (app.ts) → `web/src/lib/runtime-config.ts` で受け取る。

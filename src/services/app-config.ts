@@ -50,6 +50,13 @@ export interface AppConfig {
   training: {
     gaRoot: string;
   };
+  /** 請求書の公開マジックリンク (spec/feature/invoice-public-magic-link.md) */
+  invoiceShare: {
+    /** 公開 HTTPS origin (path/query/fragment/credential 不可)。 null = リンク発行不可 */
+    publicUrl: string | null;
+    /** 共有を許可する PDF ルート。 相対はプロセス CWD 基準 */
+    roots: string[];
+  };
   /** 補助金の定期クロール (#278)。 */
   subsidyCrawl: {
     enabled: boolean;       // master switch (既定 false)
@@ -77,6 +84,7 @@ const DEFAULTS: AppConfig = {
     lang: "japan", python: null, venvPython: null, externalUrl: null,
   },
   training: { gaRoot: "app_data/training/ga" },
+  invoiceShare: { publicUrl: null, roots: ["data", "app_data/invoices"] },
   subsidyCrawl: {
     enabled: false,
     intervalMs: 86_400_000,   // 24h
@@ -124,6 +132,11 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
     training: {
       gaRoot: str(undefined, fromFile?.training?.gaRoot, DEFAULTS.training.gaRoot),
     },
+    invoiceShare: {
+      publicUrl: strOrNull(env("QUAESTOR_PUBLIC_URL"), fromFile?.invoiceShare?.publicUrl),
+      roots: semicolonList(env("QUAESTOR_INVOICE_SHARE_ROOTS"))
+        ?? arr(fromFile?.invoiceShare?.roots, DEFAULTS.invoiceShare.roots),
+    },
     subsidyCrawl: {
       enabled:         flag(env("QUAESTOR_SUBSIDY_CRAWL"),          fromFile?.subsidyCrawl?.enabled,         DEFAULTS.subsidyCrawl.enabled),
       intervalMs:      num(env("QUAESTOR_SUBSIDY_CRAWL_INTERVAL_MS"), fromFile?.subsidyCrawl?.intervalMs,    DEFAULTS.subsidyCrawl.intervalMs),
@@ -164,6 +177,7 @@ type PartialConfig = {
   subsidyCrawl?: Partial<AppConfig["subsidyCrawl"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
+  invoiceShare?: Partial<AppConfig["invoiceShare"]>;
   notifications?: Partial<Omit<AppConfig["notifications"], "subsidies">> & {
     subsidies?: Partial<AppConfig["notifications"]["subsidies"]>;
   };
@@ -204,6 +218,13 @@ function num(envVal: string | undefined, fileVal: number | undefined | null, def
 function flag(envVal: string | undefined, fileVal: boolean | undefined | null, def: boolean): boolean {
   if (envVal !== undefined) return envVal !== "0" && envVal.toLowerCase() !== "false";
   return fileVal ?? def;
+}
+
+/** env の ";" 区切りリスト。 未指定/空なら undefined (= ファイル/既定値へ委譲) */
+function semicolonList(envVal: string | undefined): string[] | undefined {
+  if (envVal === undefined) return undefined;
+  const items = envVal.split(";").map((v) => v.trim()).filter(Boolean);
+  return items.length > 0 ? items : undefined;
 }
 
 function arr(fileVal: string[] | undefined | null, def: string[]): string[] {

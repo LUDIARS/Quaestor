@@ -12,6 +12,7 @@ import { ApportionmentRulesRepo } from "./db/apportionment-rules-repo.js";
 import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { InvoicesRepo } from "./db/invoices-repo.js";
+import { InvoiceShareRepo } from "./db/invoice-share-repo.js";
 import { FinancialStatementsRepo } from "./db/financial-statements-repo.js";
 import { SecuritiesRepo } from "./db/securities-repo.js";
 import { PayeeSecuritiesRepo } from "./db/payee-securities-repo.js";
@@ -46,6 +47,7 @@ import { receiptsRouter } from "./api/receipts.js";
 import { reconciliationsRouter } from "./api/reconciliations.js";
 import { exportsRouter } from "./api/exports.js";
 import { invoicesRouter } from "./api/invoices.js";
+import { invoiceSharesRouter } from "./api/invoice-shares.js";
 import { dashboardRouter } from "./api/dashboard.js";
 import { financialStatementsRouter } from "./api/financial-statements.js";
 import { investRouter } from "./api/invest.js";
@@ -70,6 +72,8 @@ import { ApportionmentAdvisor, ClaudeCliApportionmentLlm, type ApportionmentLlm 
 import { apportionmentAdvisorRouter } from "./api/apportionment-advisor.js";
 import { configRouter } from "./api/config.js";
 import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
+import { InvoiceShareService } from "./services/invoice-share-service.js";
+import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -105,6 +109,11 @@ export interface AppDeps {
   gaRoot?: string;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
   publicConfig?: { ocrSidecarUrl: string };
+  /**
+   * 請求書の公開マジックリンク設定 (app-config.ts の invoiceShare)。
+   * publicUrl 未設定ならリンク発行は 503 で失敗する (loopback へ fallback しない)。
+   */
+  invoiceShare?: { publicUrl?: string | null; roots?: string[] };
 }
 
 export function buildApp(deps: AppDeps): Hono {
@@ -116,6 +125,7 @@ export function buildApp(deps: AppDeps): Hono {
   const receipts = new ReceiptsRepo(deps.db);
   const reconciliations = new ReconciliationsRepo(deps.db);
   const invoices = new InvoicesRepo(deps.db);
+  const invoiceShares = new InvoiceShareRepo(deps.db);
   const fs = new FinancialStatementsRepo(deps.db);
   const securities = new SecuritiesRepo(deps.db);
   const payeeSecurities = new PayeeSecuritiesRepo(deps.db);
@@ -208,6 +218,12 @@ export function buildApp(deps: AppDeps): Hono {
   });
 
   const app = new Hono();
+  const invoiceShareService = new InvoiceShareService({
+    invoices,
+    shares: invoiceShares,
+    publicBaseUrl: deps.invoiceShare?.publicUrl ?? undefined,
+    allowedRoots: deps.invoiceShare?.roots?.length ? deps.invoiceShare.roots : undefined,
+  });
 
   app.get("/health", (c) => c.json({
     ok: true,
@@ -232,6 +248,10 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
+  app.route("/v1/invoices", invoiceSharesRouter({
+    service: invoiceShareService,
+    rateLimiter: new InvoiceShareRateLimiter(),
+  }));
   app.route("/v1/invoices", invoicesRouter({ repo: invoices }));
   app.route("/v1/dashboard", dashboardRouter({ db: deps.db }));
   app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));

@@ -132,6 +132,28 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client)`,
   `CREATE INDEX IF NOT EXISTS idx_invoices_tx ON invoices(transaction_id)`,
 
+  // invoice_share_tokens — 公開PDFマジックリンク。URLトークンはSHA-256ダイジェストのみ保存する。
+  `CREATE TABLE IF NOT EXISTS invoice_share_tokens (
+    id                TEXT PRIMARY KEY,
+    invoice_id        INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    token_hash        TEXT NOT NULL UNIQUE,
+    document_path     TEXT NOT NULL,
+    document_sha256   TEXT NOT NULL CHECK (length(document_sha256) = 64),
+    document_size     INTEGER NOT NULL CHECK (document_size > 0),
+    filename          TEXT NOT NULL,
+    expires_at        INTEGER NOT NULL,
+    revoked_at        INTEGER,
+    first_viewed_at   INTEGER,
+    last_viewed_at    INTEGER,
+    view_count        INTEGER NOT NULL DEFAULT 0,
+    created_at        INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_invoice
+     ON invoice_share_tokens(invoice_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_expiry
+     ON invoice_share_tokens(expires_at, revoked_at)`,
+
   // financial_statements — 年次決算書 (損益計算書 P&L、 貸借対照表 BS、 月別売上、 控除等)
   // 2025 のような実値はxlsx取込で source='imported' として入る。 他年度は計算 ('computed') 。
   `CREATE TABLE IF NOT EXISTS financial_statements (
@@ -444,7 +466,7 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 8");
+  db.pragma("user_version = 9");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */

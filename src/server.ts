@@ -49,6 +49,7 @@ const app = buildApp({
   receiptsRoot: RECEIPTS_ROOT,
   gaRoot: config.training.gaRoot,
   publicConfig: { ocrSidecarUrl: sidecarUrlOf(config) },
+  invoiceShare: config.invoiceShare,
 });
 
 // OCR worker: ANTHROPIC_API_KEY あり (env or 暗号化ストア) かつ ocrWorker.enabled で起動
