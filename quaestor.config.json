@@ -27,7 +27,7 @@
   },
   "invoiceShare": {
     "$comment": "請求書の公開マジックリンク (spec/feature/invoice-public-magic-link.md)。 publicUrl は Cloudflare 経由の HTTPS origin のみ (path/query/credential 不可)。 null の間はリンク発行が 503 で失敗する。 roots はこの PDF 以外を共有させないための許可ルート。",
-    "publicUrl": null,
+    "publicUrl": "https://qs.ai-run-do.com",
     "roots": ["data", "app_data/invoices"]
   },
   "notifications": {
