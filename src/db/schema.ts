@@ -455,6 +455,7 @@ export function applyMigrations(db: Database.Database): void {
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
   db.transaction(() => {
+    preserveLegacyInvoiceShareTable(db);
     for (const sql of STATEMENTS) db.exec(sql);
   })();
   // 追加カラム (冪等的に追加) — INDEX は ALTER の後に発行する
@@ -467,6 +468,49 @@ export function applyMigrations(db: Database.Database): void {
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
   db.pragma("user_version = 9");
+}
+
+const INVOICE_SHARE_REQUIRED_COLUMNS = [
+  "id",
+  "invoice_id",
+  "token_hash",
+  "document_path",
+  "document_sha256",
+  "document_size",
+  "filename",
+  "expires_at",
+  "revoked_at",
+  "first_viewed_at",
+  "last_viewed_at",
+  "view_count",
+  "created_at",
+] as const;
+
+/**
+ * 正式導入前のローカル版には同名で非互換なテーブルが存在した。
+ * 行を削除せず legacy テーブルへ退避し、現行 CREATE TABLE が新しい正本を作れるようにする。
+ */
+function preserveLegacyInvoiceShareTable(db: Database.Database): void {
+  const columns = db.prepare("PRAGMA table_info(invoice_share_tokens)").all() as { name: string }[];
+  if (
+    columns.length === 0
+    || INVOICE_SHARE_REQUIRED_COLUMNS.every((required) => columns.some(({ name }) => name === required))
+  ) {
+    return;
+  }
+
+  const backupColumns = db.prepare("PRAGMA table_info(invoice_share_tokens_legacy_v8)").all() as { name: string }[];
+  if (backupColumns.length > 0) {
+    throw new Error(
+      "invoice_share_tokens and invoice_share_tokens_legacy_v8 are both legacy schemas; "
+      + "rename or drop invoice_share_tokens_legacy_v8 by hand so the backup is not overwritten",
+    );
+  }
+
+  db.exec("ALTER TABLE invoice_share_tokens RENAME TO invoice_share_tokens_legacy_v8");
+  // SQLite は明示 index 名を table rename 後も保持するため、現行 table 用の名前だけ解放する。
+  db.exec("DROP INDEX IF EXISTS idx_invoice_share_invoice");
+  db.exec("DROP INDEX IF EXISTS idx_invoice_share_expiry");
 }
 
 /** 既に column が存在する DB に対しても安全な ADD COLUMN */

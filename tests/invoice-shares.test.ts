@@ -207,6 +207,77 @@ describe("InvoiceShareService", () => {
   });
 });
 
+describe("invoice share schema migration", () => {
+  /** 正式導入前のローカル版が作っていた非互換テーブル (index 名は現行と衝突する)。 */
+  function createLegacyShareTable(db: Database.Database, table: string): void {
+    db.exec(`CREATE TABLE ${table} (
+      id INTEGER PRIMARY KEY,
+      invoice_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL,
+      recipient_email TEXT,
+      expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      viewed_at INTEGER
+    )`);
+    db.prepare(`INSERT INTO ${table}
+      (invoice_id, token_hash, recipient_email, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?)`
+    ).run(42, "legacy-token-hash", "legacy@example.com", START + 100, START);
+  }
+
+  /** index はテーブルに紐づくので、 どのテーブルの index かで名前解放を確認する。 */
+  function indexOwner(db: Database.Database, index: string): string | undefined {
+    const row = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get(index) as { tbl_name: string } | undefined;
+    return row?.tbl_name;
+  }
+
+  it("非互換なローカル版テーブルを行ごと保存して現行テーブルを作る", () => {
+    const db = new Database(":memory:");
+    try {
+      createLegacyShareTable(db, "invoice_share_tokens");
+      // ローカル版が現行と同名の index を持っていても、 現行テーブル側に張り直せること。
+      db.exec("CREATE INDEX idx_invoice_share_invoice ON invoice_share_tokens(invoice_id, created_at)");
+      db.exec("CREATE INDEX idx_invoice_share_expiry ON invoice_share_tokens(expires_at)");
+
+      applyMigrations(db);
+
+      const currentColumns = db.pragma("table_info(invoice_share_tokens)") as { name: string }[];
+      expect(currentColumns.map(({ name }) => name)).toContain("document_sha256");
+      expect(currentColumns.map(({ name }) => name)).toContain("revoked_at");
+      expect(db.prepare("SELECT COUNT(*) AS count FROM invoice_share_tokens").get()).toEqual({ count: 0 });
+      expect(db.prepare("SELECT recipient_email FROM invoice_share_tokens_legacy_v8").get())
+        .toEqual({ recipient_email: "legacy@example.com" });
+      expect(indexOwner(db, "idx_invoice_share_invoice")).toBe("invoice_share_tokens");
+      expect(indexOwner(db, "idx_invoice_share_expiry")).toBe("invoice_share_tokens");
+
+      // 冪等: 2回目は現行テーブルを維持する。
+      expect(() => applyMigrations(db)).not.toThrow();
+      expect(db.prepare("SELECT recipient_email FROM invoice_share_tokens_legacy_v8").get())
+        .toEqual({ recipient_email: "legacy@example.com" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("退避先が既に埋まっている場合は上書きせず失敗し、 元テーブルを残す", () => {
+    const db = new Database(":memory:");
+    try {
+      createLegacyShareTable(db, "invoice_share_tokens");
+      createLegacyShareTable(db, "invoice_share_tokens_legacy_v8");
+
+      expect(() => applyMigrations(db)).toThrow(/legacy/);
+
+      // transaction が rollback されるので、 退避前の行はどちらのテーブルにも残る。
+      expect(db.prepare("SELECT COUNT(*) AS count FROM invoice_share_tokens").get()).toEqual({ count: 1 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM invoice_share_tokens_legacy_v8").get())
+        .toEqual({ count: 1 });
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe("InvoiceShareRateLimiter", () => {
   it("固定ウィンドウで上限を超えた分だけ拒否し、 ウィンドウ経過後に復帰する", () => {
     let now = 0;

@@ -59,6 +59,16 @@ CSP. A local fixed-window limiter allows 60 requests per five minutes per Cloudf
 Opening a link increments an audit counter but never consumes it, because email security scanners
 may prefetch links. Links remain reusable until expiry or explicit revocation.
 
+## Storage migration
+
+Share tokens live in `invoice_share_tokens` (see `src/db/schema.ts`). Local databases created before
+this feature shipped may hold a same-named but incompatible table. On startup `applyMigrations`
+renames such a table to `invoice_share_tokens_legacy_v8` — rows are retained for manual inspection,
+never dropped — and frees the `idx_invoice_share_invoice` / `idx_invoice_share_expiry` index names so
+the current table gets its own indexes. Detection is by column set, so the step is idempotent. If
+`invoice_share_tokens_legacy_v8` is already present the migration fails closed rather than
+overwriting an earlier backup; resolve it by renaming or dropping that table by hand.
+
 ## Cloudflare Access
 
 Keep the existing Access application for `qs.ai-run-do.com`. Add a more-specific self-hosted
