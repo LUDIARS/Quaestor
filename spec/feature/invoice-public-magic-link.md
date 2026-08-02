@@ -13,7 +13,7 @@ the source of truth, env is override only — see `spec/setup/config-and-secrets
 
 | Config key | Required | Env override | Purpose |
 |---|---:|---|---|
-| `invoiceShare.publicUrl` | yes | `QUAESTOR_PUBLIC_URL` | Clean HTTPS origin, for example `https://qs.ai-run-do.com`. |
+| `invoiceShare.publicUrl` | yes | `QUAESTOR_PUBLIC_URL` | Clean HTTPS origin dedicated to magic links, for example `https://qs-magiclink.ai-run-do.com`. |
 | `invoiceShare.roots` | no | `QUAESTOR_INVOICE_SHARE_ROOTS` (`;`-separated) | PDF roots. Defaults to `data`, `app_data/invoices`. |
 
 `invoiceShare.publicUrl` must not contain credentials, a path, query, or fragment. Missing or
@@ -71,12 +71,25 @@ overwriting an earlier backup; resolve it by renaming or dropping that table by 
 
 ## Cloudflare Access
 
-Keep the existing Access application for `qs.ai-run-do.com`. Add a more-specific self-hosted
-application only for:
+Magic links use their own hostname (`invoiceShare.publicUrl`, currently
+`qs-magiclink.ai-run-do.com`) so that the bypass policy never widens the main `qs.ai-run-do.com`
+application. A dedicated hostname does **not** narrow what the origin serves: the same backend
+answers every `/v1/*` route on any hostname that reaches it, so the magic-link hostname needs its
+own Access application or the issuer CRUD routes become publicly reachable through it.
+
+Required setup:
+
+1. Keep the existing Access application for `qs.ai-run-do.com` unchanged.
+2. Add a self-hosted Access application covering the magic-link hostname as a whole
+   (`qs-magiclink.ai-run-do.com`) with the same issuer-only policy — this is the default-deny.
+3. Add a more-specific self-hosted application only for:
 
 ```text
-qs.ai-run-do.com/v1/invoices/share/*
+qs-magiclink.ai-run-do.com/v1/invoices/share/*
 ```
 
-Attach a `Bypass` / `Everyone` policy to that application. Do not bypass `/v1/invoices/*`, `/health`,
-or the hostname as a whole. The origin must remain reachable only through the Cloudflare Tunnel.
+Attach a `Bypass` / `Everyone` policy to that last application only. Do not bypass `/v1/invoices/*`,
+`/health`, or either hostname as a whole. The origin must remain reachable only through the
+Cloudflare Tunnel, and the tunnel ingress rule for the magic-link hostname must point at the backend
+(`127.0.0.1:17400`) — routing it through the Vite dev server would additionally require the hostname
+in `web.allowedHosts`.
