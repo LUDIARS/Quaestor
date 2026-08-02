@@ -38,10 +38,13 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 *.log
+logs/
+*.stackdump
 
 # DB / runtime data
 app_data/
 /claude-code-logs/
+/data/
 *.db
 *.db-shm
 *.db-wal
@@ -49,6 +52,7 @@ app_data/
 # Receipts (binary user data — never commit)
 receipts/
 imports/
+/receipt-*.jpg
 
 # Test
 coverage/
