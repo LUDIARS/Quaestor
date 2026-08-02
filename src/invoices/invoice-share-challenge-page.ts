@@ -26,7 +26,10 @@ export function invoiceShareChallengePage(input: {
   expiresAt?: number;
   error?: string;
 }): string {
-  const action = `/v1/invoices/share/${encodeURIComponent(input.token)}/accept/confirm`;
+  // Cloudflare Tunnel only needs to expose the stable /accept path.  Keeping the
+  // second phase on a child route caused production 404s when ingress lagged the
+  // application route, even though the first phase and OTP delivery succeeded.
+  const action = `/v1/invoices/share/${encodeURIComponent(input.token)}/accept`;
   const expiresAt = input.expiresAt === undefined ? null : new Intl.DateTimeFormat("ja-JP", {
     dateStyle: "long", timeStyle: "short", timeZone: "Asia/Tokyo",
   }).format(new Date(input.expiresAt * 1000));

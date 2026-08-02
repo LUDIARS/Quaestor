@@ -81,6 +81,12 @@ export function invoiceSharesRouter(deps: {
       return c.html(invalidInvoiceSharePage(), 403);
     }
     const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
+    // 両フェーズを同じ /accept に載せるため、 body のフィールドで分岐する。
+    // challenge_id / code が片方だけでも確認フェーズ扱いにするのは、 壊れた確認
+    // POST が黙って新しい challenge 発行 (= 追加のコードメール) に化けないため。
+    if (typeof body["challenge_id"] === "string" || typeof body["code"] === "string") {
+      return confirmAcceptance(c, body, deps);
+    }
     if (body["confirm"] !== "accepted") return c.html(invalidInvoiceSharePage(), 400);
     try {
       const challenge = await deps.acceptances.begin({ token: c.req.param("token") });
@@ -98,44 +104,14 @@ export function invoiceSharesRouter(deps: {
     }
   });
 
+  // 後方互換の確認エイリアス。 新しい challenge ページはこの子パスに依存しない。
+  // @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
   app.post("/share/:token/accept/confirm", async (c) => {
     if (c.req.header("Sec-Fetch-Site")?.toLowerCase() === "cross-site") {
       return c.html(invalidInvoiceSharePage(), 403);
     }
     const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
-    const challengeId = typeof body["challenge_id"] === "string" ? body["challenge_id"] : "";
-    const code = typeof body["code"] === "string" ? body["code"].trim() : "";
-    if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code)) {
-      return c.html(invalidInvoiceSharePage(), 400);
-    }
-    try {
-      const acceptance = await deps.acceptances.confirm({
-        token: c.req.param("token"), challengeId, code,
-        cfRay: c.req.header("CF-Ray"), userAgent: c.req.header("user-agent"),
-        cloudflareClientAddress: c.req.header("CF-Connecting-IP"),
-        visitorLocation: {
-          latitude: c.req.header("cf-iplatitude"),
-          longitude: c.req.header("cf-iplongitude"),
-          countryCode: c.req.header("cf-ipcountry"),
-          regionCode: c.req.header("cf-region-code"),
-        },
-      });
-      const result = await deps.service.findPublic(c.req.param("token"), false);
-      return c.html(invoiceSharePage({
-        token: c.req.param("token"), invoice: result.invoice,
-        expiresAt: result.share.expires_at, documentSha256: result.share.document_sha256,
-        recipientCompany: result.share.recipient_company, acceptedAt: acceptance.accepted_at,
-      }));
-    } catch (error) {
-      if (error instanceof InvoiceShareChallengeError) {
-        return c.html(invoiceShareChallengePage({
-          token: c.req.param("token"), challengeId,
-          maskedEmail: MASKED_RECIPIENT_EMAIL_FALLBACK,
-          error: challengeErrorMessage(error),
-        }), error.status);
-      }
-      return publicShareError(c, error);
-    }
+    return confirmAcceptance(c, body, deps);
   });
 
   app.get("/share/:token/document.pdf", async (c) => {
@@ -215,6 +191,59 @@ export function invoiceSharesRouter(deps: {
   });
 
   return app;
+}
+
+/**
+ * 確認コード (OTP) フェーズの共通処理。
+ * `/accept` と後方互換の `/accept/confirm` の双方から呼ばれる。
+ *
+ * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-004 (spec/feature/invoice-public-magic-link.md)
+ */
+async function confirmAcceptance(
+  c: Context,
+  body: Record<string, string | File>,
+  deps: {
+    service: InvoiceShareService;
+    acceptances: InvoiceShareAcceptanceService;
+  },
+) {
+  const token = c.req.param("token");
+  if (!token) return c.html(invalidInvoiceSharePage(), 400);
+  const challengeId = typeof body["challenge_id"] === "string" ? body["challenge_id"] : "";
+  const code = typeof body["code"] === "string" ? body["code"].trim() : "";
+  if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code)) {
+    return c.html(invalidInvoiceSharePage(), 400);
+  }
+  try {
+    const acceptance = await deps.acceptances.confirm({
+      token, challengeId, code,
+      cfRay: c.req.header("CF-Ray"), userAgent: c.req.header("user-agent"),
+      cloudflareClientAddress: c.req.header("CF-Connecting-IP"),
+      visitorLocation: {
+        latitude: c.req.header("cf-iplatitude"),
+        longitude: c.req.header("cf-iplongitude"),
+        countryCode: c.req.header("cf-ipcountry"),
+        regionCode: c.req.header("cf-region-code"),
+      },
+    });
+    const result = await deps.service.findPublic(token, false);
+    return c.html(invoiceSharePage({
+      token, invoice: result.invoice,
+      expiresAt: result.share.expires_at, documentSha256: result.share.document_sha256,
+      recipientCompany: result.share.recipient_company, acceptedAt: acceptance.accepted_at,
+    }));
+  } catch (error) {
+    if (error instanceof InvoiceShareChallengeError) {
+      return c.html(invoiceShareChallengePage({
+        token, challengeId,
+        maskedEmail: MASKED_RECIPIENT_EMAIL_FALLBACK,
+        error: challengeErrorMessage(error),
+      }), error.status);
+    }
+    return publicShareError(c, error);
+  }
 }
 
 function challengeErrorMessage(error: InvoiceShareChallengeError): string {

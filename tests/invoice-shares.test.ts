@@ -477,6 +477,8 @@ describe("API: /v1/invoices share links", () => {
     expect(begin.status).toBe(200);
     const challengePage = await begin.text();
     expect(challengePage).toContain("メールで本人確認");
+    expect(challengePage).toContain(`action="/v1/invoices/share/${token}/accept"`);
+    expect(challengePage).not.toContain("/accept/confirm");
     expect(sentMessages).toHaveLength(1);
     expect(sentMessages[0]?.to).toBe("billing@example.com");
     const challengeId = challengePage.match(/name="challenge_id" value="([^"]+)"/)?.[1];
@@ -492,7 +494,7 @@ describe("API: /v1/invoices share links", () => {
     expect(repeatedBegin.status).toBe(200);
     expect(sentMessages).toHaveLength(1);
 
-    const accept = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+    const accept = await app.request(`/v1/invoices/share/${token}/accept`, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -603,6 +605,23 @@ describe("API: /v1/invoices share links", () => {
       body: new URLSearchParams({ challenge_id: challengeId, code: "000000" }).toString(),
     });
     expect(wrong.status).toBe(400);
+
+    // /accept に相乗りした確認 POST が壊れていても、新しい challenge 発行 (=
+    // 追加のコードメール) には化けず、そのまま 400 で閉じる。
+    for (const partialBody of [
+      new URLSearchParams({ challenge_id: challengeId }).toString(),
+      new URLSearchParams({ code: "000000" }).toString(),
+      new URLSearchParams({ confirm: "accepted", challenge_id: "not-a-uuid", code: "000000" }).toString(),
+    ]) {
+      const partial = await app.request(`/v1/invoices/share/${token}/accept`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: partialBody,
+      });
+      expect(partial.status).toBe(400);
+    }
+    expect(sentMessages).toHaveLength(1);
+
     expect((await app.request(
       `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
     )).status).toBe(404);

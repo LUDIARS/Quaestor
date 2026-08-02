@@ -36,7 +36,7 @@ An origin-address mismatch remains a secondary risk: Quaestor listens on `127.0.
 
 - Set the Tunnel origin explicitly to `http://127.0.0.1:17400`.
 - Confirm that only one public-hostname rule owns `qs-magiclink.ai-run-do.com` and that no older overlapping path rule remains.
-- Preserve the path rule `^/v1/invoices/share/[^/]+(/document[.]pdf|/accept(/confirm)?)?$`.
+- Preserve the path rule `^/v1/invoices/share/[^/]+(/document[.]pdf|/accept)?$`; both challenge creation and confirmation use the stable `/accept` path.
 - Add an external HTTP check for the public magic-link origin so transient Cloudflare failures are visible separately from Excubitor's local TCP health.
 - Keep invoice delivery idempotent so a transient 502 never causes duplicate email delivery or duplicate acceptance records.
 

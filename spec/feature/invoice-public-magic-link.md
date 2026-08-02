@@ -118,8 +118,8 @@ Clauses:
 |---|---|
 | `GET /v1/invoices/share/:token` | Minimal Japanese landing page with invoice summary. |
 | `GET /v1/invoices/share/:token/document.pdf` | Verified PDF rendered inline. |
-| `POST /v1/invoices/share/:token/accept` | Records intent and emails a six-digit challenge to the snapshotted recipient address. |
-| `POST /v1/invoices/share/:token/accept/confirm` | Verifies the one-time challenge and only then records final agreement. |
+| `POST /v1/invoices/share/:token/accept` | With `confirm=accepted`, records intent and emails a six-digit challenge. With `challenge_id` and `code`, verifies the challenge and only then records final agreement. Once either confirmation field is present the request is treated as a confirmation and fails closed on a malformed body, so a broken confirmation never re-enters the challenge-issuing branch. Keeping both phases on this stable path avoids Cloudflare ingress drift. |
+| `POST /v1/invoices/share/:token/accept/confirm` | Backward-compatible confirmation alias. New challenge pages do not depend on this child path. |
 
 Invalid, expired, revoked, cancelled-invoice, and unknown links return the same public error page.
 The public response never exposes invoice metadata, storage paths, token hashes, or audit rows.
