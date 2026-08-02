@@ -1,9 +1,16 @@
+/**
+ * 請求書PDFの発行時検証・トークン化・宛先スナップショット・公開時再検証。
+ *
+ * @implements SPEC-INVOICE-DELIVERY-002 (spec/feature/invoice-public-magic-link.md)
+ */
+
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { open, readFile, realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import type { InvoiceRow, InvoicesRepo } from "../db/invoices-repo.js";
 import type { InvoiceShareRepo, InvoiceShareRow } from "../db/invoice-share-repo.js";
+import type { InvoiceDeliveryContactsRepo } from "../db/invoice-delivery-contacts-repo.js";
 
 const DEFAULT_TTL_DAYS = 14;
 const MAX_TTL_DAYS = 30;
@@ -24,6 +31,7 @@ export interface CreateInvoiceShareInput {
   invoiceId: number;
   documentPath: string;
   expiresInDays?: number;
+  recipientId?: string;
 }
 
 export interface CreatedInvoiceShare {
@@ -33,6 +41,9 @@ export interface CreatedInvoiceShare {
   filename: string;
   documentSha256: string;
   documentSize: number;
+  recipientId: string | null;
+  recipientCompany: string | null;
+  recipientEmail: string | null;
 }
 
 export interface PublicInvoiceShare {
@@ -52,6 +63,7 @@ export interface InvoiceShareServiceOptions {
   now?: () => number;
   tokenFactory?: () => string;
   idFactory?: () => string;
+  contacts?: InvoiceDeliveryContactsRepo;
 }
 
 export class InvoiceShareService {
@@ -83,6 +95,12 @@ export class InvoiceShareService {
 
     const document = await this.inspectPdf(input.documentPath);
     const documentSha256 = await hashFile(document.path);
+    const recipient = input.recipientId
+      ? this.options.contacts?.findActive(input.recipientId)
+      : undefined;
+    if (input.recipientId && !recipient) {
+      throw new InvoiceShareError("not_found", "active invoice delivery contact not found", 404);
+    }
     const token = this.tokenFactory();
     if (!TOKEN_PATTERN.test(token)) throw new Error("tokenFactory returned an invalid opaque token");
     const createdAt = this.now();
@@ -95,6 +113,9 @@ export class InvoiceShareService {
       documentSha256,
       documentSize: document.size,
       filename: document.filename,
+      recipientId: recipient?.id,
+      recipientCompany: recipient?.company_name,
+      recipientEmail: recipient?.email,
       expiresAt,
       createdAt,
     });
@@ -105,6 +126,9 @@ export class InvoiceShareService {
       filename: row.filename,
       documentSha256: row.document_sha256,
       documentSize: row.document_size,
+      recipientId: row.recipient_id,
+      recipientCompany: row.recipient_company,
+      recipientEmail: row.recipient_email,
     };
   }
 
@@ -119,7 +143,7 @@ export class InvoiceShareService {
     return { share, invoice };
   }
 
-  async loadDocument(token: string): Promise<InvoiceShareDocument> {
+  async loadDocument(token: string, recordView = true): Promise<InvoiceShareDocument> {
     const result = await this.findPublic(token, false);
     const inspected = await this.inspectPdf(result.share.document_path);
     if (inspected.size !== result.share.document_size) {
@@ -130,12 +154,16 @@ export class InvoiceShareService {
     if (contents.length !== result.share.document_size || sha256(contents) !== result.share.document_sha256) {
       throw new InvoiceShareError("document_changed", "shared invoice document changed after link creation", 409);
     }
-    if (!this.options.shares.recordView(result.share.id, this.now())) throw notFound();
+    if (recordView && !this.options.shares.recordView(result.share.id, this.now())) throw notFound();
     return { ...result, contents };
   }
 
   revoke(invoiceId: number, shareId: string): boolean {
     return this.options.shares.revoke(shareId, invoiceId, this.now());
+  }
+
+  findById(shareId: string): InvoiceShareRow | undefined {
+    return this.options.shares.findById(shareId);
   }
 
   private requirePublicBaseUrl(): string {

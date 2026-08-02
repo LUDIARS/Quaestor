@@ -8,6 +8,9 @@ export interface InvoiceShareRow {
   document_sha256: string;
   document_size: number;
   filename: string;
+  recipient_id: string | null;
+  recipient_company: string | null;
+  recipient_email: string | null;
   expires_at: number;
   revoked_at: number | null;
   first_viewed_at: number | null;
@@ -24,6 +27,9 @@ export interface CreateInvoiceShareInput {
   documentSha256: string;
   documentSize: number;
   filename: string;
+  recipientId?: string | null;
+  recipientCompany?: string | null;
+  recipientEmail?: string | null;
   expiresAt: number;
   createdAt: number;
 }
@@ -35,10 +41,16 @@ export class InvoiceShareRepo {
     this.db.prepare(
       `INSERT INTO invoice_share_tokens
        (id, invoice_id, token_hash, document_path, document_sha256, document_size,
-        filename, expires_at, created_at)
+        filename, recipient_id, recipient_company, recipient_email, expires_at, created_at)
        VALUES (@id, @invoiceId, @tokenHash, @documentPath, @documentSha256,
-               @documentSize, @filename, @expiresAt, @createdAt)`,
-    ).run(input);
+               @documentSize, @filename, @recipientId, @recipientCompany, @recipientEmail,
+               @expiresAt, @createdAt)`,
+    ).run({
+      ...input,
+      recipientId: input.recipientId ?? null,
+      recipientCompany: input.recipientCompany ?? null,
+      recipientEmail: input.recipientEmail ?? null,
+    });
     return this.findById(input.id)!;
   }
 

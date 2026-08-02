@@ -34,6 +34,7 @@ API キー等は **平文でファイル保存しない** (§7.2)。
 
 - 保存: AES-256-GCM (AEAD)。鍵は本体と分離して `~/.quaestor/secret.key` (初回自動生成)。
 - 登録: `npm run secret -- set ANTHROPIC_API_KEY sk-ant-xxxx`
+- 標準入力から登録: `Get-Clipboard | npm run secret -- set-stdin NAME` (値をコマンド履歴・引数へ出さない)
 - 確認: `npm run secret -- list` (参照名のみ。値は出さない)
 - 削除: `npm run secret -- remove ANTHROPIC_API_KEY`
 - 利用: backend 起動時に `SecretStore.injectIntoEnv()` が復号してプロセスメモリ
@@ -45,6 +46,23 @@ API キー等は **平文でファイル保存しない** (§7.2)。
 | 参照名 | 用途 |
 |---|---|
 | `ANTHROPIC_API_KEY` | Vision OCR / 銘柄マッピング / 優待取得 / 差分 Opus 類推 |
+| `QUAESTOR_SLACK_BOT_TOKEN` | 請求書マジックリンク投稿用 Slack Bot User OAuth Token (`xoxb-...`) |
+| `QUAESTOR_SLACK_CONVERSATION_ID` | 既定の Slack グループ DM conversation ID (`G...`) |
+| `QUAESTOR_SLACK_USER_IDS` | グループ DM を開く2〜8名の user ID (`U...` / `W...`) を `;` 区切りで指定 |
+
+Slack の宛先は `QUAESTOR_SLACK_CONVERSATION_ID` と `QUAESTOR_SLACK_USER_IDS` のどちらか
+一方だけを登録する。両方ある場合は設定エラーとして起動時のアプリ組み立てを停止する。
+PowerShell では、値をクリップボードへコピーして次のように登録するとトークンを履歴や
+プロセス引数へ露出しない。
+
+```powershell
+Get-Clipboard | npm run secret -- set-stdin QUAESTOR_SLACK_BOT_TOKEN
+Get-Clipboard | npm run secret -- set-stdin QUAESTOR_SLACK_CONVERSATION_ID
+npm run secret -- list
+```
+
+ユーザー ID 方式を使う場合は2行目の代わりに、例えば
+`U012ABC;U345DEF` をクリップボードへコピーして登録する。
 
 ## 3. GA 学習ログ
 

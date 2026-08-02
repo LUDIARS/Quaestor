@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InvoiceDeliveryContacts } from "../components/InvoiceDeliveryContacts.js";
 import { MonthTabs, currentYear, currentMonth, monthRange } from "../components/MonthTabs.js";
 
 interface InvoiceRow {
@@ -129,6 +130,8 @@ export function Invoices() {
           ))}
         </section>
       )}
+
+      <InvoiceDeliveryContacts />
 
       <button className="btn" onClick={() => setCreating((v) => !v)} style={{ marginBottom: "0.75rem" }}>
         {creating ? "閉じる" : "+ 新規発行"}

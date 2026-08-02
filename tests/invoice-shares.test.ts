@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { applyMigrations } from "../src/db/schema.js";
 import { InvoicesRepo } from "../src/db/invoices-repo.js";
 import { InvoiceShareRepo } from "../src/db/invoice-share-repo.js";
+import { InvoiceDeliveryContactsRepo } from "../src/db/invoice-delivery-contacts-repo.js";
 import { InvoiceShareError, InvoiceShareService } from "../src/services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "../src/services/invoice-share-rate-limiter.js";
 import { buildApp } from "../src/app.js";
@@ -225,6 +226,29 @@ describe("invoice share schema migration", () => {
     ).run(42, "legacy-token-hash", "legacy@example.com", START + 100, START);
   }
 
+  function createCurrentV9ShareTable(db: Database.Database): void {
+    db.exec(`CREATE TABLE invoice_share_tokens (
+      id TEXT PRIMARY KEY,
+      invoice_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      document_path TEXT NOT NULL,
+      document_sha256 TEXT NOT NULL,
+      document_size INTEGER NOT NULL,
+      filename TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      revoked_at INTEGER,
+      first_viewed_at INTEGER,
+      last_viewed_at INTEGER,
+      view_count INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    )`);
+    db.prepare(`INSERT INTO invoice_share_tokens
+      (id, invoice_id, token_hash, document_path, document_sha256, document_size,
+       filename, expires_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("v9-share", 42, "v9-token", "invoice.pdf", "a".repeat(64), 123, "invoice.pdf", START + 100, START);
+  }
+
   /** index はテーブルに紐づくので、 どのテーブルの index かで名前解放を確認する。 */
   function indexOwner(db: Database.Database, index: string): string | undefined {
     const row = db.prepare("SELECT tbl_name FROM sqlite_master WHERE type = 'index' AND name = ?")
@@ -245,6 +269,7 @@ describe("invoice share schema migration", () => {
       const currentColumns = db.pragma("table_info(invoice_share_tokens)") as { name: string }[];
       expect(currentColumns.map(({ name }) => name)).toContain("document_sha256");
       expect(currentColumns.map(({ name }) => name)).toContain("revoked_at");
+      expect(currentColumns.map(({ name }) => name)).toContain("recipient_email");
       expect(db.prepare("SELECT COUNT(*) AS count FROM invoice_share_tokens").get()).toEqual({ count: 0 });
       expect(db.prepare("SELECT recipient_email FROM invoice_share_tokens_legacy_v8").get())
         .toEqual({ recipient_email: "legacy@example.com" });
@@ -255,6 +280,27 @@ describe("invoice share schema migration", () => {
       expect(() => applyMigrations(db)).not.toThrow();
       expect(db.prepare("SELECT recipient_email FROM invoice_share_tokens_legacy_v8").get())
         .toEqual({ recipient_email: "legacy@example.com" });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v9の現行リンク行を保持したまま宛先列と合意テーブルを追加する", () => {
+    const db = new Database(":memory:");
+    try {
+      createCurrentV9ShareTable(db);
+      applyMigrations(db);
+
+      const columns = db.pragma("table_info(invoice_share_tokens)") as { name: string }[];
+      expect(columns.map(({ name }) => name)).toEqual(expect.arrayContaining([
+        "recipient_id", "recipient_company", "recipient_email",
+      ]));
+      expect(db.prepare("SELECT id, recipient_email FROM invoice_share_tokens").get())
+        .toEqual({ id: "v9-share", recipient_email: null });
+      expect(db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'invoice_share_acceptances'",
+      ).get()).toEqual({ name: "invoice_share_acceptances" });
+      expect(db.pragma("user_version", { simple: true })).toBe(11);
     } finally {
       db.close();
     }
@@ -310,6 +356,7 @@ describe("API: /v1/invoices share links", () => {
   let pdfPath: string;
   let app: ReturnType<typeof buildApp>;
   let invoiceId: number;
+  let recipientId: string;
 
   beforeEach(() => {
     root = makeRoot("quaestor-share-api-");
@@ -323,6 +370,10 @@ describe("API: /v1/invoices share links", () => {
       invoiceShare: { publicUrl: "https://qs.example.com", roots: [root] },
     });
     invoiceId = createdInvoice(new InvoicesRepo(db));
+    recipientId = new InvoiceDeliveryContactsRepo(db).insert({
+      companyName: "Example Customer",
+      email: "billing@example.com",
+    }).id;
   });
 
   afterEach(() => {
@@ -372,6 +423,117 @@ describe("API: /v1/invoices share links", () => {
     expect(afterRevoke.status).toBe(404);
     expect(await afterRevoke.text()).toContain("リンクを確認できません");
     expect((await app.request(`/v1/invoices/share/${token}/document.pdf`)).status).toBe(404);
+  });
+
+  it("登録送信先をリンクへ固定し、明示合意と監査記録を冪等に保存する", async () => {
+    const create = await createShare({
+      document_path: pdfPath,
+      expires_in_days: 7,
+      recipient_id: recipientId,
+    });
+    expect(create.status).toBe(201);
+    const created = await create.json() as { share_id: string; share_url: string; document_sha256: string };
+    const token = created.share_url.slice(created.share_url.lastIndexOf("/") + 1);
+    new InvoiceDeliveryContactsRepo(db).update(recipientId, {
+      companyName: "Changed Customer",
+      email: "changed@example.com",
+    });
+
+    const page = await app.request(`/v1/invoices/share/${token}`);
+    const before = await page.text();
+    expect(before).toContain("Example Customer");
+    expect(before).not.toContain("Changed Customer");
+    expect(before).toContain("請求内容に合意する");
+    expect(before).toContain("電子証明書を使う電子署名ではありません");
+    expect(before).toContain(created.document_sha256.slice(0, 16));
+    expect(before).not.toContain("billing@example.com");
+
+    const accept = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "CF-Ray": "abc123-NRT",
+        "user-agent": "Acceptance Test Browser/1.0",
+      },
+      body: "confirm=accepted",
+    });
+    expect(accept.status).toBe(200);
+    expect(await accept.text()).toContain("請求内容への合意を記録しました");
+
+    const audit = await app.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
+    );
+    expect(audit.status).toBe(200);
+    const first = await audit.json() as { acceptance: Record<string, unknown> };
+    expect(first.acceptance).toMatchObject({
+      share_id: created.share_id,
+      invoice_id: invoiceId,
+      recipient_company: "Example Customer",
+      recipient_email: "billing@example.com",
+      document_sha256: created.document_sha256,
+      agreement_version: "invoice-content-v1",
+      cf_ray: "abc123-NRT",
+    });
+    expect(first.acceptance.user_agent_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(first.acceptance.evidence_sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(first)).not.toContain("Acceptance Test Browser/1.0");
+
+    const again = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "confirm=accepted",
+    });
+    expect(again.status).toBe(200);
+    const second = await (await app.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
+    )).json() as { acceptance: Record<string, unknown> };
+    expect(second.acceptance).toEqual(first.acceptance);
+  });
+
+  it("PDF差し替え後の合意は409で拒否し、監査行を作らない", async () => {
+    const create = await createShare({ document_path: pdfPath, recipient_id: recipientId });
+    const created = await create.json() as { share_id: string; share_url: string };
+    const token = created.share_url.slice(created.share_url.lastIndexOf("/") + 1);
+    writeFileSync(pdfPath, Buffer.concat([PDF, Buffer.from("changed")]));
+
+    const accept = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "confirm=accepted",
+    });
+    expect(accept.status).toBe(409);
+    expect((await app.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
+    )).status).toBe(404);
+  });
+
+  it("確認チェックなしの合意POSTを400で拒否する", async () => {
+    const create = await createShare({ document_path: pdfPath, recipient_id: recipientId });
+    const created = await create.json() as { share_url: string };
+    const token = created.share_url.slice(created.share_url.lastIndexOf("/") + 1);
+    const accept = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "confirm=no",
+    });
+    expect(accept.status).toBe(400);
+
+    const crossSite = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "Sec-Fetch-Site": "cross-site",
+      },
+      body: "confirm=accepted",
+    });
+    expect(crossSite.status).toBe(403);
+  });
+
+  it("無効化済みの送信先では新しいリンクを発行しない", async () => {
+    new InvoiceDeliveryContactsRepo(db).deactivate(recipientId);
+    const response = await createShare({ document_path: pdfPath, recipient_id: recipientId });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: "not_found" });
   });
 
   it("publicUrl 未設定なら発行を 503 で断り、 loopback URL を返さない", async () => {

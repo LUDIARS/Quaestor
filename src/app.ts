@@ -13,6 +13,9 @@ import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { InvoicesRepo } from "./db/invoices-repo.js";
 import { InvoiceShareRepo } from "./db/invoice-share-repo.js";
+import { InvoiceDeliveryContactsRepo } from "./db/invoice-delivery-contacts-repo.js";
+import { InvoiceShareAcceptanceRepo } from "./db/invoice-share-acceptance-repo.js";
+import { InvoiceShareAccessRepo } from "./db/invoice-share-access-repo.js";
 import { FinancialStatementsRepo } from "./db/financial-statements-repo.js";
 import { SecuritiesRepo } from "./db/securities-repo.js";
 import { PayeeSecuritiesRepo } from "./db/payee-securities-repo.js";
@@ -74,6 +77,17 @@ import { configRouter } from "./api/config.js";
 import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
+import { invoiceSlackDeliveriesRouter } from "./api/invoice-slack-deliveries.js";
+import { invoiceDeliveryContactsRouter } from "./api/invoice-delivery-contacts.js";
+import { InvoiceSlackDeliveryService } from "./services/invoice-slack-delivery.js";
+import { InvoiceShareAcceptanceService } from "./services/invoice-share-acceptance-service.js";
+import { InvoiceShareAccessService } from "./services/invoice-share-access-service.js";
+import {
+  resolveSlackInvoiceTarget,
+  SlackWebApiClient,
+  type SlackInvoiceNotifier,
+  type SlackInvoiceTarget,
+} from "./services/slack-web-api-client.js";
 
 export interface AppDeps {
   db: Database.Database;
@@ -114,6 +128,10 @@ export interface AppDeps {
    * publicUrl 未設定ならリンク発行は 503 で失敗する (loopback へ fallback しない)。
    */
   invoiceShare?: { publicUrl?: string | null; roots?: string[] };
+  /** Slack 請求書通知。 bot token は暗号化ストアから env 注入し、テスト時のみ明示 DI する。 */
+  slackInvoiceNotifier?: SlackInvoiceNotifier | "auto" | "disabled";
+  /** 既定の Slack グループ DM。未指定時は暗号化ストアへ注入された env から解決する。 */
+  slackInvoiceTarget?: SlackInvoiceTarget;
 }
 
 export function buildApp(deps: AppDeps): Hono {
@@ -126,6 +144,9 @@ export function buildApp(deps: AppDeps): Hono {
   const reconciliations = new ReconciliationsRepo(deps.db);
   const invoices = new InvoicesRepo(deps.db);
   const invoiceShares = new InvoiceShareRepo(deps.db);
+  const invoiceDeliveryContacts = new InvoiceDeliveryContactsRepo(deps.db);
+  const invoiceShareAcceptances = new InvoiceShareAcceptanceRepo(deps.db);
+  const invoiceShareAccesses = new InvoiceShareAccessRepo(deps.db);
   const fs = new FinancialStatementsRepo(deps.db);
   const securities = new SecuritiesRepo(deps.db);
   const payeeSecurities = new PayeeSecuritiesRepo(deps.db);
@@ -223,6 +244,21 @@ export function buildApp(deps: AppDeps): Hono {
     shares: invoiceShares,
     publicBaseUrl: deps.invoiceShare?.publicUrl ?? undefined,
     allowedRoots: deps.invoiceShare?.roots?.length ? deps.invoiceShare.roots : undefined,
+    contacts: invoiceDeliveryContacts,
+  });
+  const invoiceShareAcceptanceService = new InvoiceShareAcceptanceService({
+    shares: invoiceShareService,
+    acceptances: invoiceShareAcceptances,
+  });
+  const invoiceShareAccessService = new InvoiceShareAccessService({
+    accesses: invoiceShareAccesses,
+  });
+  const slackInvoiceNotifier = resolveSlackNotifier(deps.slackInvoiceNotifier);
+  const invoiceSlackDeliveryService = new InvoiceSlackDeliveryService({
+    invoices,
+    shares: invoiceShareService,
+    notifier: slackInvoiceNotifier,
+    defaultTarget: deps.slackInvoiceTarget ?? resolveSlackInvoiceTarget(),
   });
 
   app.get("/health", (c) => c.json({
@@ -251,8 +287,12 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/invoices", invoiceSharesRouter({
     service: invoiceShareService,
     rateLimiter: new InvoiceShareRateLimiter(),
+    acceptances: invoiceShareAcceptanceService,
+    accesses: invoiceShareAccessService,
   }));
+  app.route("/v1/invoices", invoiceSlackDeliveriesRouter({ service: invoiceSlackDeliveryService }));
   app.route("/v1/invoices", invoicesRouter({ repo: invoices }));
+  app.route("/v1/invoice-delivery-contacts", invoiceDeliveryContactsRouter({ repo: invoiceDeliveryContacts }));
   app.route("/v1/dashboard", dashboardRouter({ db: deps.db }));
   app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
@@ -273,6 +313,16 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
 
   return app;
+}
+
+/** @implements SPEC-INVOICE-SLACK-004 (spec/feature/invoice-public-magic-link.md) */
+function resolveSlackNotifier(
+  value: SlackInvoiceNotifier | "auto" | "disabled" | undefined,
+): SlackInvoiceNotifier | undefined {
+  if (value === "disabled") return undefined;
+  if (value && typeof value === "object") return value;
+  const token = process.env.QUAESTOR_SLACK_BOT_TOKEN?.trim();
+  return token ? new SlackWebApiClient({ botToken: token }) : undefined;
 }
 
 function resolveOcr(opt: OcrClient | "auto" | "disabled" | undefined): OcrClient | undefined {

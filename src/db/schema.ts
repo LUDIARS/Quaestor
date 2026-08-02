@@ -132,6 +132,19 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client)`,
   `CREATE INDEX IF NOT EXISTS idx_invoices_tx ON invoices(transaction_id)`,
 
+  // invoice_delivery_contacts — 請求書を送る企業・メールアドレスの台帳。
+  `CREATE TABLE IF NOT EXISTS invoice_delivery_contacts (
+    id           TEXT PRIMARY KEY,
+    company_name TEXT NOT NULL,
+    email        TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    active       INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_delivery_contacts_company
+     ON invoice_delivery_contacts(company_name, active)`,
+
   // invoice_share_tokens — 公開PDFマジックリンク。URLトークンはSHA-256ダイジェストのみ保存する。
   `CREATE TABLE IF NOT EXISTS invoice_share_tokens (
     id                TEXT PRIMARY KEY,
@@ -141,6 +154,9 @@ const STATEMENTS: string[] = [
     document_sha256   TEXT NOT NULL CHECK (length(document_sha256) = 64),
     document_size     INTEGER NOT NULL CHECK (document_size > 0),
     filename          TEXT NOT NULL,
+    recipient_id      TEXT REFERENCES invoice_delivery_contacts(id) ON DELETE SET NULL,
+    recipient_company TEXT,
+    recipient_email   TEXT,
     expires_at        INTEGER NOT NULL,
     revoked_at        INTEGER,
     first_viewed_at   INTEGER,
@@ -153,6 +169,43 @@ const STATEMENTS: string[] = [
      ON invoice_share_tokens(invoice_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_invoice_share_expiry
      ON invoice_share_tokens(expires_at, revoked_at)`,
+
+  // invoice_share_acceptances — 受領者が請求内容への合意を明示した監査記録。
+  `CREATE TABLE IF NOT EXISTS invoice_share_acceptances (
+    id                       TEXT PRIMARY KEY,
+    share_id                 TEXT NOT NULL UNIQUE REFERENCES invoice_share_tokens(id) ON DELETE CASCADE,
+    invoice_id               INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    recipient_company        TEXT,
+    recipient_email          TEXT,
+    document_sha256          TEXT NOT NULL CHECK (length(document_sha256) = 64),
+    agreement_version        TEXT NOT NULL,
+    agreement_text           TEXT NOT NULL,
+    accepted_at              INTEGER NOT NULL,
+    cf_ray                   TEXT,
+    user_agent_sha256        TEXT NOT NULL CHECK (length(user_agent_sha256) = 64),
+    evidence_sha256          TEXT NOT NULL CHECK (length(evidence_sha256) = 64)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_acceptance_invoice
+     ON invoice_share_acceptances(invoice_id, accepted_at)`,
+
+  // invoice_share_access_logs — 有効な公開リンクへの成功アクセスを追記する監査ログ。
+  `CREATE TABLE IF NOT EXISTS invoice_share_access_logs (
+    id                       TEXT PRIMARY KEY,
+    share_id                 TEXT NOT NULL REFERENCES invoice_share_tokens(id) ON DELETE CASCADE,
+    invoice_id               INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    event_type               TEXT NOT NULL CHECK (event_type IN ('landing_view', 'document_view')),
+    accessed_at              INTEGER NOT NULL,
+    cf_ray                   TEXT,
+    client_address_sha256    TEXT NOT NULL CHECK (length(client_address_sha256) = 64),
+    user_agent_sha256        TEXT NOT NULL CHECK (length(user_agent_sha256) = 64),
+    evidence_sha256          TEXT NOT NULL CHECK (length(evidence_sha256) = 64)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_access_share
+     ON invoice_share_access_logs(share_id, accessed_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_access_invoice
+     ON invoice_share_access_logs(invoice_id, accessed_at)`,
 
   // financial_statements — 年次決算書 (損益計算書 P&L、 貸借対照表 BS、 月別売上、 控除等)
   // 2025 のような実値はxlsx取込で source='imported' として入る。 他年度は計算 ('computed') 。
@@ -464,10 +517,18 @@ export function applyMigrations(db: Database.Database): void {
   // receipts.committed_at: 「投入」 済タイムスタンプ (NULL = 未投入)。
   // 手動シャッター flow で OCR 後にデータ完備を確認 → 投入する際にセットする。
   ensureColumn(db, "receipts", "committed_at", "INTEGER");
+  ensureColumn(
+    db,
+    "invoice_share_tokens",
+    "recipient_id",
+    "TEXT REFERENCES invoice_delivery_contacts(id) ON DELETE SET NULL",
+  );
+  ensureColumn(db, "invoice_share_tokens", "recipient_company", "TEXT");
+  ensureColumn(db, "invoice_share_tokens", "recipient_email", "TEXT");
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 9");
+  db.pragma("user_version = 11");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

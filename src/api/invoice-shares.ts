@@ -1,17 +1,33 @@
+/**
+ * 請求書マジックリンクの発行・閲覧・明示合意API。
+ *
+ * @implements SPEC-INVOICE-DELIVERY-002 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCESS-001 (spec/feature/invoice-public-magic-link.md)
+ */
+
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { invalidInvoiceSharePage, invoiceSharePage } from "../invoices/invoice-share-page.js";
 import { InvoiceShareError, type InvoiceShareService } from "../services/invoice-share-service.js";
 import type { InvoiceShareRateLimiter } from "../services/invoice-share-rate-limiter.js";
+import type { InvoiceShareAcceptanceService } from "../services/invoice-share-acceptance-service.js";
+import type { InvoiceShareAccessService } from "../services/invoice-share-access-service.js";
+
+const DEFAULT_ACCESS_LOG_LIMIT = 100;
+const MAX_ACCESS_LOG_LIMIT = 500;
 
 const CreateShareSchema = z.object({
   document_path: z.string().min(1).max(4096),
   expires_in_days: z.number().int().min(1).max(30).optional(),
+  recipient_id: z.string().uuid().optional(),
 }).strict();
 
 export function invoiceSharesRouter(deps: {
   service: InvoiceShareService;
   rateLimiter: InvoiceShareRateLimiter;
+  acceptances: InvoiceShareAcceptanceService;
+  accesses: InvoiceShareAccessService;
 }): Hono {
   const app = new Hono();
 
@@ -28,11 +44,46 @@ export function invoiceSharesRouter(deps: {
 
   app.get("/share/:token", async (c) => {
     try {
-      const result = await deps.service.findPublic(c.req.param("token"));
+      const result = await deps.service.findPublic(c.req.param("token"), false);
+      deps.accesses.record({
+        share: result.share,
+        eventType: "landing_view",
+        ...accessMetadata(c),
+      });
+      const acceptance = deps.acceptances.find(result.share.id);
       return c.html(invoiceSharePage({
         token: c.req.param("token"),
         invoice: result.invoice,
         expiresAt: result.share.expires_at,
+        documentSha256: result.share.document_sha256,
+        recipientCompany: result.share.recipient_company,
+        acceptedAt: acceptance?.accepted_at,
+      }));
+    } catch (error) {
+      return publicShareError(c, error);
+    }
+  });
+
+  app.post("/share/:token/accept", async (c) => {
+    if (c.req.header("Sec-Fetch-Site")?.toLowerCase() === "cross-site") {
+      return c.html(invalidInvoiceSharePage(), 403);
+    }
+    const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
+    if (body["confirm"] !== "accepted") return c.html(invalidInvoiceSharePage(), 400);
+    try {
+      const acceptance = await deps.acceptances.accept({
+        token: c.req.param("token"),
+        cfRay: c.req.header("CF-Ray"),
+        userAgent: c.req.header("user-agent"),
+      });
+      const result = await deps.service.findPublic(c.req.param("token"), false);
+      return c.html(invoiceSharePage({
+        token: c.req.param("token"),
+        invoice: result.invoice,
+        expiresAt: result.share.expires_at,
+        documentSha256: result.share.document_sha256,
+        recipientCompany: result.share.recipient_company,
+        acceptedAt: acceptance.accepted_at,
       }));
     } catch (error) {
       return publicShareError(c, error);
@@ -41,7 +92,12 @@ export function invoiceSharesRouter(deps: {
 
   app.get("/share/:token/document.pdf", async (c) => {
     try {
-      const result = await deps.service.loadDocument(c.req.param("token"));
+      const result = await deps.service.loadDocument(c.req.param("token"), false);
+      deps.accesses.record({
+        share: result.share,
+        eventType: "document_view",
+        ...accessMetadata(c),
+      });
       c.header("Content-Type", "application/pdf");
       c.header(
         "Content-Disposition",
@@ -66,6 +122,7 @@ export function invoiceSharesRouter(deps: {
         invoiceId,
         documentPath: parsed.data.document_path,
         expiresInDays: parsed.data.expires_in_days,
+        recipientId: parsed.data.recipient_id,
       });
       return c.json({
         share_id: created.id,
@@ -74,10 +131,32 @@ export function invoiceSharesRouter(deps: {
         filename: created.filename,
         document_sha256: created.documentSha256,
         document_size: created.documentSize,
+        recipient_id: created.recipientId,
+        recipient_company: created.recipientCompany,
+        recipient_email: created.recipientEmail,
       }, 201);
     } catch (error) {
       return adminShareError(c, error);
     }
+  });
+
+  app.get("/:id/share-links/:shareId/acceptance", (c) => {
+    const invoiceId = Number.parseInt(c.req.param("id"), 10);
+    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const share = deps.service.findById(c.req.param("shareId"));
+    if (!share || share.invoice_id !== invoiceId) return c.json({ error: "not_found" }, 404);
+    const acceptance = deps.acceptances.find(share.id);
+    return acceptance ? c.json({ acceptance }) : c.json({ error: "not_found" }, 404);
+  });
+
+  app.get("/:id/share-links/:shareId/access-logs", (c) => {
+    const invoiceId = Number.parseInt(c.req.param("id"), 10);
+    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const limit = accessLogLimit(c.req.query("limit"));
+    if (limit === null) return c.json({ error: "invalid_limit" }, 400);
+    const share = deps.service.findById(c.req.param("shareId"));
+    if (!share || share.invoice_id !== invoiceId) return c.json({ error: "not_found" }, 404);
+    return c.json(deps.accesses.list(share.id, limit));
   });
 
   app.post("/:id/share-links/:shareId/revoke", (c) => {
@@ -109,6 +188,26 @@ function clientAddress(c: Context): string {
   return c.req.header("CF-Connecting-IP")
     ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
     ?? "unknown";
+}
+
+function accessMetadata(c: Context): {
+  clientAddress: string;
+  cfRay: string | undefined;
+  userAgent: string | undefined;
+} {
+  return {
+    clientAddress: clientAddress(c),
+    cfRay: c.req.header("CF-Ray"),
+    userAgent: c.req.header("user-agent"),
+  };
+}
+
+function accessLogLimit(value: string | undefined): number | null {
+  if (value === undefined) return DEFAULT_ACCESS_LOG_LIMIT;
+  // `1e2` / ` 100` / `0x64` のような別表記を弾き、十進整数だけを受け取る。
+  if (!/^\d{1,4}$/.test(value)) return null;
+  const parsed = Number(value);
+  return parsed >= 1 && parsed <= MAX_ACCESS_LOG_LIMIT ? parsed : null;
 }
 
 function publicShareError(c: Context, error: unknown) {
