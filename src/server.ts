@@ -50,6 +50,8 @@ const app = buildApp({
   gaRoot: config.training.gaRoot,
   publicConfig: { ocrSidecarUrl: sidecarUrlOf(config) },
   invoiceShare: config.invoiceShare,
+  // 本番プロセスだけが実 ADC を読む Gmail クライアントを持つ。 ADC 未設定なら 503 not_configured。
+  invoiceEmailNotifier: "auto",
 });
 
 // OCR worker: ANTHROPIC_API_KEY あり (env or 暗号化ストア) かつ ocrWorker.enabled で起動

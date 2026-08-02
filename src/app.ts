@@ -16,6 +16,8 @@ import { InvoiceShareRepo } from "./db/invoice-share-repo.js";
 import { InvoiceDeliveryContactsRepo } from "./db/invoice-delivery-contacts-repo.js";
 import { InvoiceShareAcceptanceRepo } from "./db/invoice-share-acceptance-repo.js";
 import { InvoiceShareAccessRepo } from "./db/invoice-share-access-repo.js";
+import { InvoiceShareChallengeRepo } from "./db/invoice-share-challenge-repo.js";
+import { InvoiceShareDeliveryRepo } from "./db/invoice-share-delivery-repo.js";
 import { FinancialStatementsRepo } from "./db/financial-statements-repo.js";
 import { SecuritiesRepo } from "./db/securities-repo.js";
 import { PayeeSecuritiesRepo } from "./db/payee-securities-repo.js";
@@ -78,10 +80,18 @@ import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
 import { invoiceSlackDeliveriesRouter } from "./api/invoice-slack-deliveries.js";
+import { invoiceEmailDeliveriesRouter } from "./api/invoice-email-deliveries.js";
 import { invoiceDeliveryContactsRouter } from "./api/invoice-delivery-contacts.js";
 import { InvoiceSlackDeliveryService } from "./services/invoice-slack-delivery.js";
 import { InvoiceShareAcceptanceService } from "./services/invoice-share-acceptance-service.js";
+import {
+  locationReferenceFromEnvironment,
+  type InvoiceAcceptanceLocationReference,
+} from "./services/invoice-acceptance-location-signal.js";
 import { InvoiceShareAccessService } from "./services/invoice-share-access-service.js";
+import { InvoiceEmailDeliveryService } from "./services/invoice-email-delivery.js";
+import type { InvoiceEmailNotifier } from "./services/invoice-email-notifier.js";
+import { GmailAdcClient } from "./services/gmail-adc-client.js";
 import {
   resolveSlackInvoiceTarget,
   SlackWebApiClient,
@@ -132,6 +142,16 @@ export interface AppDeps {
   slackInvoiceNotifier?: SlackInvoiceNotifier | "auto" | "disabled";
   /** 既定の Slack グループ DM。未指定時は暗号化ストアへ注入された env から解決する。 */
   slackInvoiceTarget?: SlackInvoiceTarget;
+  /**
+   * Gmail API 送信。 `"auto"` を明示したときだけ実 ADC (gcloud CLI が作る authorized_user)
+   * を読む本番クライアントを組み立てる。 slackInvoiceNotifier と違い省略時は無効で、
+   * 未注入のテストや組み込み用途が実アカウントのメール送信へ到達しないようにする。
+   */
+  invoiceEmailNotifier?: InvoiceEmailNotifier | "auto" | "disabled";
+  /** テスト専用。通常運用で送信者へ bearer URL を返す API は登録しない。 */
+  unsafeExposeInvoiceShareUrl?: boolean;
+  /** 合意地点と比較する送信者側の基準地点。座標は暗号化ストア経由の env を既定とする。 */
+  invoiceAcceptanceLocationReference?: InvoiceAcceptanceLocationReference | null;
 }
 
 export function buildApp(deps: AppDeps): Hono {
@@ -147,6 +167,8 @@ export function buildApp(deps: AppDeps): Hono {
   const invoiceDeliveryContacts = new InvoiceDeliveryContactsRepo(deps.db);
   const invoiceShareAcceptances = new InvoiceShareAcceptanceRepo(deps.db);
   const invoiceShareAccesses = new InvoiceShareAccessRepo(deps.db);
+  const invoiceShareChallenges = new InvoiceShareChallengeRepo(deps.db);
+  const invoiceShareDeliveries = new InvoiceShareDeliveryRepo(deps.db);
   const fs = new FinancialStatementsRepo(deps.db);
   const securities = new SecuritiesRepo(deps.db);
   const payeeSecurities = new PayeeSecuritiesRepo(deps.db);
@@ -246,9 +268,15 @@ export function buildApp(deps: AppDeps): Hono {
     allowedRoots: deps.invoiceShare?.roots?.length ? deps.invoiceShare.roots : undefined,
     contacts: invoiceDeliveryContacts,
   });
+  const invoiceEmailNotifier = resolveInvoiceEmailNotifier(deps.invoiceEmailNotifier);
   const invoiceShareAcceptanceService = new InvoiceShareAcceptanceService({
     shares: invoiceShareService,
     acceptances: invoiceShareAcceptances,
+    challenges: invoiceShareChallenges,
+    notifier: invoiceEmailNotifier,
+    locationReference: deps.invoiceAcceptanceLocationReference === undefined
+      ? locationReferenceFromEnvironment()
+      : deps.invoiceAcceptanceLocationReference,
   });
   const invoiceShareAccessService = new InvoiceShareAccessService({
     accesses: invoiceShareAccesses,
@@ -259,6 +287,12 @@ export function buildApp(deps: AppDeps): Hono {
     shares: invoiceShareService,
     notifier: slackInvoiceNotifier,
     defaultTarget: deps.slackInvoiceTarget ?? resolveSlackInvoiceTarget(),
+  });
+  const invoiceEmailDeliveryService = new InvoiceEmailDeliveryService({
+    invoices,
+    shares: invoiceShareService,
+    deliveries: invoiceShareDeliveries,
+    notifier: invoiceEmailNotifier,
   });
 
   app.get("/health", (c) => c.json({
@@ -289,8 +323,10 @@ export function buildApp(deps: AppDeps): Hono {
     rateLimiter: new InvoiceShareRateLimiter(),
     acceptances: invoiceShareAcceptanceService,
     accesses: invoiceShareAccessService,
+    allowUnsafeIssueApi: deps.unsafeExposeInvoiceShareUrl === true,
   }));
   app.route("/v1/invoices", invoiceSlackDeliveriesRouter({ service: invoiceSlackDeliveryService }));
+  app.route("/v1/invoices", invoiceEmailDeliveriesRouter({ service: invoiceEmailDeliveryService }));
   app.route("/v1/invoices", invoicesRouter({ repo: invoices }));
   app.route("/v1/invoice-delivery-contacts", invoiceDeliveryContactsRouter({ repo: invoiceDeliveryContacts }));
   app.route("/v1/dashboard", dashboardRouter({ db: deps.db }));
@@ -313,6 +349,21 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
 
   return app;
+}
+
+/**
+ * 実 ADC は本番の refresh token そのものなので、 `"auto"` の明示なしに本番クライアントを
+ * 組み立てない。 省略時に組み立てると、 notifier 未注入のテストが開発機の ADC を読み、
+ * fixture 宛の実メール送信へ到達しうる。 未設定時は各サービスが 503 not_configured を返す。
+ *
+ * @implements SPEC-INVOICE-EMAIL-001 (spec/feature/invoice-public-magic-link.md)
+ */
+function resolveInvoiceEmailNotifier(
+  value: InvoiceEmailNotifier | "auto" | "disabled" | undefined,
+): InvoiceEmailNotifier | undefined {
+  if (value === "auto") return new GmailAdcClient();
+  if (value && typeof value === "object") return value;
+  return undefined;
 }
 
 /** @implements SPEC-INVOICE-SLACK-004 (spec/feature/invoice-public-magic-link.md) */

@@ -27,6 +27,7 @@ describe("API: invoice magic-link access logs", () => {
       receiptsRoot: join(root, "receipts"),
       ocr: "disabled",
       invoiceShare: { publicUrl: "https://qs.example.com", roots: [root] },
+      unsafeExposeInvoiceShareUrl: true,
     });
     invoiceId = new InvoicesRepo(db).insert({
       issued_at: "2026-08-01",
@@ -91,7 +92,7 @@ describe("API: invoice magic-link access logs", () => {
     expect(new InvoiceShareRepo(db).findById(created.shareId)).toMatchObject({ view_count: 2 });
   });
 
-  it("無効トークンと合意処理を閲覧アクセスとして記録しない", async () => {
+  it("無効トークンと受領者未登録の合意開始を閲覧アクセスとして記録しない", async () => {
     const created = await createShare();
     expect((await app.request(`/v1/invoices/share/${"z".repeat(43)}`)).status).toBe(404);
     const accepted = await app.request(`/v1/invoices/share/${created.token}/accept`, {
@@ -99,7 +100,8 @@ describe("API: invoice magic-link access logs", () => {
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: "confirm=accepted",
     });
-    expect(accepted.status).toBe(200);
+    // C&R 導入後は登録メールのない共有では合意challengeを開始できない。
+    expect(accepted.status).toBe(400);
 
     const audit = await app.request(
       `/v1/invoices/${invoiceId}/share-links/${created.shareId}/access-logs`,

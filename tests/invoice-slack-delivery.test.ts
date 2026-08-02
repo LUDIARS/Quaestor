@@ -229,10 +229,12 @@ describe("InvoiceSlackDeliveryService", () => {
       body: JSON.stringify({ document_path: pdfPath, expires_in_days: 7 }),
     });
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({
+    const result = await response.json() as Record<string, unknown>;
+    expect(result).toMatchObject({
       slack_conversation_id: "G123ABC",
       slack_message_ts: "1710000000.123456",
     });
+    expect(result).not.toHaveProperty("share_url");
 
     const invalid = await app.request(`/v1/invoices/${invoiceId}/share-links/slack`, {
       method: "POST",

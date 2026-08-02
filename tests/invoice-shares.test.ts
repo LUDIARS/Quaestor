@@ -10,6 +10,7 @@ import { InvoiceDeliveryContactsRepo } from "../src/db/invoice-delivery-contacts
 import { InvoiceShareError, InvoiceShareService } from "../src/services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "../src/services/invoice-share-rate-limiter.js";
 import { buildApp } from "../src/app.js";
+import type { InvoiceEmailMessage, InvoiceEmailNotifier } from "../src/services/invoice-email-notifier.js";
 
 const PDF = Buffer.from("%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n%%EOF\n", "ascii");
 const CLIENT = "教育機関 <A&B>";
@@ -300,7 +301,7 @@ describe("invoice share schema migration", () => {
       expect(db.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'invoice_share_acceptances'",
       ).get()).toEqual({ name: "invoice_share_acceptances" });
-      expect(db.pragma("user_version", { simple: true })).toBe(11);
+      expect(db.pragma("user_version", { simple: true })).toBe(13);
     } finally {
       db.close();
     }
@@ -357,17 +358,33 @@ describe("API: /v1/invoices share links", () => {
   let app: ReturnType<typeof buildApp>;
   let invoiceId: number;
   let recipientId: string;
+  let sentMessages: InvoiceEmailMessage[];
 
   beforeEach(() => {
     root = makeRoot("quaestor-share-api-");
     pdfPath = join(root, "請求書.pdf");
     writeFileSync(pdfPath, PDF);
     db = new Database(":memory:");
+    sentMessages = [];
+    const emailNotifier: InvoiceEmailNotifier = {
+      assertReady: () => undefined,
+      sendMessage: async (message) => {
+        sentMessages.push(message);
+        return { messageId: `message-${sentMessages.length}` };
+      },
+    };
     app = buildApp({
       db,
       receiptsRoot: join(root, "receipts"),
       ocr: "disabled",
       invoiceShare: { publicUrl: "https://qs.example.com", roots: [root] },
+      unsafeExposeInvoiceShareUrl: true,
+      invoiceEmailNotifier: emailNotifier,
+      invoiceAcceptanceLocationReference: {
+        latitude: 35.6812,
+        longitude: 139.7671,
+        radiusKm: 20,
+      },
     });
     invoiceId = createdInvoice(new InvoicesRepo(db));
     recipientId = new InvoiceDeliveryContactsRepo(db).insert({
@@ -443,12 +460,12 @@ describe("API: /v1/invoices share links", () => {
     const before = await page.text();
     expect(before).toContain("Example Customer");
     expect(before).not.toContain("Changed Customer");
-    expect(before).toContain("請求内容に合意する");
+    expect(before).toContain("メール確認へ進む");
     expect(before).toContain("電子証明書を使う電子署名ではありません");
     expect(before).toContain(created.document_sha256.slice(0, 16));
     expect(before).not.toContain("billing@example.com");
 
-    const accept = await app.request(`/v1/invoices/share/${token}/accept`, {
+    const begin = await app.request(`/v1/invoices/share/${token}/accept`, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded",
@@ -456,6 +473,38 @@ describe("API: /v1/invoices share links", () => {
         "user-agent": "Acceptance Test Browser/1.0",
       },
       body: "confirm=accepted",
+    });
+    expect(begin.status).toBe(200);
+    const challengePage = await begin.text();
+    expect(challengePage).toContain("メールで本人確認");
+    expect(sentMessages).toHaveLength(1);
+    expect(sentMessages[0]?.to).toBe("billing@example.com");
+    const challengeId = challengePage.match(/name="challenge_id" value="([^"]+)"/)?.[1];
+    const code = sentMessages[0]?.text.match(/\b(\d{6})\b/)?.[1];
+    expect(challengeId).toBeTruthy();
+    expect(code).toBeTruthy();
+
+    const repeatedBegin = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "confirm=accepted",
+    });
+    expect(repeatedBegin.status).toBe(200);
+    expect(sentMessages).toHaveLength(1);
+
+    const accept = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        "CF-Ray": "abc123-NRT",
+        "CF-Connecting-IP": "203.0.113.10",
+        "user-agent": "Acceptance Test Browser/1.0",
+        "cf-iplatitude": "34.6937",
+        "cf-iplongitude": "135.5023",
+        "cf-ipcountry": "JP",
+        "cf-region-code": "27",
+      },
+      body: new URLSearchParams({ challenge_id: challengeId!, code: code! }).toString(),
     });
     expect(accept.status).toBe(200);
     expect(await accept.text()).toContain("請求内容への合意を記録しました");
@@ -473,15 +522,23 @@ describe("API: /v1/invoices share links", () => {
       document_sha256: created.document_sha256,
       agreement_version: "invoice-content-v1",
       cf_ray: "abc123-NRT",
+      authentication_method: "email_otp",
+      challenge_id: challengeId,
+      location_source: "cloudflare_ip_geolocation",
+      location_country_code: "JP",
+      location_region_code: "27",
+      issuer_reference_proximity: "outside",
     });
     expect(first.acceptance.user_agent_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(first.acceptance.evidence_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(first)).not.toContain("Acceptance Test Browser/1.0");
+    expect(JSON.stringify(first)).not.toContain("34.6937");
+    expect(JSON.stringify(first)).not.toContain("135.5023");
 
-    const again = await app.request(`/v1/invoices/share/${token}/accept`, {
+    const again = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "confirm=accepted",
+      body: new URLSearchParams({ challenge_id: challengeId!, code: code! }).toString(),
     });
     expect(again.status).toBe(200);
     const second = await (await app.request(
@@ -529,6 +586,63 @@ describe("API: /v1/invoices share links", () => {
     expect(crossSite.status).toBe(403);
   });
 
+  it("確認コードなしのPOSTでは合意を作らず、誤入力を監査上の合意にしない", async () => {
+    const create = await createShare({ document_path: pdfPath, recipient_id: recipientId });
+    const created = await create.json() as { share_id: string; share_url: string };
+    const token = created.share_url.slice(created.share_url.lastIndexOf("/") + 1);
+    const begin = await app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "confirm=accepted",
+    });
+    const html = await begin.text();
+    const challengeId = html.match(/name="challenge_id" value="([^"]+)"/)?.[1] ?? "";
+    const wrong = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ challenge_id: challengeId, code: "000000" }).toString(),
+    });
+    expect(wrong.status).toBe(400);
+    expect((await app.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
+    )).status).toBe(404);
+  });
+
+  it("試行上限に達した後の再発行も打ち切り、コード総当たりと通知連打を閉じる", async () => {
+    const create = await createShare({ document_path: pdfPath, recipient_id: recipientId });
+    const created = await create.json() as { share_id: string; share_url: string };
+    const token = created.share_url.slice(created.share_url.lastIndexOf("/") + 1);
+    const begin = () => app.request(`/v1/invoices/share/${token}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "confirm=accepted",
+    });
+
+    // 各 challenge は5回の誤入力でロックされ、ロック後は新しい challenge が発行される。
+    for (let issued = 0; issued < 5; issued += 1) {
+      const page = await begin();
+      expect(page.status).toBe(200);
+      const challengeId = (await page.text()).match(/name="challenge_id" value="([^"]+)"/)?.[1] ?? "";
+      expect(challengeId).not.toBe("");
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const wrong = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ challenge_id: challengeId, code: "000000" }).toString(),
+        });
+        expect(wrong.status).toBe(attempt === 4 ? 429 : 400);
+      }
+    }
+    expect(sentMessages).toHaveLength(5);
+
+    // 6本目は発行せず、確認コードのメールも追加送信しない。
+    expect((await begin()).status).toBe(429);
+    expect(sentMessages).toHaveLength(5);
+    expect((await app.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
+    )).status).toBe(404);
+  });
+
   it("無効化済みの送信先では新しいリンクを発行しない", async () => {
     new InvoiceDeliveryContactsRepo(db).deactivate(recipientId);
     const response = await createShare({ document_path: pdfPath, recipient_id: recipientId });
@@ -539,7 +653,10 @@ describe("API: /v1/invoices share links", () => {
   it("publicUrl 未設定なら発行を 503 で断り、 loopback URL を返さない", async () => {
     const bare = new Database(":memory:");
     try {
-      const unconfigured = buildApp({ db: bare, receiptsRoot: join(root, "receipts"), ocr: "disabled" });
+      const unconfigured = buildApp({
+        db: bare, receiptsRoot: join(root, "receipts"), ocr: "disabled",
+        unsafeExposeInvoiceShareUrl: true,
+      });
       const id = createdInvoice(new InvoicesRepo(bare));
       const res = await unconfigured.request(`/v1/invoices/${id}/share-links`, {
         method: "POST",

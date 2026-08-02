@@ -1,17 +1,28 @@
 /**
- * 請求書マジックリンクの発行・閲覧・明示合意API。
+ * 請求書マジックリンクの発行・閲覧・受領者メール C&R・明示合意API。
  *
  * @implements SPEC-INVOICE-DELIVERY-002 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-004 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCESS-001 (spec/feature/invoice-public-magic-link.md)
  */
 
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { invalidInvoiceSharePage, invoiceSharePage } from "../invoices/invoice-share-page.js";
+import {
+  invoiceShareChallengePage,
+  invoiceShareChallengeUnavailablePage,
+} from "../invoices/invoice-share-challenge-page.js";
 import { InvoiceShareError, type InvoiceShareService } from "../services/invoice-share-service.js";
 import type { InvoiceShareRateLimiter } from "../services/invoice-share-rate-limiter.js";
-import type { InvoiceShareAcceptanceService } from "../services/invoice-share-acceptance-service.js";
+import {
+  InvoiceShareChallengeError,
+  MASKED_RECIPIENT_EMAIL_FALLBACK,
+  type InvoiceShareAcceptanceService,
+} from "../services/invoice-share-acceptance-service.js";
+import { InvoiceEmailError } from "../services/invoice-email-notifier.js";
 import type { InvoiceShareAccessService } from "../services/invoice-share-access-service.js";
 
 const DEFAULT_ACCESS_LOG_LIMIT = 100;
@@ -28,6 +39,7 @@ export function invoiceSharesRouter(deps: {
   rateLimiter: InvoiceShareRateLimiter;
   acceptances: InvoiceShareAcceptanceService;
   accesses: InvoiceShareAccessService;
+  allowUnsafeIssueApi?: boolean;
 }): Hono {
   const app = new Hono();
 
@@ -71,21 +83,57 @@ export function invoiceSharesRouter(deps: {
     const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
     if (body["confirm"] !== "accepted") return c.html(invalidInvoiceSharePage(), 400);
     try {
-      const acceptance = await deps.acceptances.accept({
+      const challenge = await deps.acceptances.begin({ token: c.req.param("token") });
+      return c.html(invoiceShareChallengePage({
         token: c.req.param("token"),
-        cfRay: c.req.header("CF-Ray"),
-        userAgent: c.req.header("user-agent"),
+        challengeId: challenge.challengeId,
+        maskedEmail: challenge.maskedEmail,
+        expiresAt: challenge.expiresAt,
+      }));
+    } catch (error) {
+      if (error instanceof InvoiceShareChallengeError || error instanceof InvoiceEmailError) {
+        return c.html(invoiceShareChallengeUnavailablePage(), error.status);
+      }
+      return publicShareError(c, error);
+    }
+  });
+
+  app.post("/share/:token/accept/confirm", async (c) => {
+    if (c.req.header("Sec-Fetch-Site")?.toLowerCase() === "cross-site") {
+      return c.html(invalidInvoiceSharePage(), 403);
+    }
+    const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
+    const challengeId = typeof body["challenge_id"] === "string" ? body["challenge_id"] : "";
+    const code = typeof body["code"] === "string" ? body["code"].trim() : "";
+    if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code)) {
+      return c.html(invalidInvoiceSharePage(), 400);
+    }
+    try {
+      const acceptance = await deps.acceptances.confirm({
+        token: c.req.param("token"), challengeId, code,
+        cfRay: c.req.header("CF-Ray"), userAgent: c.req.header("user-agent"),
+        cloudflareClientAddress: c.req.header("CF-Connecting-IP"),
+        visitorLocation: {
+          latitude: c.req.header("cf-iplatitude"),
+          longitude: c.req.header("cf-iplongitude"),
+          countryCode: c.req.header("cf-ipcountry"),
+          regionCode: c.req.header("cf-region-code"),
+        },
       });
       const result = await deps.service.findPublic(c.req.param("token"), false);
       return c.html(invoiceSharePage({
-        token: c.req.param("token"),
-        invoice: result.invoice,
-        expiresAt: result.share.expires_at,
-        documentSha256: result.share.document_sha256,
-        recipientCompany: result.share.recipient_company,
-        acceptedAt: acceptance.accepted_at,
+        token: c.req.param("token"), invoice: result.invoice,
+        expiresAt: result.share.expires_at, documentSha256: result.share.document_sha256,
+        recipientCompany: result.share.recipient_company, acceptedAt: acceptance.accepted_at,
       }));
     } catch (error) {
+      if (error instanceof InvoiceShareChallengeError) {
+        return c.html(invoiceShareChallengePage({
+          token: c.req.param("token"), challengeId,
+          maskedEmail: MASKED_RECIPIENT_EMAIL_FALLBACK,
+          error: challengeErrorMessage(error),
+        }), error.status);
+      }
       return publicShareError(c, error);
     }
   });
@@ -112,7 +160,7 @@ export function invoiceSharesRouter(deps: {
     }
   });
 
-  app.post("/:id/share-links", async (c) => {
+  if (deps.allowUnsafeIssueApi) app.post("/:id/share-links", async (c) => {
     const invoiceId = Number.parseInt(c.req.param("id"), 10);
     if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
     const parsed = CreateShareSchema.safeParse(await c.req.json().catch(() => null));
@@ -167,6 +215,12 @@ export function invoiceSharesRouter(deps: {
   });
 
   return app;
+}
+
+function challengeErrorMessage(error: InvoiceShareChallengeError): string {
+  if (error.code === "expired") return "確認コードの有効期限が切れました。前の画面から再発行してください。";
+  if (error.code === "locked") return "入力回数の上限に達しました。前の画面から再発行してください。";
+  return "確認コードが一致しません。";
 }
 
 function setPublicShareHeaders(c: Context): void {

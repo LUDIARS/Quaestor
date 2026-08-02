@@ -78,7 +78,8 @@ function acceptanceSection(
   }
   return `<form method="post" action="${acceptanceUrl}">
         <label><input type="checkbox" name="confirm" value="accepted" required><span>${escapeHtml(INVOICE_AGREEMENT_TEXT)}</span></label>
-        <button type="submit">請求内容に合意する</button>
+        <button type="submit">メール確認へ進む</button>
+        <p>登録済みメールアドレスへ確認コードを送信します。コード確認後に合意が確定します。</p>
       </form>`;
 }
 
@@ -90,7 +91,7 @@ export function invalidInvoiceSharePage(): string {
 </html>`;
 }
 
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

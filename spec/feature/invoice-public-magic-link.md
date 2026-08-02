@@ -9,9 +9,10 @@ Access; only `/v1/invoices/share/*` is eligible for a narrowly scoped Access Byp
 ## Domain
 
 The target domain is **`invoice-delivery`**. It owns the registered delivery-contact ledger,
-immutable document/recipient snapshots at link issuance, link delivery, and explicit acceptance of
-invoice contents. It does not own Gmail authentication, Slack OAuth, contract drafting, identity
-proofing, certificate-backed electronic signatures, or qualified timestamp services.
+immutable document/recipient snapshots at link issuance, Gmail/Slack link delivery, recipient-channel
+challenge-and-response, and explicit acceptance of invoice contents. It does not own the Google OAuth
+consent UI, Slack OAuth, contract drafting, government-ID proofing, certificate-backed electronic
+signatures, or qualified timestamp services.
 
 ## Configuration
 
@@ -27,18 +28,21 @@ the source of truth, env is override only — see `spec/setup/config-and-secrets
 insecure configuration fails link creation with `503 not_configured` instead of falling back to a
 loopback URL. Roots are compared after `realpath`, so a root reached through a symlink still matches.
 
-## Issuer API
+## Issuer API and link confidentiality
 
-Create a 14-day link (1–30 days accepted):
+The normal issuer flow creates and sends the link inside Quaestor. It never returns the bearer URL or
+token to the caller. Email delivery requires an active registered contact and an idempotency UUID:
 
 ```http
-POST /v1/invoices/:id/share-links
+POST /v1/invoices/:id/share-links/email
 Content-Type: application/json
 
 {
   "document_path": "E:\\Document\\Ars\\Quaestor\\data\\invoice.pdf",
   "expires_in_days": 14,
-  "recipient_id": "8f6e9e65-e402-4b0a-9ca8-8ebf88755c10"
+  "recipient_id": "8f6e9e65-e402-4b0a-9ca8-8ebf88755c10",
+  "idempotency_key": "16c30b12-bad5-48e4-a7dc-0abe70700612",
+  "billing_period": "2026年7月分"
 }
 ```
 
@@ -48,10 +52,37 @@ Revoke it immediately:
 POST /v1/invoices/:id/share-links/:shareId/revoke
 ```
 
-The create response returns the raw URL once. SQLite stores only its SHA-256 digest. The PDF must
-be below 25 MiB, start with `%PDF-`, and resolve inside an allowed root. Its size and SHA-256 are
-recorded at issuance and rechecked against the exact bytes served on every download; replacement
-after issuance fails closed with `409`.
+The response contains delivery/share IDs, status, expiry, document metadata, and the recipient
+snapshot, but never `share_url` or `token`. The same idempotency key returns the completed audit row
+without sending again. A pending or failed attempt is not retried automatically because the provider
+may have accepted the message before a network failure became visible. Send failure revokes the new
+link. The delivery ledger stores the destination digest and provider message ID, never the bearer URL.
+
+`POST /v1/invoices/:id/share-links` is not registered in normal application construction. Tests may
+enable it only through the non-configurable `unsafeExposeInvoiceShareUrl` dependency-injection flag.
+This preserves deterministic public-route tests without creating a production escape hatch.
+
+Symmetrically, the ADC-backed Gmail client is built only when `invoiceEmailNotifier: "auto"` is passed
+explicitly, which only the production server entrypoint does. An application assembled without an
+injected notifier has no mail sender at all and fails closed with `503 not_configured`, so a test or
+embedding host can never reach the operator's real refresh token or send to a fixture address.
+
+Quaestor is the delivery service in this trust model. People using the issuer API do not receive the
+link, but an operator with access to the Qs database, process memory, Gmail Sent mailbox, or ADC can
+still subvert the flow. Production access to those assets must therefore be limited and auditable;
+this local implementation does not claim independence from its own administrator.
+
+SQLite stores only the link token's SHA-256 digest. The PDF must be below 25 MiB, start with `%PDF-`,
+and resolve inside an allowed root. Its size and SHA-256 are recorded at issuance and rechecked against
+the exact bytes served on every download; replacement after issuance fails closed with `409`.
+
+- **SPEC-INVOICE-EMAIL-001** — Qs obtains a Gmail access token from gcloud-created authorized-user
+  ADC, sends a UTF-8 RFC 2047 message through `users/me/messages/send`, and never logs credentials,
+  access tokens, refresh tokens, raw links, or message bodies.
+- **SPEC-INVOICE-EMAIL-002** — issue and delivery are one failure unit; failed delivery revokes the
+  link, and UUID idempotency prevents an ordinary client retry from sending the invoice twice.
+- **SPEC-INVOICE-EMAIL-003** — the normal email delivery response and Slack delivery response never
+  expose the bearer link. Only the recipient-channel message contains it.
 
 ### Delivery-contact API
 
@@ -87,7 +118,8 @@ Clauses:
 |---|---|
 | `GET /v1/invoices/share/:token` | Minimal Japanese landing page with invoice summary. |
 | `GET /v1/invoices/share/:token/document.pdf` | Verified PDF rendered inline. |
-| `POST /v1/invoices/share/:token/accept` | Requires the confirmation checkbox and records agreement to the verified PDF. |
+| `POST /v1/invoices/share/:token/accept` | Records intent and emails a six-digit challenge to the snapshotted recipient address. |
+| `POST /v1/invoices/share/:token/accept/confirm` | Verifies the one-time challenge and only then records final agreement. |
 
 Invalid, expired, revoked, cancelled-invoice, and unknown links return the same public error page.
 The public response never exposes invoice metadata, storage paths, token hashes, or audit rows.
@@ -99,15 +131,33 @@ may prefetch links. Links remain reusable until expiry or explicit revocation.
 ## Explicit acceptance
 
 The landing page shows the PDF link, a document-hash identifier, a required confirmation checkbox,
-and a `請求内容に合意する` button. The server re-reads and hashes the PDF before accepting; a changed
-document returns `409` and creates no audit row. One acceptance is stored per share, so retries are
-idempotent. The append-only record snapshots:
+and a button that starts email verification. This first POST never creates acceptance. Quaestor sends
+a six-digit code to the recipient email snapshotted at link creation. The code is valid for 15 minutes
+and five attempts, and a share issues at most five challenges in total. The database stores only an
+HMAC keyed by the bearer token; neither code nor token is persisted in plaintext. A mail scanner can open the link and submit the first form, but cannot read
+the separate recipient mailbox and therefore cannot finalize agreement.
+
+The confirm POST re-reads and hashes the PDF before accepting; a changed document returns `409` and
+creates no audit row. One acceptance is stored per share, so successful retries are idempotent. The
+append-only record snapshots:
 
 - share/invoice IDs and recipient company/email;
 - the full PDF SHA-256;
 - agreement version and exact agreement text;
 - acceptance timestamp, Cloudflare Ray ID when valid, and a SHA-256 of the User-Agent;
+- authentication method (`email_otp`) and the consumed challenge ID;
+- Cloudflare IP-geolocation source, country/region codes, and whether the estimated acceptance
+  location was inside or outside the issuer reference radius;
 - an evidence checksum over the canonical event fields.
+
+The location signal is defense-in-depth, not identity proof or an acceptance condition. Quaestor
+uses latitude and longitude only transiently to compare the request with an issuer reference point,
+then stores only `inside`, `outside`, or `unavailable`; neither endpoint coordinates nor distance are
+persisted. Missing Cloudflare headers, a missing reference point, VPNs, mobile networks, and
+geolocation error all reduce confidence, so this signal must never reject or establish agreement by
+itself. A valid `CF-Ray` and syntactically valid `CF-Connecting-IP` are both required before location
+headers are trusted; the origin must remain reachable only through the private Cloudflare Tunnel.
+The connecting IP is used for this trust check only and is not added to the acceptance ledger.
 
 The issuer can retrieve it with `GET /v1/invoices/:id/share-links/:shareId/acceptance`. The evidence
 checksum detects accidental inconsistency but is not an independent timestamp or protection against
@@ -115,11 +165,20 @@ an administrator who can rewrite both the row and checksum.
 
 Clauses:
 
-- **SPEC-INVOICE-ACCEPTANCE-001** — acceptance requires an explicit checked form POST while the
-  link/invoice remain active and the exact issued PDF still matches its stored size and SHA-256;
-  requests explicitly marked cross-site by Fetch Metadata are rejected.
+- **SPEC-INVOICE-ACCEPTANCE-001** — acceptance requires both an explicit checked form POST and a
+  valid, unexpired, unconsumed email challenge while the link/invoice remain active and the exact
+  issued PDF still matches its stored size and SHA-256; cross-site form requests are rejected.
 - **SPEC-INVOICE-ACCEPTANCE-002** — acceptance is append-only and idempotent per share; it stores the
-  exact terms, recipient snapshot, document digest, timestamp, and privacy-reduced request metadata.
+  exact terms, recipient snapshot, document digest, authentication method, challenge ID, timestamp,
+  and privacy-reduced request metadata.
+- **SPEC-INVOICE-ACCEPTANCE-003** — failed code attempts never create acceptance; challenges expire
+  after 15 minutes, lock after five failures, and are marked consumed after successful confirmation.
+  A share issues at most five challenges in total, so holding the link bounds code guesses at 25 and
+  confirmation emails at 5; beyond that the flow fails closed with `429` and the sender must reissue.
+- **SPEC-INVOICE-ACCEPTANCE-004** — when Cloudflare visitor-location headers and an encrypted issuer
+  reference point are available, acceptance evidence stores only coarse country/region and an
+  inside/outside/unavailable proximity result. Raw coordinates and distance are never persisted,
+  and the signal is non-blocking corroboration rather than proof of identity or legal consent.
 
 ## Access audit log
 
@@ -138,8 +197,9 @@ response returns both `items` and the uncapped `total`.
   with privacy-minimized request evidence, while the existing first/last/count summary is updated in
   the same database transaction.
 
-This is a clickwrap-style evidence record authenticated by possession of a link delivered to the
-registered address. It is not presented as a certificate-backed electronic signature. Japanese
+This is a clickwrap-style evidence record authenticated by control of the registered recipient email,
+in addition to possession of the delivery link. It is not proof that a natural person rather than an
+authorized mailbox automation acted, nor is it a certificate-backed electronic signature. Japanese
 Electronic Signatures Act guidance describes an electronic signature as requiring both attribution
 to the actor and a way to verify that the signed information was not altered; stronger identity or
 statutory presumptions require a separate signature/identity-proofing design.
@@ -181,7 +241,8 @@ Content-Type: application/json
 }
 ```
 
-The default destination is loaded from the encrypted store. A one-off request may instead provide
+The API response omits the link; only the Slack message contains it. The default destination is loaded
+from the encrypted store. A one-off request may instead provide
 either `conversation_id` (`G...`) or `user_ids` (2–8 distinct `U...` / `W...` IDs), but never both.
 If Slack rejects the post, the newly created magic link is immediately revoked and the API returns
 `502 api_error`. Missing Slack settings fail before link creation with `503 not_configured`.
@@ -199,8 +260,8 @@ Slack App setup:
 5. Store the token and target with the commands in `spec/setup/config-and-secrets.md`, then restart
    Quaestor through Excubitor.
 
-Posting or opening the link proves delivery/access, not consent. Consent is recorded only by the
-explicit checked acceptance POST described above; Slack read state is never treated as acceptance.
+Posting or opening the link proves delivery/access, not consent. Slack read state is never treated as
+acceptance. Final consent still requires the registered-email C&R flow described above.
 
 Slack references: [`conversations.open`](https://docs.slack.dev/reference/methods/conversations.open/)
 and [`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessage/).
@@ -208,7 +269,9 @@ and [`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessa
 ## Storage migration
 
 Contacts live in `invoice_delivery_contacts`, share tokens and recipient snapshots in
-`invoice_share_tokens`, and acceptances in `invoice_share_acceptances` (see `src/db/schema.ts`).
+`invoice_share_tokens`, delivery attempts in `invoice_share_deliveries`, one-time challenges in
+`invoice_share_challenges`, and final acceptances in `invoice_share_acceptances` (schema version 13;
+see `src/db/schema.ts`).
 Local databases created before
 this feature shipped may hold a same-named but incompatible table. On startup `applyMigrations`
 renames such a table to `invoice_share_tokens_legacy_v8` — rows are retained for manual inspection,

@@ -183,11 +183,53 @@ const STATEMENTS: string[] = [
     accepted_at              INTEGER NOT NULL,
     cf_ray                   TEXT,
     user_agent_sha256        TEXT NOT NULL CHECK (length(user_agent_sha256) = 64),
+    authentication_method    TEXT NOT NULL DEFAULT 'legacy_link_confirmation',
+    challenge_id             TEXT,
+    location_source          TEXT NOT NULL DEFAULT 'unavailable',
+    location_country_code    TEXT,
+    location_region_code     TEXT,
+    issuer_reference_proximity TEXT NOT NULL DEFAULT 'unavailable',
     evidence_sha256          TEXT NOT NULL CHECK (length(evidence_sha256) = 64)
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_invoice_share_acceptance_invoice
      ON invoice_share_acceptances(invoice_id, accepted_at)`,
+
+  // invoice_share_challenges — 登録済み受領者メールによる C&R。コード平文は保存しない。
+  `CREATE TABLE IF NOT EXISTS invoice_share_challenges (
+    id                       TEXT PRIMARY KEY,
+    share_id                 TEXT NOT NULL REFERENCES invoice_share_tokens(id) ON DELETE CASCADE,
+    channel                  TEXT NOT NULL CHECK (channel = 'email'),
+    destination_sha256       TEXT NOT NULL CHECK (length(destination_sha256) = 64),
+    code_hash                TEXT NOT NULL CHECK (length(code_hash) = 64),
+    created_at               INTEGER NOT NULL,
+    expires_at               INTEGER NOT NULL,
+    attempt_count            INTEGER NOT NULL DEFAULT 0,
+    max_attempts             INTEGER NOT NULL CHECK (max_attempts > 0),
+    consumed_at              INTEGER
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_challenge_share
+     ON invoice_share_challenges(share_id, created_at)`,
+
+  // invoice_share_deliveries — Qs 内部配送の冪等性と配送監査。URLトークンは保持しない。
+  `CREATE TABLE IF NOT EXISTS invoice_share_deliveries (
+    id                       TEXT PRIMARY KEY,
+    idempotency_key          TEXT NOT NULL UNIQUE,
+    share_id                 TEXT NOT NULL UNIQUE REFERENCES invoice_share_tokens(id) ON DELETE CASCADE,
+    invoice_id               INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    channel                  TEXT NOT NULL CHECK (channel IN ('email', 'slack')),
+    destination_sha256       TEXT NOT NULL CHECK (length(destination_sha256) = 64),
+    request_sha256           TEXT NOT NULL CHECK (length(request_sha256) = 64),
+    status                   TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed')),
+    provider_message_id      TEXT,
+    failure_code             TEXT,
+    created_at               INTEGER NOT NULL,
+    completed_at             INTEGER
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_delivery_invoice
+     ON invoice_share_deliveries(invoice_id, created_at)`,
 
   // invoice_share_access_logs — 有効な公開リンクへの成功アクセスを追記する監査ログ。
   `CREATE TABLE IF NOT EXISTS invoice_share_access_logs (
@@ -525,10 +567,32 @@ export function applyMigrations(db: Database.Database): void {
   );
   ensureColumn(db, "invoice_share_tokens", "recipient_company", "TEXT");
   ensureColumn(db, "invoice_share_tokens", "recipient_email", "TEXT");
+  ensureColumn(
+    db,
+    "invoice_share_acceptances",
+    "authentication_method",
+    "TEXT NOT NULL DEFAULT 'legacy_link_confirmation'",
+  );
+  ensureColumn(db, "invoice_share_acceptances", "challenge_id", "TEXT");
+  ensureColumn(
+    db,
+    "invoice_share_acceptances",
+    "location_source",
+    "TEXT NOT NULL DEFAULT 'unavailable'",
+  );
+  ensureColumn(db, "invoice_share_acceptances", "location_country_code", "TEXT");
+  ensureColumn(db, "invoice_share_acceptances", "location_region_code", "TEXT");
+  ensureColumn(
+    db,
+    "invoice_share_acceptances",
+    "issuer_reference_proximity",
+    "TEXT NOT NULL DEFAULT 'unavailable'",
+  );
+  ensureColumn(db, "invoice_share_deliveries", "request_sha256", "TEXT");
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 11");
+  db.pragma("user_version = 13");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

@@ -18,6 +18,12 @@ export interface InvoiceShareAcceptanceRow {
   accepted_at: number;
   cf_ray: string | null;
   user_agent_sha256: string;
+  authentication_method: "email_otp" | "legacy_link_confirmation";
+  challenge_id: string | null;
+  location_source: "cloudflare_ip_geolocation" | "unavailable";
+  location_country_code: string | null;
+  location_region_code: string | null;
+  issuer_reference_proximity: "inside" | "outside" | "unavailable";
   evidence_sha256: string;
 }
 
@@ -33,6 +39,12 @@ export interface RecordInvoiceShareAcceptanceInput {
   acceptedAt: number;
   cfRay: string | null;
   userAgentSha256: string;
+  authenticationMethod: "email_otp";
+  challengeId: string;
+  locationSource: "cloudflare_ip_geolocation" | "unavailable";
+  locationCountryCode: string | null;
+  locationRegionCode: string | null;
+  issuerReferenceProximity: "inside" | "outside" | "unavailable";
   evidenceSha256: string;
 }
 
@@ -44,10 +56,14 @@ export class InvoiceShareAcceptanceRepo {
       `INSERT INTO invoice_share_acceptances
        (id, share_id, invoice_id, recipient_company, recipient_email,
         document_sha256, agreement_version, agreement_text, accepted_at,
-        cf_ray, user_agent_sha256, evidence_sha256)
+        cf_ray, user_agent_sha256, authentication_method, challenge_id,
+        location_source, location_country_code, location_region_code,
+        issuer_reference_proximity, evidence_sha256)
        VALUES (@id, @shareId, @invoiceId, @recipientCompany, @recipientEmail,
                @documentSha256, @agreementVersion, @agreementText, @acceptedAt,
-               @cfRay, @userAgentSha256, @evidenceSha256)
+               @cfRay, @userAgentSha256, @authenticationMethod, @challengeId,
+               @locationSource, @locationCountryCode, @locationRegionCode,
+               @issuerReferenceProximity, @evidenceSha256)
        ON CONFLICT(share_id) DO NOTHING`,
     ).run(input);
     return this.findByShareId(input.shareId)!;

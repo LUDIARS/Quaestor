@@ -46,7 +46,6 @@ export function invoiceSlackDeliveriesRouter(deps: { service: InvoiceSlackDelive
       });
       return c.json({
         share_id: delivered.id,
-        share_url: delivered.url,
         expires_at: delivered.expiresAt,
         filename: delivered.filename,
         document_sha256: delivered.documentSha256,

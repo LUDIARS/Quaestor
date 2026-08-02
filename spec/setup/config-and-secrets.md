@@ -49,6 +49,9 @@ API キー等は **平文でファイル保存しない** (§7.2)。
 | `QUAESTOR_SLACK_BOT_TOKEN` | 請求書マジックリンク投稿用 Slack Bot User OAuth Token (`xoxb-...`) |
 | `QUAESTOR_SLACK_CONVERSATION_ID` | 既定の Slack グループ DM conversation ID (`G...`) |
 | `QUAESTOR_SLACK_USER_IDS` | グループ DM を開く2〜8名の user ID (`U...` / `W...`) を `;` 区切りで指定 |
+| `QUAESTOR_ACCEPTANCE_REFERENCE_LATITUDE` | 合意地点の補助判定に使う送信者側基準緯度。監査ログには保存しない |
+| `QUAESTOR_ACCEPTANCE_REFERENCE_LONGITUDE` | 合意地点の補助判定に使う送信者側基準経度。監査ログには保存しない |
+| `QUAESTOR_ACCEPTANCE_REFERENCE_RADIUS_KM` | 「近辺」とする半径 km。省略時 20 km、最大 1000 km |
 
 Slack の宛先は `QUAESTOR_SLACK_CONVERSATION_ID` と `QUAESTOR_SLACK_USER_IDS` のどちらか
 一方だけを登録する。両方ある場合は設定エラーとして起動時のアプリ組み立てを停止する。
@@ -61,10 +64,48 @@ Get-Clipboard | npm run secret -- set-stdin QUAESTOR_SLACK_CONVERSATION_ID
 npm run secret -- list
 ```
 
+合意地点の補助判定を有効にする場合は、Cloudflare Dashboard の **Rules > Transform Rules >
+Managed Transforms** で **Add visitor location headers** を有効にする。基準座標は個人情報に
+当たるため `quaestor.config.json` へ書かず、上記3参照名を `set-stdin` で暗号化ストアへ登録
+する。受領者座標と実距離は保存せず、合意監査には国・地域コードと基準半径の内外だけを
+残す。この値は補助信号であり、OTP 合意を拒否・成立させる単独条件にはしない。
+
 ユーザー ID 方式を使う場合は2行目の代わりに、例えば
 `U012ABC;U345DEF` をクリップボードへコピーして登録する。
 
-## 3. GA 学習ログ
+## 3. Gmail API 用 Application Default Credentials
+
+請求書リンクと合意確認コードのメール送信には、gcloud CLI が作る `authorized_user` ADC を
+利用する。ADC には refresh token が含まれるため、リポジトリや Quaestor の暗号化ストアへ
+コピーしない。Qs はユーザープロファイル内の正規 ADC を読み取り、access token はメモリ内
+だけに短時間キャッシュする。
+
+1. Google Cloud プロジェクトで Gmail API を有効化する。
+2. OAuth 同意画面を構成し、Desktop app の OAuth client JSON を安全な一時場所へ保存する。
+3. 次のように cloud-platform と gmail.send の両 scope を明示して ADC を作る。
+
+```powershell
+gcloud auth application-default login `
+  --client-id-file="<OAuth client JSON の絶対パス>" `
+  --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/gmail.send"
+```
+
+`cloud-platform scope is required` と表示された場合は、上記のように両方を指定する。確認は
+次のコマンドで行い、出力された access token をチャット、ログ、ファイルへ貼り付けない。
+
+```powershell
+gcloud auth application-default print-access-token
+```
+
+Windows の正規保存先は `%APPDATA%\gcloud\application_default_credentials.json`。環境変数
+`GOOGLE_APPLICATION_CREDENTIALS` が設定されている場合はそちらを正本とし、存在しないパスや
+service-account 形式なら Qs は自動 fallback せず `503 not_configured` で停止する。古い override
+が残っている場合は Excubitor 側の環境設定から削除し、サービスを所定の手順で再起動する。
+ADC を破棄するときは `gcloud auth application-default revoke` を使う。
+
+必要 scope は送信専用の `gmail.send`。メールの検索・閲覧 scope は Qs の配送機能へ付与しない。
+
+## 4. GA 学習ログ
 
 OCR-GA の世代更新は `app_data/training/ga/evolution.jsonl` に毎回追記される
 (ts / key / generation / evaluated / bestFitness / meanFitness / worstFitness / bestGenome)。
