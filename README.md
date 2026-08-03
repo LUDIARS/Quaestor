@@ -87,8 +87,8 @@ v1.0 一気通貫実装済 (2026-05-02)。 詳細は `DESIGN.md`。
 cd E:\Document\Ars\Quaestor
 npm install
 cd web; npm install; cd ..
-npm run dev:all     # backend (17400) + web vite (5177) を concurrently で同時起動
-# → http://127.0.0.1:5177
+npm run dev:all     # backend (17400) + web vite (5117) を concurrently で同時起動
+# → http://127.0.0.1:5117
 ```
 
 OCR を有効化する場合は backend 起動 shell で `ANTHROPIC_API_KEY` を export。

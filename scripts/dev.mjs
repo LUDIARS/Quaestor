@@ -12,7 +12,7 @@ import { readFileSync, existsSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-const DEV_PORTS = [17400, 5177];
+const DEV_PORTS = [17400, 5117];
 
 // quaestor.config.json の web.allowedHosts を VITE_ALLOWED_HOSTS に注入。
 // vite.config.ts での import.meta.url / process.cwd() の解決に依存しない確実な方法。

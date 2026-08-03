@@ -2,7 +2,7 @@
 //!
 //! 構成:
 //! - dev (`tauri dev`): beforeDevCommand が `npm run dev:all` を起動 (concurrently で
-//!   backend + web 両方)、 webview は devUrl http://127.0.0.1:5177 を読む
+//!   backend + web 両方)、 webview は devUrl http://127.0.0.1:5117 を読む
 //! - prod (`tauri build`): beforeBuildCommand が `npm run build:all` で TS / Vite を
 //!   compile、 lib.rs::setup() で `node ../dist/server.js` を spawn して backend を起動、
 //!   起動完了 (HEALTH probe 成功) を待ってから webview を開く
