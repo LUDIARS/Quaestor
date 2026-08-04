@@ -1,4 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { applyMigrations } from "../src/db/schema.js";
 import { ReceiptsRepo } from "../src/db/receipts-repo.js";
@@ -119,6 +122,7 @@ describe("findCandidates", () => {
 
 describe("API: reconciliations + auto-match", () => {
   let app: ReturnType<typeof buildApp>;
+  let receiptsRoot: string;
 
   function postJson(path: string, body: unknown) {
     return app.request(path, {
@@ -129,7 +133,12 @@ describe("API: reconciliations + auto-match", () => {
   }
 
   beforeEach(async () => {
-    app = buildApp({ db: new Database(":memory:"), receiptsRoot: "/tmp/qrecon-test", ocr: "disabled" });
+    receiptsRoot = mkdtempSync(join(tmpdir(), "quaestor-reconcile-test-"));
+    app = buildApp({ db: new Database(":memory:"), receiptsRoot, ocr: "disabled" });
+  });
+
+  afterEach(() => {
+    rmSync(receiptsRoot, { recursive: true, force: true });
   });
 
   it("auto-match flow: seed tx + receipt → POST /auto-match → match created", async () => {
