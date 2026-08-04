@@ -62,6 +62,8 @@ describe("API: invoice magic-link access logs", () => {
       "CF-Connecting-IP": "203.0.113.42",
       "CF-Ray": "abc123-NRT",
       "user-agent": "Access Test Browser/1.0",
+      "cf-ipcountry": "JP",
+      "cf-region-code": "13",
     };
 
     expect((await app.request(`/v1/invoices/share/${created.token}`, { headers: accessHeaders })).status).toBe(200);
@@ -83,6 +85,10 @@ describe("API: invoice magic-link access logs", () => {
         invoice_id: invoiceId,
         cf_ray: "abc123-NRT",
         client_address_sha256: sha256("203.0.113.42"),
+        location_source: "cloudflare_ip_geolocation",
+        location_country_code: "JP",
+        location_region_code: "13",
+        issuer_reference_proximity: "unavailable",
       });
       expect(item.user_agent_sha256).toMatch(/^[0-9a-f]{64}$/);
       expect(item.evidence_sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -90,6 +96,64 @@ describe("API: invoice magic-link access logs", () => {
     expect(JSON.stringify(body)).not.toContain("203.0.113.42");
     expect(JSON.stringify(body)).not.toContain("Access Test Browser/1.0");
     expect(new InvoiceShareRepo(db).findById(created.shareId)).toMatchObject({ view_count: 2 });
+  });
+
+  it("CF-Ray のない自己申告の位置ヘッダーはアクセス証跡に採用しない", async () => {
+    const created = await createShare();
+    expect((await app.request(`/v1/invoices/share/${created.token}`, {
+      headers: {
+        "CF-Connecting-IP": "203.0.113.42",
+        "cf-ipcountry": "US",
+        "cf-region-code": "CA",
+      },
+    })).status).toBe(200);
+
+    const audit = await app.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.shareId}/access-logs`,
+    );
+    const body = await audit.json() as { items: Array<Record<string, unknown>> };
+    expect(body.items[0]).toMatchObject({
+      location_source: "unavailable",
+      location_country_code: null,
+      location_region_code: null,
+      issuer_reference_proximity: "unavailable",
+    });
+  });
+
+  it("発行者の基準地点を設定するとアクセス証跡へ inside/outside だけを残す", async () => {
+    const created = await createShare();
+    const located = buildApp({
+      db,
+      receiptsRoot: join(root, "receipts"),
+      ocr: "disabled",
+      invoiceShare: { publicUrl: "https://qs.example.com", roots: [root] },
+      unsafeExposeInvoiceShareUrl: true,
+      invoiceAcceptanceLocationReference: { latitude: 35.6812, longitude: 139.7671, radiusKm: 20 },
+    });
+    expect((await located.request(`/v1/invoices/share/${created.token}`, {
+      headers: {
+        "CF-Connecting-IP": "203.0.113.42",
+        "CF-Ray": "abc123-NRT",
+        "cf-ipcountry": "JP",
+        "cf-region-code": "13",
+        "cf-iplatitude": "35.6895",
+        "cf-iplongitude": "139.6917",
+      },
+    })).status).toBe(200);
+
+    const audit = await located.request(
+      `/v1/invoices/${invoiceId}/share-links/${created.shareId}/access-logs`,
+    );
+    const body = await audit.json() as { items: Array<Record<string, unknown>> };
+    expect(body.items[0]).toMatchObject({
+      location_source: "cloudflare_ip_geolocation",
+      location_country_code: "JP",
+      location_region_code: "13",
+      issuer_reference_proximity: "inside",
+    });
+    // 座標と距離は証跡へ残さない。
+    expect(JSON.stringify(body)).not.toContain("35.6895");
+    expect(JSON.stringify(body)).not.toContain("139.6917");
   });
 
   it("無効トークンと受領者未登録の合意開始を閲覧アクセスとして記録しない", async () => {

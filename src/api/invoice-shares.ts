@@ -6,6 +6,7 @@
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-004 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCESS-001 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCESS-002 (spec/feature/invoice-public-magic-link.md)
  */
 
 import { Hono, type Context } from "hono";
@@ -24,6 +25,7 @@ import {
 } from "../services/invoice-share-acceptance-service.js";
 import { InvoiceEmailError } from "../services/invoice-email-notifier.js";
 import type { InvoiceShareAccessService } from "../services/invoice-share-access-service.js";
+import type { CloudflareVisitorLocation } from "../services/invoice-acceptance-location-signal.js";
 
 const DEFAULT_ACCESS_LOG_LIMIT = 100;
 const MAX_ACCESS_LOG_LIMIT = 500;
@@ -221,12 +223,7 @@ async function confirmAcceptance(
       token, challengeId, code,
       cfRay: c.req.header("CF-Ray"), userAgent: c.req.header("user-agent"),
       cloudflareClientAddress: c.req.header("CF-Connecting-IP"),
-      visitorLocation: {
-        latitude: c.req.header("cf-iplatitude"),
-        longitude: c.req.header("cf-iplongitude"),
-        countryCode: c.req.header("cf-ipcountry"),
-        regionCode: c.req.header("cf-region-code"),
-      },
+      visitorLocation: visitorLocation(c),
     });
     const result = await deps.service.findPublic(token, false);
     return c.html(invoiceSharePage({
@@ -273,15 +270,32 @@ function clientAddress(c: Context): string {
     ?? "unknown";
 }
 
+/**
+ * Cloudflare の自己申告位置ヘッダー。 信頼判定と粗粒度への縮約は
+ * evaluateAcceptanceLocation 側で行うため、 ここでは素通しする。
+ */
+function visitorLocation(c: Context): CloudflareVisitorLocation {
+  return {
+    latitude: c.req.header("cf-iplatitude"),
+    longitude: c.req.header("cf-iplongitude"),
+    countryCode: c.req.header("cf-ipcountry"),
+    regionCode: c.req.header("cf-region-code"),
+  };
+}
+
 function accessMetadata(c: Context): {
   clientAddress: string;
   cfRay: string | undefined;
   userAgent: string | undefined;
+  cloudflareClientAddress: string | undefined;
+  visitorLocation: CloudflareVisitorLocation;
 } {
   return {
     clientAddress: clientAddress(c),
     cfRay: c.req.header("CF-Ray"),
     userAgent: c.req.header("user-agent"),
+    cloudflareClientAddress: c.req.header("CF-Connecting-IP"),
+    visitorLocation: visitorLocation(c),
   };
 }
 

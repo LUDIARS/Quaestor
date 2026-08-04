@@ -2,6 +2,7 @@
  * 有効なマジックリンクへの成功アクセスを追記専用で保存する。
  *
  * @implements SPEC-INVOICE-ACCESS-001 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCESS-002 (spec/feature/invoice-public-magic-link.md)
  */
 
 import type Database from "better-sqlite3";
@@ -17,6 +18,10 @@ export interface InvoiceShareAccessRow {
   cf_ray: string | null;
   client_address_sha256: string;
   user_agent_sha256: string;
+  location_source: "cloudflare_ip_geolocation" | "unavailable";
+  location_country_code: string | null;
+  location_region_code: string | null;
+  issuer_reference_proximity: "inside" | "outside" | "unavailable";
   evidence_sha256: string;
 }
 
@@ -29,6 +34,10 @@ export interface RecordInvoiceShareAccessInput {
   cfRay: string | null;
   clientAddressSha256: string;
   userAgentSha256: string;
+  locationSource: "cloudflare_ip_geolocation" | "unavailable";
+  locationCountryCode: string | null;
+  locationRegionCode: string | null;
+  issuerReferenceProximity: "inside" | "outside" | "unavailable";
   evidenceSha256: string;
 }
 
@@ -40,9 +49,13 @@ export class InvoiceShareAccessRepo {
       this.db.prepare(
         `INSERT INTO invoice_share_access_logs
          (id, share_id, invoice_id, event_type, accessed_at, cf_ray,
-          client_address_sha256, user_agent_sha256, evidence_sha256)
+          client_address_sha256, user_agent_sha256, location_source,
+          location_country_code, location_region_code, issuer_reference_proximity,
+          evidence_sha256)
          VALUES (@id, @shareId, @invoiceId, @eventType, @accessedAt, @cfRay,
-                 @clientAddressSha256, @userAgentSha256, @evidenceSha256)`,
+                 @clientAddressSha256, @userAgentSha256, @locationSource,
+                 @locationCountryCode, @locationRegionCode, @issuerReferenceProximity,
+                 @evidenceSha256)`,
       ).run(input);
       this.db.prepare(
         `UPDATE invoice_share_tokens

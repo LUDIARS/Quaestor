@@ -188,14 +188,21 @@ unauthenticated traffic from creating unbounded audit rows. Acceptance POSTs are
 the acceptance ledger and do not masquerade as page or PDF views.
 
 The event contains its type (`landing_view` or `document_view`), timestamp, valid Cloudflare Ray ID,
-and SHA-256 digests of the client address and User-Agent. Raw client addresses, raw User-Agents, and
-magic-link tokens are never stored in this ledger. The issuer can retrieve newest-first events with
+SHA-256 digests of the client address and User-Agent, and the same privacy-reduced Cloudflare location
+signal used for acceptance evidence: source, coarse country/region codes, and an
+inside/outside/unavailable issuer-reference result. Raw client addresses, raw User-Agents, coordinates,
+distances, and magic-link tokens are never stored in this ledger. The location signal is recorded only
+when a valid `CF-Ray` and syntactically valid `CF-Connecting-IP` make the Cloudflare headers trustworthy;
+otherwise it is `unavailable`. The issuer can retrieve newest-first events with
 `GET /v1/invoices/:id/share-links/:shareId/access-logs?limit=100`; the limit range is 1–500 and the
 response returns both `items` and the uncapped `total`.
 
 - **SPEC-INVOICE-ACCESS-001** — successful landing/PDF accesses are appended to the matching share
   with privacy-minimized request evidence, while the existing first/last/count summary is updated in
   the same database transaction.
+- **SPEC-INVOICE-ACCESS-002** — access evidence stores only the trusted Cloudflare location source,
+  coarse country/region, and an inside/outside/unavailable issuer-reference result. Raw coordinates,
+  distance, and the connecting IP are never persisted.
 
 This is a clickwrap-style evidence record authenticated by control of the registered recipient email,
 in addition to possession of the delivery link. It is not proof that a natural person rather than an

@@ -241,6 +241,10 @@ const STATEMENTS: string[] = [
     cf_ray                   TEXT,
     client_address_sha256    TEXT NOT NULL CHECK (length(client_address_sha256) = 64),
     user_agent_sha256        TEXT NOT NULL CHECK (length(user_agent_sha256) = 64),
+    location_source          TEXT NOT NULL DEFAULT 'unavailable',
+    location_country_code    TEXT,
+    location_region_code     TEXT,
+    issuer_reference_proximity TEXT NOT NULL DEFAULT 'unavailable',
     evidence_sha256          TEXT NOT NULL CHECK (length(evidence_sha256) = 64)
   )`,
 
@@ -588,11 +592,25 @@ export function applyMigrations(db: Database.Database): void {
     "issuer_reference_proximity",
     "TEXT NOT NULL DEFAULT 'unavailable'",
   );
+  ensureColumn(
+    db,
+    "invoice_share_access_logs",
+    "location_source",
+    "TEXT NOT NULL DEFAULT 'unavailable'",
+  );
+  ensureColumn(db, "invoice_share_access_logs", "location_country_code", "TEXT");
+  ensureColumn(db, "invoice_share_access_logs", "location_region_code", "TEXT");
+  ensureColumn(
+    db,
+    "invoice_share_access_logs",
+    "issuer_reference_proximity",
+    "TEXT NOT NULL DEFAULT 'unavailable'",
+  );
   ensureColumn(db, "invoice_share_deliveries", "request_sha256", "TEXT");
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 13");
+  db.pragma("user_version = 14");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

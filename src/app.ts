@@ -150,7 +150,10 @@ export interface AppDeps {
   invoiceEmailNotifier?: InvoiceEmailNotifier | "auto" | "disabled";
   /** テスト専用。通常運用で送信者へ bearer URL を返す API は登録しない。 */
   unsafeExposeInvoiceShareUrl?: boolean;
-  /** 合意地点と比較する送信者側の基準地点。座標は暗号化ストア経由の env を既定とする。 */
+  /**
+   * 合意地点・アクセス地点と比較する送信者側の基準地点。
+   * 座標は暗号化ストア経由の env を既定とする。
+   */
   invoiceAcceptanceLocationReference?: InvoiceAcceptanceLocationReference | null;
 }
 
@@ -269,17 +272,19 @@ export function buildApp(deps: AppDeps): Hono {
     contacts: invoiceDeliveryContacts,
   });
   const invoiceEmailNotifier = resolveInvoiceEmailNotifier(deps.invoiceEmailNotifier);
+  const invoiceShareLocationReference = deps.invoiceAcceptanceLocationReference === undefined
+    ? locationReferenceFromEnvironment()
+    : deps.invoiceAcceptanceLocationReference;
   const invoiceShareAcceptanceService = new InvoiceShareAcceptanceService({
     shares: invoiceShareService,
     acceptances: invoiceShareAcceptances,
     challenges: invoiceShareChallenges,
     notifier: invoiceEmailNotifier,
-    locationReference: deps.invoiceAcceptanceLocationReference === undefined
-      ? locationReferenceFromEnvironment()
-      : deps.invoiceAcceptanceLocationReference,
+    locationReference: invoiceShareLocationReference,
   });
   const invoiceShareAccessService = new InvoiceShareAccessService({
     accesses: invoiceShareAccesses,
+    locationReference: invoiceShareLocationReference,
   });
   const slackInvoiceNotifier = resolveSlackNotifier(deps.slackInvoiceNotifier);
   const invoiceSlackDeliveryService = new InvoiceSlackDeliveryService({

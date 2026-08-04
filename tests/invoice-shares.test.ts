@@ -301,7 +301,45 @@ describe("invoice share schema migration", () => {
       expect(db.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'invoice_share_acceptances'",
       ).get()).toEqual({ name: "invoice_share_acceptances" });
-      expect(db.pragma("user_version", { simple: true })).toBe(13);
+      expect(db.pragma("user_version", { simple: true })).toBe(14);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("既存のアクセス監査ログ行を保持したまま位置カラムを unavailable で追加する", () => {
+    const db = new Database(":memory:");
+    try {
+      // 位置カラム導入前 (user_version 13) のアクセス監査ログ。
+      db.exec(`CREATE TABLE invoice_share_access_logs (
+        id TEXT PRIMARY KEY,
+        share_id TEXT NOT NULL,
+        invoice_id INTEGER NOT NULL,
+        event_type TEXT NOT NULL,
+        accessed_at INTEGER NOT NULL,
+        cf_ray TEXT,
+        client_address_sha256 TEXT NOT NULL,
+        user_agent_sha256 TEXT NOT NULL,
+        evidence_sha256 TEXT NOT NULL
+      )`);
+      db.prepare(`INSERT INTO invoice_share_access_logs
+        (id, share_id, invoice_id, event_type, accessed_at, cf_ray,
+         client_address_sha256, user_agent_sha256, evidence_sha256)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run("v13-access", "v13-share", 42, "landing_view", START, null,
+        "a".repeat(64), "b".repeat(64), "c".repeat(64));
+
+      applyMigrations(db);
+
+      expect(db.prepare("SELECT * FROM invoice_share_access_logs WHERE id = ?").get("v13-access"))
+        .toMatchObject({
+          event_type: "landing_view",
+          location_source: "unavailable",
+          location_country_code: null,
+          location_region_code: null,
+          issuer_reference_proximity: "unavailable",
+        });
+      expect(() => applyMigrations(db)).not.toThrow();
     } finally {
       db.close();
     }
