@@ -1,0 +1,27 @@
+{
+  "name": "runtime-version",
+  "description": "Quaestor の配備バージョンを health 応答、起動ログ、および Web UI で一貫して報告する。資格情報や構成値の公開は責務外。",
+  "presetRules": [
+    {
+      "preset": "couplingCap",
+      "params": {
+        "targetPattern": "(?:src/(?:app|server)\\.ts|src/services/runtime-version\\.ts|web/src/App\\.tsx)",
+        "by": "path",
+        "maxFanOut": 100
+      }
+    }
+  ],
+  "templateRules": [],
+  "cardTemplate": "Summarise the runtime-version domain: one deployment-version value is exposed through health, startup logs, and the Web header, with an unavailable fallback.",
+  "source": "spec-draft",
+  "mechanics": [
+    "health-version-contract",
+    "startup-version-log",
+    "web-runtime-version-display"
+  ],
+  "specRefs": [
+    "SPEC-RUNTIME-VERSION-001 — 配備バージョンの一貫した表示"
+  ],
+  "rationale": "配備バージョンの観測は backend と Web UI の共通運用関心であり、業務ドメインや資格情報管理から分離する。",
+  "updatedAt": "2026-08-09T00:00:00.000Z"
+}

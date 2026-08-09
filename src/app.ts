@@ -3,6 +3,7 @@
  */
 
 import { Hono } from "hono";
+import { runtimeVersionFromEnvironment } from "./services/runtime-version.js";
 import type Database from "better-sqlite3";
 import { applyMigrations } from "./db/schema.js";
 import { ImportsRepo } from "./db/imports-repo.js";
@@ -157,6 +158,7 @@ export interface AppDeps {
   invoiceAcceptanceLocationReference?: InvoiceAcceptanceLocationReference | null;
 }
 
+/** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
 export function buildApp(deps: AppDeps): Hono {
   applyMigrations(deps.db);
   const imports = new ImportsRepo(deps.db);
@@ -303,7 +305,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.get("/health", (c) => c.json({
     ok: true,
     service: "quaestor",
-    version: "1.0.0",
+    version: runtimeVersionFromEnvironment(),
     ocr_enabled: ocrEnabled,
     invest_enabled: { mapper: !!securityMapper, stock: !!stockClient, perks: !!perkClient },
     portfolio_enabled: { stock: !!stockClient, dividends: !!dividendClient },

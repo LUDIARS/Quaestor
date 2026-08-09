@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Scan } from "./pages/Scan.js";
 import { Receipts } from "./pages/Receipts.js";
 import { Imports } from "./pages/Imports.js";
@@ -50,12 +50,26 @@ const PAGES: { key: Page; label: string }[] = [
   { key: "settings", label: "設定" },
 ];
 
+const UNAVAILABLE_VERSION = "unavailable";
+
+/** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
 export function App() {
   const [page, setPage] = useState<Page>("dashboard");
+  const [runtimeVersion, setRuntimeVersion] = useState(UNAVAILABLE_VERSION);
+
+  useEffect(() => {
+    void fetch("/health")
+      .then((response) => response.ok ? response.json() as Promise<{ version?: unknown }> : undefined)
+      .then((health) => {
+        if (typeof health?.version === "string" && health.version) setRuntimeVersion(health.version);
+      })
+      .catch(() => undefined);
+  }, []);
+
   return (
     <div className="app">
       <header>
-        <h1>Quaestor</h1>
+        <h1>Quaestor <span className="runtime-version">v{runtimeVersion}</span></h1>
         <nav>
           {PAGES.map((p) => (
             <a key={p.key} href={`#${p.key}`} onClick={(e) => { e.preventDefault(); setPage(p.key); }} aria-current={page === p.key}>

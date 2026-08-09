@@ -25,6 +25,7 @@ import { NotificationWorker } from "./services/notification-worker.js";
 import { SubsidyCrawlWorker } from "./services/subsidy-crawl-worker.js";
 import { SubsidiesRepo } from "./db/subsidies-repo.js";
 import { JGrantsCrawler, MirasapoPlusCrawler, CompositeCrawler } from "./services/subsidy-crawler.js";
+import { runtimeVersionFromEnvironment } from "./services/runtime-version.js";
 
 const config = loadAppConfig();
 
@@ -106,9 +107,16 @@ if (config.subsidyCrawl.enabled) {
 // 定期 Discord 通知ワーカー: notifications.enabled かつ webhook URL がある時のみ起動
 let notificationWorker: NotificationWorker | null = null;
 
+/** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
 serve({ fetch: app.fetch, hostname: config.server.host, port: config.server.port }, (info) => {
   log.info(
-    { host: config.server.host, port: info.port, dbPath: DB_PATH, ocrWorker: ocrWorker !== null },
+    {
+      host: config.server.host,
+      port: info.port,
+      dbPath: DB_PATH,
+      ocrWorker: ocrWorker !== null,
+      version: runtimeVersionFromEnvironment(),
+    },
     "Quaestor listening",
   );
   const hasWebhook = !!(process.env.QUAESTOR_DISCORD_WEBHOOK_URL ?? process.env.DISCORD_WEBHOOK_URL);

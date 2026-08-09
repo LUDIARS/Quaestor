@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { Buffer } from "node:buffer";
 import iconv from "iconv-lite";
 import { buildApp } from "../src/app.js";
+import { runtimeVersionFrom } from "../src/services/runtime-version.js";
 
 function makeApp() {
   const db = new Database(":memory:");
@@ -25,9 +26,10 @@ describe("API", () => {
   it("GET /health", async () => {
     const res = await app.request("/health");
     expect(res.status).toBe(200);
-    const j = await res.json() as { ok: boolean; service: string };
+    const j = await res.json() as { ok: boolean; service: string; version: string };
     expect(j.ok).toBe(true);
     expect(j.service).toBe("quaestor");
+    expect(j.version).toBeTypeOf("string");
   });
 
   it("POST /v1/imports inserts UFJ CSV transactions", async () => {
@@ -88,5 +90,13 @@ describe("API", () => {
       body: JSON.stringify({ content_b64: buf.toString("base64") }),
     });
     expect(res.status).toBe(422);
+  });
+});
+
+describe("runtimeVersionFrom", () => {
+  it("exposes only a compact deployment-version identifier", () => {
+    expect(runtimeVersionFrom("2026.08.09+build.347")).toBe("2026.08.09+build.347");
+    expect(runtimeVersionFrom("secret value")).toBe("unavailable");
+    expect(runtimeVersionFrom(undefined)).toBe("unavailable");
   });
 });

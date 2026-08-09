@@ -26,7 +26,8 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `invoiceShare.roots` | `["data","app_data/invoices"]` | 共有を許可する PDF ルート (invoice-share-service.ts) | `QUAESTOR_INVOICE_SHARE_ROOTS` (`;` 区切り) |
 
 web (ブラウザ) は `import.meta.env` を使わない。非シークレット設定は
-`GET /v1/config` (app.ts) → `web/src/lib/runtime-config.ts` で受け取る。
+`GET /v1/config` (app.ts) → `web/src/lib/runtime-config.ts` で受け取る。配備バージョンは
+`GET /health` の `version` で取得する。
 
 ## 2. シークレット — 暗号化ストア (`app_data/secrets.enc.json`)
 

@@ -133,6 +133,11 @@ pre {
   margin: 0;
   font-size: 1.25rem;
 }
+.runtime-version {
+  font-size: 0.7em;
+  font-weight: 400;
+  opacity: 0.72;
+}
 .app nav {
   display: flex;
   gap: 0.25rem;
