@@ -2,6 +2,7 @@
  * 請求書マジックリンクの発行・閲覧・受領者メール C&R・明示合意API。
  *
  * @implements SPEC-INVOICE-DELIVERY-002 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-DELIVERY-003 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-004 (spec/feature/invoice-public-magic-link.md)
@@ -139,8 +140,8 @@ export function invoiceSharesRouter(deps: {
   });
 
   if (deps.allowUnsafeIssueApi) app.post("/:id/share-links", async (c) => {
-    const invoiceId = Number.parseInt(c.req.param("id"), 10);
-    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
     const parsed = CreateShareSchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_request", details: parsed.error.message }, 400);
     try {
@@ -167,8 +168,8 @@ export function invoiceSharesRouter(deps: {
   });
 
   app.get("/:id/share-links/:shareId/acceptance", (c) => {
-    const invoiceId = Number.parseInt(c.req.param("id"), 10);
-    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
     const share = deps.service.findById(c.req.param("shareId"));
     if (!share || share.invoice_id !== invoiceId) return c.json({ error: "not_found" }, 404);
     const acceptance = deps.acceptances.find(share.id);
@@ -176,8 +177,8 @@ export function invoiceSharesRouter(deps: {
   });
 
   app.get("/:id/share-links/:shareId/access-logs", (c) => {
-    const invoiceId = Number.parseInt(c.req.param("id"), 10);
-    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
     const limit = accessLogLimit(c.req.query("limit"));
     if (limit === null) return c.json({ error: "invalid_limit" }, 400);
     const share = deps.service.findById(c.req.param("shareId"));
@@ -186,8 +187,8 @@ export function invoiceSharesRouter(deps: {
   });
 
   app.post("/:id/share-links/:shareId/revoke", (c) => {
-    const invoiceId = Number.parseInt(c.req.param("id"), 10);
-    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
     const revoked = deps.service.revoke(invoiceId, c.req.param("shareId"));
     return revoked ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
   });
@@ -247,6 +248,13 @@ function challengeErrorMessage(error: InvoiceShareChallengeError): string {
   if (error.code === "expired") return "確認コードの有効期限が切れました。前の画面から再発行してください。";
   if (error.code === "locked") return "入力回数の上限に達しました。前の画面から再発行してください。";
   return "確認コードが一致しません。";
+}
+
+/** `:id` は 10 進の正整数だけを受ける。 `Number.parseInt` の前方一致 ("12abc" → 12) を避ける。 */
+function invoiceIdOf(raw: string): number | null {
+  if (!/^[0-9]{1,15}$/.test(raw)) return null;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
 function setPublicShareHeaders(c: Context): void {

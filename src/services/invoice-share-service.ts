@@ -2,11 +2,12 @@
  * 請求書PDFの発行時検証・トークン化・宛先スナップショット・公開時再検証。
  *
  * @implements SPEC-INVOICE-DELIVERY-002 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-DELIVERY-004 (spec/feature/invoice-public-magic-link.md)
  */
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { open, readFile, realpath, stat } from "node:fs/promises";
+import { open, realpath, stat } from "node:fs/promises";
 import { basename, extname, isAbsolute, relative, resolve } from "node:path";
 import type { InvoiceRow, InvoicesRepo } from "../db/invoices-repo.js";
 import type { InvoiceShareRepo, InvoiceShareRow } from "../db/invoice-share-repo.js";
@@ -145,15 +146,21 @@ export class InvoiceShareService {
 
   async loadDocument(token: string, recordView = true): Promise<InvoiceShareDocument> {
     const result = await this.findPublic(token, false);
-    const inspected = await this.inspectPdf(result.share.document_path);
-    if (inspected.size !== result.share.document_size) {
-      throw new InvoiceShareError("document_changed", "shared invoice document changed after link creation", 409);
+    let inspected: { path: string; filename: string; size: number };
+    try {
+      inspected = await this.inspectPdf(result.share.document_path);
+    } catch (error) {
+      // 発行後の欠落・非PDF化・上限超過も、発行時の文書と異なる状態として扱う。
+      // これにより巨大な置換ファイルを読み込まず、公開側は一貫して fail-closed する。
+      if (error instanceof InvoiceShareError && error.code === "document_invalid") throw documentChanged();
+      throw error;
     }
+    if (inspected.size !== result.share.document_size) throw documentChanged();
     // 実際に配信するバイト列そのものを検証する。 stat 後の差し替えもここで落ちる。
-    const contents = await readFile(inspected.path);
-    if (contents.length !== result.share.document_size || sha256(contents) !== result.share.document_sha256) {
-      throw new InvoiceShareError("document_changed", "shared invoice document changed after link creation", 409);
-    }
+    // 読み出し量は発行時に記録したサイズ丁度に固定するので、 stat 直後に巨大ファイルへ
+    // 差し替えられてもプロセスがそれを丸ごとメモリに載せることはない。
+    const contents = await readExactly(inspected.path, result.share.document_size);
+    if (!contents || sha256(contents) !== result.share.document_sha256) throw documentChanged();
     if (recordView && !this.options.shares.recordView(result.share.id, this.now())) throw notFound();
     return { ...result, contents };
   }
@@ -249,6 +256,27 @@ function defaultShareRoots(): string[] {
   return ["data", "app_data/invoices"];
 }
 
+/**
+ * ちょうど `size` バイトを読む。 ファイルが短く/長くなっていたら null を返し、
+ * 呼び出し側で「発行時と別物」として fail-closed させる。
+ */
+async function readExactly(path: string, size: number): Promise<Buffer | null> {
+  const handle = await open(path, "r");
+  try {
+    const buffer = Buffer.alloc(size);
+    let offset = 0;
+    while (offset < size) {
+      const { bytesRead } = await handle.read(buffer, offset, size - offset, offset);
+      if (bytesRead === 0) return null; // 短くなっている
+      offset += bytesRead;
+    }
+    const tail = await handle.read(Buffer.alloc(1), 0, 1, size);
+    return tail.bytesRead === 0 ? buffer : null; // 伸びている
+  } finally {
+    await handle.close();
+  }
+}
+
 async function hashFile(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
@@ -261,4 +289,8 @@ function sha256(value: string | Buffer): string {
 
 function notFound(): InvoiceShareError {
   return new InvoiceShareError("not_found", "invoice share link is invalid or expired", 404);
+}
+
+function documentChanged(): InvoiceShareError {
+  return new InvoiceShareError("document_changed", "shared invoice document changed after link creation", 409);
 }

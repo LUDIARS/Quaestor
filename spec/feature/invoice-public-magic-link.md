@@ -111,6 +111,11 @@ Clauses:
 - **SPEC-INVOICE-DELIVERY-002** — when `recipient_id` is supplied, link issuance requires an active
   contact and copies its ID, company, and email into the share row. Later contact edits never rewrite
   an issued link's recipient evidence.
+- **SPEC-INVOICE-DELIVERY-003** — every issuer route that accepts an invoice `:id` accepts only a
+  positive decimal integer in its entirety; partial numeric strings such as `12abc` are invalid.
+- **SPEC-INVOICE-DELIVERY-004** — a PDF response reads exactly the issuance-time byte length and
+  verifies that buffer's SHA-256 before delivery. Shortened, extended, or replaced files fail closed
+  with `409`, and a post-issuance oversized replacement is never read into process memory.
 
 ## Recipient API
 
@@ -125,8 +130,14 @@ Invalid, expired, revoked, cancelled-invoice, and unknown links return the same 
 The public response never exposes invoice metadata, storage paths, token hashes, or audit rows.
 Responses use `no-store`, `no-referrer`, `nosniff`, frame denial, no-index headers, and restrictive
 CSP. A local fixed-window limiter allows 60 requests per five minutes per Cloudflare client address.
+Because that address comes from a client-supplied header, the limiter tracks at most 10,000 distinct
+addresses and evicts the oldest, so header rotation cannot grow process memory without bound.
 Opening a link increments an audit counter but never consumes it, because email security scanners
 may prefetch links. Links remain reusable until expiry or explicit revocation.
+
+- **SPEC-INVOICE-ACCESS-002** — the public-link fixed-window limiter bounds its tracked client-address
+  keys. It prunes expired windows before admitting a new key and evicts the oldest live key when the
+  capacity remains full, preventing forged forwarding headers from causing unbounded memory growth.
 
 ## Explicit acceptance
 

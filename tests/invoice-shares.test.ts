@@ -149,6 +149,11 @@ describe("InvoiceShareService", () => {
     writeFileSync(pdfPath, Buffer.concat([PDF, Buffer.from("extra")]));
     await expect(service.loadDocument(token(created.url)))
       .rejects.toMatchObject({ code: "document_changed", status: 409 });
+
+    // 発行後に上限超過へ置換されても、公開側は巨大なファイルを読まず 409 で閉じる。
+    writeFileSync(pdfPath, Buffer.concat([PDF, Buffer.alloc(25 * 1024 * 1024)]));
+    await expect(service.loadDocument(token(created.url)))
+      .rejects.toMatchObject({ code: "document_changed", status: 409 });
   });
 
   it("許可 root 外・非 PDF・PDF 署名なしのドキュメントを拒否する", async () => {
@@ -383,9 +388,42 @@ describe("InvoiceShareRateLimiter", () => {
     expect(limiter.check("a").allowed).toBe(true);
   });
 
+  it("追跡キー数に上限があり、 詐称ヘッダでメモリを伸ばされない", () => {
+    let now = 0;
+    const limiter = new InvoiceShareRateLimiter(3, 60_000, () => now, 4);
+
+    // 上限を大きく超える数の (詐称され得る) client address を投げ込む。
+    for (let i = 0; i < 500; i += 1) expect(limiter.check(`spoof-${i}`).allowed).toBe(true);
+
+    // 生き残っている直近のキーは窓を引き継ぎ、 追い出された古いキーは新しい窓から始まる。
+    expect(limiter.check("spoof-499").allowed).toBe(true);
+    expect(limiter.check("spoof-499").allowed).toBe(true);
+    expect(limiter.check("spoof-499").allowed).toBe(false);
+    expect(limiter.check("spoof-0").allowed).toBe(true);
+
+    now = 60_000;
+    expect(limiter.check("spoof-499").allowed).toBe(true);
+  });
+
+  it("期限切れで再開したキーを最古として退避しない", () => {
+    let now = 0;
+    const limiter = new InvoiceShareRateLimiter(2, 60_000, () => now, 2);
+
+    expect(limiter.check("renewed").allowed).toBe(true);
+    now = 1;
+    expect(limiter.check("older").allowed).toBe(true);
+
+    now = 60_000;
+    expect(limiter.check("renewed").allowed).toBe(true); // 新しい窓として再開する。
+    expect(limiter.check("new").allowed).toBe(true); // oldest live の "older" を退避する。
+    expect(limiter.check("renewed").allowed).toBe(true);
+    expect(limiter.check("renewed").allowed).toBe(false);
+  });
+
   it("不正な設定値を拒否する", () => {
     expect(() => new InvoiceShareRateLimiter(0)).toThrow();
     expect(() => new InvoiceShareRateLimiter(60, 0)).toThrow();
+    expect(() => new InvoiceShareRateLimiter(60, 60_000, Date.now, 0)).toThrow();
   });
 });
 
@@ -751,6 +789,25 @@ describe("API: /v1/invoices share links", () => {
       body: JSON.stringify({ document_path: pdfPath }),
     });
     expect(badId.status).toBe(400);
+
+    // "12abc" は `Number.parseInt` の前方一致だと 12 として通ってしまう。 :id を取る
+    // 発行側ルートはいずれも 10 進の正整数丸ごとだけを受ける。
+    const prefixId = await app.request("/v1/invoices/12abc/share-links", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ document_path: pdfPath }),
+    });
+    expect(prefixId.status).toBe(400);
+    expect((await app.request(
+      "/v1/invoices/12abc/share-links/00000000-0000-4000-8000-000000000000/revoke",
+      { method: "POST" },
+    )).status).toBe(400);
+    expect((await app.request(
+      "/v1/invoices/12abc/share-links/00000000-0000-4000-8000-000000000000/acceptance",
+    )).status).toBe(400);
+    expect((await app.request(
+      "/v1/invoices/12abc/share-links/00000000-0000-4000-8000-000000000000/access-logs",
+    )).status).toBe(400);
   });
 
   it("上限超過は 429 + Retry-After を返す", async () => {
