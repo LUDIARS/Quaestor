@@ -1,5 +1,5 @@
 /**
- * マジックリンク発行・Gmail配信・冪等監査を一つの失敗単位として扱う。
+ * マジックリンク発行・SES配信・冪等監査を一つの失敗単位として扱う。
  *
  * @implements SPEC-INVOICE-EMAIL-002 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-EMAIL-003 (spec/feature/invoice-public-magic-link.md)
@@ -60,7 +60,7 @@ export class InvoiceEmailDeliveryService {
     const previous = this.options.deliveries.findByIdempotencyKey(input.idempotencyKey);
     if (previous) return this.resolveExisting(previous, input, requestSha256);
     const notifier = this.options.notifier;
-    if (!notifier) throw new InvoiceEmailError("not_configured", "Gmail ADC is not configured", 503);
+    if (!notifier) throw new InvoiceEmailError("not_configured", "SES email is not configured", 503);
     notifier.assertReady();
 
     const invoice = this.options.invoices.find(input.invoiceId);

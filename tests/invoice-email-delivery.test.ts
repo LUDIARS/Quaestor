@@ -29,7 +29,7 @@ describe("invoice email delivery", () => {
       assertReady: () => undefined,
       sendMessage: async (message) => {
         sent.push(message);
-        return { messageId: `gmail-${sent.length}` };
+        return { messageId: `ses-${sent.length}` };
       },
     };
     app = buildApp({
@@ -97,9 +97,9 @@ describe("invoice email delivery", () => {
     expect(response.status).toBe(404);
   });
 
-  // notifier 未注入の buildApp が実 ADC の Gmail クライアントへ落ちると、テストが開発機の
+  // notifier 未注入の buildApp が実 SES クライアントへ落ちると、テストが開発機の
   // 資格情報で fixture 宛に実メールを送りうる。 未注入は送信到達前に 503 で閉じる。
-  it("notifier 未注入なら実ADCへ fallback せず 503 not_configured を返す", async () => {
+  it("notifier 未注入なら実SESへ fallback せず 503 not_configured を返す", async () => {
     const uninjected = buildApp({
       db,
       receiptsRoot: join(root, "receipts"),

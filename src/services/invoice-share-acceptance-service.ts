@@ -112,7 +112,7 @@ export class InvoiceShareAcceptanceService {
       );
     }
     const notifier = this.options.notifier;
-    if (!notifier) throw new InvoiceEmailError("not_configured", "Gmail ADC is not configured", 503);
+    if (!notifier) throw new InvoiceEmailError("not_configured", "SES email is not configured", 503);
     notifier.assertReady();
     const id = this.idFactory();
     const code = this.codeFactory();

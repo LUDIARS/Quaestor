@@ -56,6 +56,12 @@ export interface AppConfig {
     publicUrl: string | null;
     /** 共有を許可する PDF ルート。 相対はプロセス CWD 基準 */
     roots: string[];
+    /** 請求書メールの送信元 (Amazon SES)。 region/fromAddress が null ならメール送信不可 (503) */
+    email: {
+      region: string | null;
+      fromAddress: string | null;
+      configurationSet: string | null;
+    };
   };
   /** 補助金の定期クロール (#278)。 */
   subsidyCrawl: {
@@ -84,7 +90,11 @@ const DEFAULTS: AppConfig = {
     lang: "japan", python: null, venvPython: null, externalUrl: null,
   },
   training: { gaRoot: "app_data/training/ga" },
-  invoiceShare: { publicUrl: null, roots: ["data", "app_data/invoices"] },
+  invoiceShare: {
+    publicUrl: null,
+    roots: ["data", "app_data/invoices"],
+    email: { region: null, fromAddress: null, configurationSet: null },
+  },
   subsidyCrawl: {
     enabled: false,
     intervalMs: 86_400_000,   // 24h
@@ -136,6 +146,11 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
       publicUrl: strOrNull(env("QUAESTOR_PUBLIC_URL"), fromFile?.invoiceShare?.publicUrl),
       roots: semicolonList(env("QUAESTOR_INVOICE_SHARE_ROOTS"))
         ?? arr(fromFile?.invoiceShare?.roots, DEFAULTS.invoiceShare.roots),
+      email: {
+        region:           strOrNull(env("QUAESTOR_SES_REGION"),            fromFile?.invoiceShare?.email?.region),
+        fromAddress:      strOrNull(env("QUAESTOR_SES_FROM_ADDRESS"),      fromFile?.invoiceShare?.email?.fromAddress),
+        configurationSet: strOrNull(env("QUAESTOR_SES_CONFIGURATION_SET"), fromFile?.invoiceShare?.email?.configurationSet),
+      },
     },
     subsidyCrawl: {
       enabled:         flag(env("QUAESTOR_SUBSIDY_CRAWL"),          fromFile?.subsidyCrawl?.enabled,         DEFAULTS.subsidyCrawl.enabled),
@@ -177,7 +192,9 @@ type PartialConfig = {
   subsidyCrawl?: Partial<AppConfig["subsidyCrawl"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
-  invoiceShare?: Partial<AppConfig["invoiceShare"]>;
+  invoiceShare?: Partial<Omit<AppConfig["invoiceShare"], "email">> & {
+    email?: Partial<AppConfig["invoiceShare"]["email"]>;
+  };
   notifications?: Partial<Omit<AppConfig["notifications"], "subsidies">> & {
     subsidies?: Partial<AppConfig["notifications"]["subsidies"]>;
   };

@@ -92,7 +92,7 @@ import {
 import { InvoiceShareAccessService } from "./services/invoice-share-access-service.js";
 import { InvoiceEmailDeliveryService } from "./services/invoice-email-delivery.js";
 import type { InvoiceEmailNotifier } from "./services/invoice-email-notifier.js";
-import { GmailAdcClient } from "./services/gmail-adc-client.js";
+import { SesEmailClient, sesCredentialsFromEnv } from "./services/ses-email-client.js";
 import {
   resolveSlackInvoiceTarget,
   SlackWebApiClient,
@@ -138,14 +138,18 @@ export interface AppDeps {
    * 請求書の公開マジックリンク設定 (app-config.ts の invoiceShare)。
    * publicUrl 未設定ならリンク発行は 503 で失敗する (loopback へ fallback しない)。
    */
-  invoiceShare?: { publicUrl?: string | null; roots?: string[] };
+  invoiceShare?: {
+    publicUrl?: string | null;
+    roots?: string[];
+    email?: { region?: string | null; fromAddress?: string | null; configurationSet?: string | null };
+  };
   /** Slack 請求書通知。 bot token は暗号化ストアから env 注入し、テスト時のみ明示 DI する。 */
   slackInvoiceNotifier?: SlackInvoiceNotifier | "auto" | "disabled";
   /** 既定の Slack グループ DM。未指定時は暗号化ストアへ注入された env から解決する。 */
   slackInvoiceTarget?: SlackInvoiceTarget;
   /**
-   * Gmail API 送信。 `"auto"` を明示したときだけ実 ADC (gcloud CLI が作る authorized_user)
-   * を読む本番クライアントを組み立てる。 slackInvoiceNotifier と違い省略時は無効で、
+   * Amazon SES 送信。 `"auto"` を明示したときだけ暗号化ストア由来の送信専用キーで実クライアントを
+   * 組み立てる。 slackInvoiceNotifier と違い省略時は無効で、
    * 未注入のテストや組み込み用途が実アカウントのメール送信へ到達しないようにする。
    */
   invoiceEmailNotifier?: InvoiceEmailNotifier | "auto" | "disabled";
@@ -273,7 +277,7 @@ export function buildApp(deps: AppDeps): Hono {
     allowedRoots: deps.invoiceShare?.roots?.length ? deps.invoiceShare.roots : undefined,
     contacts: invoiceDeliveryContacts,
   });
-  const invoiceEmailNotifier = resolveInvoiceEmailNotifier(deps.invoiceEmailNotifier);
+  const invoiceEmailNotifier = resolveInvoiceEmailNotifier(deps.invoiceEmailNotifier, deps.invoiceShare?.email);
   const invoiceShareLocationReference = deps.invoiceAcceptanceLocationReference === undefined
     ? locationReferenceFromEnvironment()
     : deps.invoiceAcceptanceLocationReference;
@@ -359,16 +363,24 @@ export function buildApp(deps: AppDeps): Hono {
 }
 
 /**
- * 実 ADC は本番の refresh token そのものなので、 `"auto"` の明示なしに本番クライアントを
- * 組み立てない。 省略時に組み立てると、 notifier 未注入のテストが開発機の ADC を読み、
+ * 実 SES 資格情報は本番の送信専用キーそのものなので、 `"auto"` の明示なしに本番クライアントを
+ * 組み立てない。 省略時に組み立てると、 notifier 未注入のテストが暗号化ストア由来の env を読み、
  * fixture 宛の実メール送信へ到達しうる。 未設定時は各サービスが 503 not_configured を返す。
  *
  * @implements SPEC-INVOICE-EMAIL-001 (spec/feature/invoice-public-magic-link.md)
  */
 function resolveInvoiceEmailNotifier(
   value: InvoiceEmailNotifier | "auto" | "disabled" | undefined,
+  email: { region?: string | null; fromAddress?: string | null; configurationSet?: string | null } | undefined,
 ): InvoiceEmailNotifier | undefined {
-  if (value === "auto") return new GmailAdcClient();
+  if (value === "auto") {
+    return new SesEmailClient({
+      region: email?.region ?? undefined,
+      fromAddress: email?.fromAddress ?? undefined,
+      configurationSet: email?.configurationSet ?? undefined,
+      credentials: sesCredentialsFromEnv(),
+    });
+  }
   if (value && typeof value === "object") return value;
   return undefined;
 }

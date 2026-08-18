@@ -51,7 +51,7 @@ const app = buildApp({
   gaRoot: config.training.gaRoot,
   publicConfig: { ocrSidecarUrl: sidecarUrlOf(config) },
   invoiceShare: config.invoiceShare,
-  // 本番プロセスだけが実 ADC を読む Gmail クライアントを持つ。 ADC 未設定なら 503 not_configured。
+  // 本番プロセスだけが暗号化ストア由来の送信専用キーで SES クライアントを持つ。 未設定なら 503 not_configured。
   invoiceEmailNotifier: "auto",
 });
 

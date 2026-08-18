@@ -1,5 +1,5 @@
 /**
- * 請求書メール配信の抽象。 実装は Gmail ADC、テストは注入したダブル。
+ * 請求書メール配信の抽象。 実装は Amazon SES、テストは注入したダブル。
  *
  * @implements SPEC-INVOICE-EMAIL-001 (spec/feature/invoice-public-magic-link.md)
  */

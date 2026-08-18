@@ -11,6 +11,7 @@ const ENV_KEYS = [
   "QUAESTOR_OCR_SIDECAR_MANAGE", "QUAESTOR_OCR_SIDECAR_PORT",
   "QUAESTOR_OCR_SIDECAR_URL", "QUAESTOR_OCR_LANG", "QUAESTOR_OCR_PYTHON",
   "QUAESTOR_PUBLIC_URL", "QUAESTOR_INVOICE_SHARE_ROOTS",
+  "QUAESTOR_SES_REGION", "QUAESTOR_SES_FROM_ADDRESS", "QUAESTOR_SES_CONFIGURATION_SET",
 ];
 
 describe("app-config loader (§7.1)", () => {
@@ -87,6 +88,38 @@ describe("app-config loader (§7.1)", () => {
     const c = loadAppConfig(p);
     expect(c.invoiceShare.publicUrl).toBe("https://qs.example.com");
     expect(c.invoiceShare.roots).toEqual(["data", "app_data/invoices"]);
+  });
+
+  it("invoiceShare.email: 既定は全 null、 ファイルで読め、 env がファイルより優先する", () => {
+    const bare = loadAppConfig(join(dir, "missing.json"));
+    expect(bare.invoiceShare.email).toEqual({ region: null, fromAddress: null, configurationSet: null });
+
+    const p = join(dir, "q.json");
+    writeFileSync(p, JSON.stringify({
+      invoiceShare: {
+        email: {
+          region: "ap-northeast-1",
+          fromAddress: "invoice@example.com",
+          configurationSet: "invoice-set",
+        },
+      },
+    }), "utf8");
+    const fromFile = loadAppConfig(p);
+    expect(fromFile.invoiceShare.email).toEqual({
+      region: "ap-northeast-1",
+      fromAddress: "invoice@example.com",
+      configurationSet: "invoice-set",
+    });
+
+    process.env.QUAESTOR_SES_REGION = "us-east-1";
+    process.env.QUAESTOR_SES_FROM_ADDRESS = "billing@example.com";
+    process.env.QUAESTOR_SES_CONFIGURATION_SET = "override-set";
+    const withEnv = loadAppConfig(p);
+    expect(withEnv.invoiceShare.email).toEqual({
+      region: "us-east-1",
+      fromAddress: "billing@example.com",
+      configurationSet: "override-set",
+    });
   });
 
   it("壊れた JSON は既定値で起動を止めない", () => {

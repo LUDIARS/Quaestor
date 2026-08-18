@@ -9,7 +9,7 @@ Access; only `/v1/invoices/share/*` is eligible for a narrowly scoped Access Byp
 ## Domain
 
 The target domain is **`invoice-delivery`**. It owns the registered delivery-contact ledger,
-immutable document/recipient snapshots at link issuance, Gmail/Slack link delivery, recipient-channel
+immutable document/recipient snapshots at link issuance, SES/Slack link delivery, recipient-channel
 challenge-and-response, and explicit acceptance of invoice contents. It does not own the Google OAuth
 consent UI, Slack OAuth, contract drafting, government-ID proofing, certificate-backed electronic
 signatures, or qualified timestamp services.
@@ -23,6 +23,15 @@ the source of truth, env is override only — see `spec/setup/config-and-secrets
 |---|---:|---|---|
 | `invoiceShare.publicUrl` | yes | `QUAESTOR_PUBLIC_URL` | Clean HTTPS origin dedicated to magic links, for example `https://qs-magiclink.ai-run-do.com`. |
 | `invoiceShare.roots` | no | `QUAESTOR_INVOICE_SHARE_ROOTS` (`;`-separated) | PDF roots. Defaults to `data`, `app_data/invoices`. |
+| `invoiceShare.email.region` | for email | `QUAESTOR_SES_REGION` | Amazon SES region that hosts the verified sending identity, for example `ap-northeast-1`. |
+| `invoiceShare.email.fromAddress` | for email | `QUAESTOR_SES_FROM_ADDRESS` | Bare sender address on a domain verified in SES (DKIM/SPF/DMARC published), for example `invoice@qs-magiclink.ai-run-do.com`. |
+| `invoiceShare.email.configurationSet` | no | `QUAESTOR_SES_CONFIGURATION_SET` | Optional SES configuration set for reputation/event metrics. Event destinations never receive message bodies. |
+
+The send-only IAM credentials (`QUAESTOR_SES_ACCESS_KEY_ID`, `QUAESTOR_SES_SECRET_ACCESS_KEY`,
+optional `QUAESTOR_SES_SESSION_TOKEN`) live in the encrypted secret store and are injected into env
+at startup. Quaestor never reads the operator's personal `AWS_*` variables, shared credentials file, or
+SSO cache, so the delivery credential is a dedicated identity whose only permission is `ses:SendEmail`
+from the configured `fromAddress`.
 
 `invoiceShare.publicUrl` must not contain credentials, a path, query, or fragment. Missing or
 insecure configuration fails link creation with `503 not_configured` instead of falling back to a
@@ -62,23 +71,32 @@ link. The delivery ledger stores the destination digest and provider message ID,
 enable it only through the non-configurable `unsafeExposeInvoiceShareUrl` dependency-injection flag.
 This preserves deterministic public-route tests without creating a production escape hatch.
 
-Symmetrically, the ADC-backed Gmail client is built only when `invoiceEmailNotifier: "auto"` is passed
+Symmetrically, the SES client is built only when `invoiceEmailNotifier: "auto"` is passed
 explicitly, which only the production server entrypoint does. An application assembled without an
 injected notifier has no mail sender at all and fails closed with `503 not_configured`, so a test or
-embedding host can never reach the operator's real refresh token or send to a fixture address.
+embedding host can never reach the real sending credential or send to a fixture address.
 
 Quaestor is the delivery service in this trust model. People using the issuer API do not receive the
-link, but an operator with access to the Qs database, process memory, Gmail Sent mailbox, or ADC can
-still subvert the flow. Production access to those assets must therefore be limited and auditable;
-this local implementation does not claim independence from its own administrator.
+link. The mail provider is Amazon SES precisely because SES retains no copy of a sent message: there
+is no "Sent" mailbox, and configuration-set event destinations carry delivery metadata but never the
+body, so neither the issuer nor the operator can read the bearer link back from the provider after the
+fact. The link therefore exists only in transit and in the recipient's mailbox. What remains is the
+usual administrator caveat — someone with live access to Qs process memory could observe a token while
+it is being issued — and production access to that host must be limited and auditable. The previous
+Gmail/ADC design, where the operator's own mailbox kept a readable copy of every link, is retired and
+must not be reintroduced.
 
 SQLite stores only the link token's SHA-256 digest. The PDF must be below 25 MiB, start with `%PDF-`,
 and resolve inside an allowed root. Its size and SHA-256 are recorded at issuance and rechecked against
 the exact bytes served on every download; replacement after issuance fails closed with `409`.
 
-- **SPEC-INVOICE-EMAIL-001** — Qs obtains a Gmail access token from gcloud-created authorized-user
-  ADC, sends a UTF-8 RFC 2047 message through `users/me/messages/send`, and never logs credentials,
-  access tokens, refresh tokens, raw links, or message bodies.
+- **SPEC-INVOICE-EMAIL-001** — Qs sends each message through Amazon SES (`SESv2 SendEmail`,
+  SigV4-signed HTTPS) from the configured verified sender using a dedicated send-only credential
+  taken from the encrypted store; it never reads the operator's personal AWS credentials, never keeps
+  a copy of the sent message, and never logs credentials, signatures, raw links, or message bodies.
+  Missing region/sender/credentials fail closed with `503 not_configured` before any link is created;
+  a signature rejection maps to `502 authentication_failed`, other provider failures to `502 api_error`.
+  Implemented by `src/services/ses-email-client.ts` and `resolveInvoiceEmailNotifier` in `src/app.ts`.
 - **SPEC-INVOICE-EMAIL-002** — issue and delivery are one failure unit; failed delivery revokes the
   link, and UUID idempotency prevents an ordinary client retry from sending the invoice twice.
 - **SPEC-INVOICE-EMAIL-003** — the normal email delivery response and Slack delivery response never

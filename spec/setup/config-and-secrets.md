@@ -24,6 +24,9 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `training.gaRoot` | `app_data/training/ga` | OCR-GA 永続 + 学習ログ (ocr-ga.ts) | — |
 | `invoiceShare.publicUrl` | `null` | 請求書マジックリンクの公開 HTTPS origin。 `null` = 発行不可 (503) | `QUAESTOR_PUBLIC_URL` |
 | `invoiceShare.roots` | `["data","app_data/invoices"]` | 共有を許可する PDF ルート (invoice-share-service.ts) | `QUAESTOR_INVOICE_SHARE_ROOTS` (`;` 区切り) |
+| `invoiceShare.email.region` | `null` | 請求書メールを送る Amazon SES リージョン (例 `ap-northeast-1`)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_REGION` |
+| `invoiceShare.email.fromAddress` | `null` | SES で検証済みドメイン上の送信元アドレス (表示名なし)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_FROM_ADDRESS` |
+| `invoiceShare.email.configurationSet` | `null` | 任意。 SES configuration set 名 (レピュテーション/配信イベント用。 本文は流れない) | `QUAESTOR_SES_CONFIGURATION_SET` |
 
 web (ブラウザ) は `import.meta.env` を使わない。非シークレット設定は
 `GET /v1/config` (app.ts) → `web/src/lib/runtime-config.ts` で受け取る。配備バージョンは
@@ -47,6 +50,9 @@ API キー等は **平文でファイル保存しない** (§7.2)。
 | 参照名 | 用途 |
 |---|---|
 | `ANTHROPIC_API_KEY` | Vision OCR / 銘柄マッピング / 優待取得 / 差分 Opus 類推 |
+| `QUAESTOR_SES_ACCESS_KEY_ID` | 請求書メール送信専用 IAM ユーザーのアクセスキー ID (`ses:SendEmail` のみ) |
+| `QUAESTOR_SES_SECRET_ACCESS_KEY` | 同シークレットアクセスキー |
+| `QUAESTOR_SES_SESSION_TOKEN` | 任意。 一時クレデンシャルを使う場合のセッショントークン |
 | `QUAESTOR_SLACK_BOT_TOKEN` | 請求書マジックリンク投稿用 Slack Bot User OAuth Token (`xoxb-...`) |
 | `QUAESTOR_SLACK_CONVERSATION_ID` | 既定の Slack グループ DM conversation ID (`G...`) |
 | `QUAESTOR_SLACK_USER_IDS` | グループ DM を開く2〜8名の user ID (`U...` / `W...`) を `;` 区切りで指定 |
@@ -74,37 +80,49 @@ Managed Transforms** で **Add visitor location headers** を有効にする。�
 ユーザー ID 方式を使う場合は2行目の代わりに、例えば
 `U012ABC;U345DEF` をクリップボードへコピーして登録する。
 
-## 3. Gmail API 用 Application Default Credentials
+## 3. Amazon SES (請求書メールの送信元)
 
-請求書リンクと合意確認コードのメール送信には、gcloud CLI が作る `authorized_user` ADC を
-利用する。ADC には refresh token が含まれるため、リポジトリや Quaestor の暗号化ストアへ
-コピーしない。Qs はユーザープロファイル内の正規 ADC を読み取り、access token はメモリ内
-だけに短時間キャッシュする。
+請求書リンクと合意確認コードのメールは Amazon SES (SESv2 `SendEmail`) から送る。 SES は送信済み
+本文を保持しないため、 運用者が「送信済み」フォルダからマジックリンクや本文を事後に読み返す
+経路が無い。 Qs は Qs 専用の**送信専用 IAM キー**だけを暗号化ストアから読み、 運用者個人の
+`AWS_ACCESS_KEY_ID` / 共有クレデンシャルファイル / SSO キャッシュには触れない。 以前の Gmail
+ADC 方式 (運用者メールボックスに全リンクの写しが残る) は廃止済みで、 再導入しない。
 
-1. Google Cloud プロジェクトで Gmail API を有効化する。
-2. OAuth 同意画面を構成し、Desktop app の OAuth client JSON を安全な一時場所へ保存する。
-3. 次のように cloud-platform と gmail.send の両 scope を明示して ADC を作る。
+1. SES コンソールで送信元ドメイン (例 `qs-magiclink.ai-run-do.com` のサブドメイン) を **Verified
+   identity** として登録し、 表示された DKIM CNAME 3 本と MAIL FROM (SPF) の MX/TXT を Cloudflare
+   DNS へ追加する。 DMARC (`_dmarc` TXT) も併せて公開する。
+2. アカウントが SES サンドボックスなら **Request production access** で解除申請する
+   (サンドボックスでは検証済みアドレス宛にしか送れない)。
+3. IAM で送信専用ユーザーを作り、 次のポリシーだけを付ける (`<region>` `<account>` `<domain>` は
+   実値に置換)。 `ses:FromAddress` 条件で送信元を固定し、 読み取り系のアクションは一切付けない。
 
-```powershell
-gcloud auth application-default login `
-  --client-id-file="<OAuth client JSON の絶対パス>" `
-  --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/gmail.send"
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": ["ses:SendEmail"],
+    "Resource": "arn:aws:ses:<region>:<account>:identity/<domain>",
+    "Condition": { "StringLike": { "ses:FromAddress": "invoice@<domain>" } }
+  }]
+}
 ```
 
-`cloud-platform scope is required` と表示された場合は、上記のように両方を指定する。確認は
-次のコマンドで行い、出力された access token をチャット、ログ、ファイルへ貼り付けない。
+4. アクセスキーを発行し、 暗号化ストアへ登録する (値をシェル引数・履歴へ出さない)。
 
 ```powershell
-gcloud auth application-default print-access-token
+Get-Clipboard | npm run secret -- set-stdin QUAESTOR_SES_ACCESS_KEY_ID
+Get-Clipboard | npm run secret -- set-stdin QUAESTOR_SES_SECRET_ACCESS_KEY
+npm run secret -- list
 ```
 
-Windows の正規保存先は `%APPDATA%\gcloud\application_default_credentials.json`。環境変数
-`GOOGLE_APPLICATION_CREDENTIALS` が設定されている場合はそちらを正本とし、存在しないパスや
-service-account 形式なら Qs は自動 fallback せず `503 not_configured` で停止する。古い override
-が残っている場合は Excubitor 側の環境設定から削除し、サービスを所定の手順で再起動する。
-ADC を破棄するときは `gcloud auth application-default revoke` を使う。
+5. `quaestor.config.json` の `invoiceShare.email.region` / `invoiceShare.email.fromAddress` を設定
+   (または `QUAESTOR_SES_REGION` / `QUAESTOR_SES_FROM_ADDRESS`)、 Excubitor 経由で再起動する。
 
-必要 scope は送信専用の `gmail.send`。メールの検索・閲覧 scope は Qs の配送機能へ付与しない。
+リージョン・送信元・資格情報のいずれかが欠けている間は、 リンク発行前に `503 not_configured`
+で停止する。 SES が署名を拒否した場合は `502 authentication_failed`、 その他の送信失敗は
+`502 api_error` で、 いずれも新規リンクは即時失効する。 Configuration set の event destination
+を有効にしても、 SES イベントには本文・リンクは含まれない。
 
 ## 4. GA 学習ログ
 
