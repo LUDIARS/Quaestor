@@ -212,6 +212,59 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_invoice_share_challenge_share
      ON invoice_share_challenges(share_id, created_at)`,
 
+  // invoice_recipient_passkeys — 送信先 (契約先) が登録した WebAuthn 公開鍵。 秘密鍵は相手端末にしか無い。
+  `CREATE TABLE IF NOT EXISTS invoice_recipient_passkeys (
+    id                       TEXT PRIMARY KEY,
+    contact_id               TEXT NOT NULL REFERENCES invoice_delivery_contacts(id) ON DELETE CASCADE,
+    recipient_email_sha256   TEXT NOT NULL CHECK (length(recipient_email_sha256) = 64),
+    credential_id            TEXT NOT NULL UNIQUE,
+    public_key_cose          TEXT NOT NULL,
+    public_key_sha256        TEXT NOT NULL CHECK (length(public_key_sha256) = 64),
+    algorithm                INTEGER NOT NULL,
+    sign_count               INTEGER NOT NULL DEFAULT 0,
+    transports               TEXT,
+    aaguid                   TEXT,
+    enrolled_via             TEXT NOT NULL CHECK (enrolled_via IN ('email_otp', 'contract_fingerprint')),
+    enrollment_challenge_id  TEXT,
+    enrolled_share_id        TEXT REFERENCES invoice_share_tokens(id) ON DELETE SET NULL,
+    created_at               INTEGER NOT NULL,
+    revoked_at               INTEGER
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_recipient_passkey_contact
+     ON invoice_recipient_passkeys(contact_id, revoked_at)`,
+
+  // invoice_share_webauthn_challenges — パスキー登録/署名の一回限り challenge。 平文は HMAC で保持。
+  `CREATE TABLE IF NOT EXISTS invoice_share_webauthn_challenges (
+    id                       TEXT PRIMARY KEY,
+    share_id                 TEXT NOT NULL REFERENCES invoice_share_tokens(id) ON DELETE CASCADE,
+    purpose                  TEXT NOT NULL CHECK (purpose IN ('register', 'assert')),
+    statement_json           TEXT,
+    challenge_hash           TEXT NOT NULL CHECK (length(challenge_hash) = 64),
+    enrollment_grant_id      TEXT,
+    created_at               INTEGER NOT NULL,
+    expires_at               INTEGER NOT NULL,
+    consumed_at              INTEGER
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_webauthn_challenge_share
+     ON invoice_share_webauthn_challenges(share_id, created_at)`,
+
+  // invoice_share_enrollment_grants — OTP 通過で 1 回だけ与えるパスキー登録許可。
+  `CREATE TABLE IF NOT EXISTS invoice_share_enrollment_grants (
+    id                       TEXT PRIMARY KEY,
+    share_id                 TEXT NOT NULL REFERENCES invoice_share_tokens(id) ON DELETE CASCADE,
+    contact_id               TEXT NOT NULL,
+    otp_challenge_id         TEXT NOT NULL,
+    grant_hash               TEXT NOT NULL CHECK (length(grant_hash) = 64),
+    created_at               INTEGER NOT NULL,
+    expires_at               INTEGER NOT NULL,
+    consumed_at              INTEGER
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_invoice_share_enrollment_grant_share
+     ON invoice_share_enrollment_grants(share_id, created_at)`,
+
   // invoice_share_deliveries — Qs 内部配送の冪等性と配送監査。URLトークンは保持しない。
   `CREATE TABLE IF NOT EXISTS invoice_share_deliveries (
     id                       TEXT PRIMARY KEY,
@@ -607,10 +660,32 @@ export function applyMigrations(db: Database.Database): void {
     "TEXT NOT NULL DEFAULT 'unavailable'",
   );
   ensureColumn(db, "invoice_share_deliveries", "request_sha256", "TEXT");
+  // v15: パスキー署名による合意の証跡と外部タイムスタンプ (spec/plan/2026-08-19-passkey-acceptance.md)
+  for (const column of [
+    "passkey_id", "credential_id", "statement_json", "client_data_json",
+    "authenticator_data_b64url", "assertion_signature_b64url", "public_key_sha256",
+    "timestamp_authority", "timestamp_last_error",
+  ]) {
+    ensureColumn(db, "invoice_share_acceptances", column, "TEXT");
+  }
+  ensureColumn(db, "invoice_share_acceptances", "timestamp_status", "TEXT NOT NULL DEFAULT 'skipped'");
+  ensureColumn(db, "invoice_share_acceptances", "timestamp_token", "BLOB");
+  ensureColumn(db, "invoice_share_acceptances", "timestamp_requested_at", "INTEGER");
+  ensureColumn(db, "invoice_share_acceptances", "timestamp_granted_at", "INTEGER");
+  ensureColumn(db, "invoice_share_acceptances", "timestamp_attempts", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(db, "invoice_recipient_passkeys", "recipient_email_sha256", "TEXT");
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_invoice_recipient_passkey_identity"
+    + " ON invoice_recipient_passkeys(contact_id, recipient_email_sha256, revoked_at)",
+  );
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_invoice_share_acceptance_timestamp_pending"
+    + " ON invoice_share_acceptances(timestamp_status, accepted_at)",
+  );
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 14");
+  db.pragma("user_version = 15");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

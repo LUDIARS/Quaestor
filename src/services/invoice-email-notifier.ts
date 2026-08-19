@@ -4,10 +4,18 @@
  * @implements SPEC-INVOICE-EMAIL-001 (spec/feature/invoice-public-magic-link.md)
  */
 
+export interface InvoiceEmailAttachment {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
+
 export interface InvoiceEmailMessage {
   to: string;
   subject: string;
   text: string;
+  /** 添付があるときだけ MIME (SES Raw) で送る。 証跡バンドル用。 */
+  attachments?: InvoiceEmailAttachment[];
 }
 
 export interface InvoiceEmailSendResult {

@@ -1,5 +1,5 @@
 /**
- * 受領者メール C&R の確認コード入力ページ。
+ * 受領者メール C&R の確認コード入力ページ (パスキー初回登録の本人確認)。
  *
  * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
@@ -39,7 +39,7 @@ export function invoiceShareChallengePage(input: {
     <form method="post" action="${action}">
       <input type="hidden" name="challenge_id" value="${escapeHtml(input.challengeId)}">
       <label>確認コード<input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
-      <button type="submit">コードを確認して合意を確定する</button>
+      <button type="submit">コードを確認してパスキー登録へ進む</button>
     </form>${expiresAt ? `<p>有効期限: ${escapeHtml(expiresAt)}。入力は5回までです。</p>` : ""}`);
 }
 

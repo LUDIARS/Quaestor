@@ -12,6 +12,7 @@ const ENV_KEYS = [
   "QUAESTOR_OCR_SIDECAR_URL", "QUAESTOR_OCR_LANG", "QUAESTOR_OCR_PYTHON",
   "QUAESTOR_PUBLIC_URL", "QUAESTOR_INVOICE_SHARE_ROOTS",
   "QUAESTOR_SES_REGION", "QUAESTOR_SES_FROM_ADDRESS", "QUAESTOR_SES_CONFIGURATION_SET",
+  "QUAESTOR_TSA_URL", "QUAESTOR_TSA_ENABLED",
 ];
 
 describe("app-config loader (§7.1)", () => {
@@ -120,6 +121,21 @@ describe("app-config loader (§7.1)", () => {
       fromAddress: "billing@example.com",
       configurationSet: "override-set",
     });
+  });
+
+  it("invoiceShare.timestampAuthority: 既定は FreeTSA 有効、 ファイルと env で上書きできる", () => {
+    const bare = loadAppConfig(join(dir, "missing.json"));
+    expect(bare.invoiceShare.timestampAuthority).toEqual({ url: "https://freetsa.org/tsr", enabled: true });
+
+    const p = join(dir, "q.json");
+    writeFileSync(p, JSON.stringify({
+      invoiceShare: { timestampAuthority: { url: "https://tsa.example/tsr", enabled: false } },
+    }), "utf8");
+    expect(loadAppConfig(p).invoiceShare.timestampAuthority).toEqual({ url: "https://tsa.example/tsr", enabled: false });
+
+    process.env.QUAESTOR_TSA_URL = "https://tsa2.example/tsr";
+    process.env.QUAESTOR_TSA_ENABLED = "true";
+    expect(loadAppConfig(p).invoiceShare.timestampAuthority).toEqual({ url: "https://tsa2.example/tsr", enabled: true });
   });
 
   it("壊れた JSON は既定値で起動を止めない", () => {

@@ -1,12 +1,15 @@
 /**
- * 請求書送信先台帳 CRUD。
+ * 請求書送信先台帳 CRUD と、 送信先に登録されたパスキー (公開鍵) の一覧・失効。
  *
  * @implements SPEC-INVOICE-DELIVERY-001 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-005 (spec/feature/invoice-public-magic-link.md)
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
 import type { InvoiceDeliveryContactsRepo } from "../db/invoice-delivery-contacts-repo.js";
+import type { InvoiceRecipientPasskeyRepo } from "../db/invoice-recipient-passkey-repo.js";
+import { rejectCrossSite } from "./invoice-share-public-guard.js";
 
 const ContactSchema = z.object({
   company_name: z.string().trim().min(1).max(200),
@@ -14,8 +17,26 @@ const ContactSchema = z.object({
   active: z.boolean().optional(),
 }).strict();
 
-export function invoiceDeliveryContactsRouter(deps: { repo: InvoiceDeliveryContactsRepo }): Hono {
+export function invoiceDeliveryContactsRouter(deps: {
+  repo: InvoiceDeliveryContactsRepo;
+  passkeys: InvoiceRecipientPasskeyRepo;
+}): Hono {
   const app = new Hono();
+
+  app.get("/:id/passkeys", (c) => {
+    const contact = deps.repo.find(c.req.param("id"));
+    if (!contact) return c.json({ error: "not_found" }, 404);
+    return c.json({ items: deps.passkeys.listSummariesForContact(contact.id) });
+  });
+
+  /** 失効は取り消せない。 失効後は次回の合意で再びメール OTP → 登録から始まる。 */
+  app.post("/:id/passkeys/:passkeyId/revoke", (c) => {
+    if (rejectCrossSite(c)) return c.json({ error: "forbidden" }, 403);
+    const contact = deps.repo.find(c.req.param("id"));
+    if (!contact) return c.json({ error: "not_found" }, 404);
+    const revoked = deps.passkeys.revoke(c.req.param("passkeyId"), contact.id, Math.floor(Date.now() / 1000));
+    return revoked ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
+  });
 
   app.get("/", (c) => {
     const includeInactive = c.req.query("include_inactive") === "true";

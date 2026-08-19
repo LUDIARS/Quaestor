@@ -27,6 +27,8 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `invoiceShare.email.region` | `null` | 請求書メールを送る Amazon SES リージョン (例 `ap-northeast-1`)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_REGION` |
 | `invoiceShare.email.fromAddress` | `null` | SES で検証済みドメイン上の送信元アドレス (表示名なし)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_FROM_ADDRESS` |
 | `invoiceShare.email.configurationSet` | `null` | 任意。 SES configuration set 名 (レピュテーション/配信イベント用。 本文は流れない) | `QUAESTOR_SES_CONFIGURATION_SET` |
+| `invoiceShare.timestampAuthority.url` | `https://freetsa.org/tsr` | 合意証跡の SHA-256 を打刻する RFC 3161 タイムスタンプ局 (TSA) の URL | `QUAESTOR_TSA_URL` |
+| `invoiceShare.timestampAuthority.enabled` | `true` | `false` で外部タイムスタンプを付けない (合意行の `timestamp_status` は `skipped`) | `QUAESTOR_TSA_ENABLED` |
 
 web (ブラウザ) は `import.meta.env` を使わない。非シークレット設定は
 `GET /v1/config` (app.ts) → `web/src/lib/runtime-config.ts` で受け取る。配備バージョンは
@@ -82,7 +84,7 @@ Managed Transforms** で **Add visitor location headers** を有効にする。�
 
 ## 3. Amazon SES (請求書メールの送信元)
 
-請求書リンクと合意確認コードのメールは Amazon SES (SESv2 `SendEmail`) から送る。 SES は送信済み
+請求書リンク・パスキー登録時の本人確認コード・合意の控え (証跡バンドル添付) のメールは Amazon SES (SESv2 `SendEmail`) から送る。 SES は送信済み
 本文を保持しないため、 運用者が「送信済み」フォルダからマジックリンクや本文を事後に読み返す
 経路が無い。 Qs は Qs 専用の**送信専用 IAM キー**だけを暗号化ストアから読み、 運用者個人の
 `AWS_ACCESS_KEY_ID` / 共有クレデンシャルファイル / SSO キャッシュには触れない。 以前の Gmail

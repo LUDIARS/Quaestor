@@ -70,7 +70,7 @@ describe("API: /v1/portfolio (real sqlite)", () => {
         "dividend_candidates",
       ]),
     );
-    expect(db.pragma("user_version", { simple: true })).toBe(14);
+    expect(db.pragma("user_version", { simple: true })).toBe(15);
   });
 
   it("creates a fund holding, records contributions + valuation, computes return", async () => {

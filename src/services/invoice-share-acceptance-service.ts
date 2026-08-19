@@ -1,9 +1,10 @@
 /**
- * 登録済み受領者メールへの C&R を通過した合意だけを監査記録へ確定する。
+ * 登録済み受領者メールへの C&R (OTP)。 役割は「パスキー初回登録の本人紐付けゲート」であり、
+ * OTP 通過は合意を作らず、 1 回限りの登録許可 (enrollment grant) を発行する。
+ * 最終合意はパスキー署名 (invoice-share-passkey-acceptance-service.ts) だけが作る。
  *
- * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
- * @implements SPEC-INVOICE-ACCEPTANCE-002 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-005 (spec/feature/invoice-public-magic-link.md)
  */
 
 import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
@@ -12,17 +13,16 @@ import type {
   InvoiceShareAcceptanceRow,
 } from "../db/invoice-share-acceptance-repo.js";
 import type { InvoiceShareChallengeRepo } from "../db/invoice-share-challenge-repo.js";
-import { INVOICE_AGREEMENT_TEXT, INVOICE_AGREEMENT_VERSION } from "../invoices/invoice-agreement.js";
+import type {
+  InvoiceShareEnrollmentGrantRepo,
+  InvoiceShareEnrollmentGrantRow,
+} from "../db/invoice-share-enrollment-grant-repo.js";
 import type { InvoiceEmailNotifier } from "./invoice-email-notifier.js";
 import { InvoiceEmailError } from "./invoice-email-notifier.js";
-import {
-  evaluateAcceptanceLocation,
-  type CloudflareVisitorLocation,
-  type InvoiceAcceptanceLocationReference,
-} from "./invoice-acceptance-location-signal.js";
 import type { InvoiceShareService } from "./invoice-share-service.js";
 
 const CHALLENGE_TTL_SECONDS = 15 * 60;
+const GRANT_TTL_SECONDS = 15 * 60;
 const MAX_ATTEMPTS = 5;
 /**
  * 失敗上限に達した challenge は active から外れるため、上限だけでは再発行によって
@@ -54,22 +54,23 @@ export interface BegunInvoiceShareAcceptance {
   maskedEmail: string;
 }
 
-export interface ConfirmInvoiceShareAcceptanceInput {
+export interface ConfirmInvoiceShareChallengeInput {
   token: string;
   challengeId: string;
   code: string;
-  cfRay?: string;
-  userAgent?: string;
-  cloudflareClientAddress?: string;
-  visitorLocation?: CloudflareVisitorLocation;
+}
+
+export interface IssuedEnrollmentGrant {
+  grantId: string;
+  expiresAt: number;
 }
 
 export interface InvoiceShareAcceptanceServiceOptions {
   shares: InvoiceShareService;
   acceptances: InvoiceShareAcceptanceRepo;
   challenges: InvoiceShareChallengeRepo;
+  grants: InvoiceShareEnrollmentGrantRepo;
   notifier?: InvoiceEmailNotifier;
-  locationReference?: InvoiceAcceptanceLocationReference | null;
   now?: () => number;
   idFactory?: () => string;
   codeFactory?: () => string;
@@ -93,7 +94,7 @@ export class InvoiceShareAcceptanceService {
   async begin(input: BeginInvoiceShareAcceptanceInput): Promise<BegunInvoiceShareAcceptance> {
     const verified = await this.options.shares.loadDocument(input.token, false);
     const recipientEmail = verified.share.recipient_email;
-    if (!recipientEmail) {
+    if (!recipientEmail || !verified.share.recipient_id) {
       throw new InvoiceShareChallengeError("recipient_required", "registered recipient email is required", 400);
     }
     if (this.options.acceptances.findByShareId(verified.share.id)) {
@@ -130,11 +131,11 @@ export class InvoiceShareAcceptanceService {
     try {
       await notifier.sendMessage({
         to: recipientEmail,
-        subject: "【Qs】請求内容への合意確認コード",
+        subject: "【Qs】パスキー登録のための本人確認コード",
         text: [
           `${verified.share.recipient_company ?? verified.invoice.client} ご担当者様`,
           "",
-          "請求内容への合意を確定するため、確認画面に次のコードを入力してください。",
+          "請求内容への合意に使うパスキーを登録するため、確認画面に次のコードを入力してください。",
           "",
           code,
           "",
@@ -150,10 +151,15 @@ export class InvoiceShareAcceptanceService {
     return { challengeId: id, expiresAt, maskedEmail: maskEmail(recipientEmail) };
   }
 
-  async confirm(input: ConfirmInvoiceShareAcceptanceInput): Promise<InvoiceShareAcceptanceRow> {
+  /**
+   * OTP を検証し、 パスキー登録許可 (grant) を発行する。 合意行は作らない。
+   * challenge は原子的に 1 回だけ消費し、並行した再送から複数 grant を発行しない。
+   */
+  async confirm(input: ConfirmInvoiceShareChallengeInput): Promise<IssuedEnrollmentGrant> {
     const verified = await this.options.shares.loadDocument(input.token, false);
-    const existing = this.options.acceptances.findByShareId(verified.share.id);
-    if (existing) return existing;
+    if (this.options.acceptances.findByShareId(verified.share.id)) {
+      throw new InvoiceShareChallengeError("invalid_challenge", "invoice share is already accepted", 404);
+    }
     const challenge = this.options.challenges.find(input.challengeId);
     if (!challenge || challenge.share_id !== verified.share.id || challenge.consumed_at !== null) {
       throw new InvoiceShareChallengeError("invalid_challenge", "confirmation challenge is invalid", 404);
@@ -171,40 +177,39 @@ export class InvoiceShareAcceptanceService {
     if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
       throw this.failAttempt(challenge, now);
     }
-    const acceptedAt = now;
-    const cfRay = safeCfRay(input.cfRay);
-    const userAgentSha256 = sha256((input.userAgent ?? "").slice(0, 2048));
-    const locationSignal = evaluateAcceptanceLocation(
-      input.visitorLocation,
-      this.options.locationReference ?? null,
-      cfRay,
-      input.cloudflareClientAddress,
-    );
-    const evidence = {
+    if (!verified.share.recipient_id) {
+      throw new InvoiceShareChallengeError("recipient_required", "registered recipient is required", 400);
+    }
+    if (!this.options.challenges.consume(challenge.id, now)) {
+      throw new InvoiceShareChallengeError("invalid_challenge", "confirmation challenge was already used", 404);
+    }
+    const grantId = this.idFactory();
+    const expiresAt = now + GRANT_TTL_SECONDS;
+    this.options.grants.insert({
+      id: grantId,
       shareId: verified.share.id,
-      invoiceId: verified.invoice.id,
-      recipientCompany: verified.share.recipient_company,
-      recipientEmail: verified.share.recipient_email,
-      documentSha256: verified.share.document_sha256,
-      agreementVersion: INVOICE_AGREEMENT_VERSION,
-      agreementText: INVOICE_AGREEMENT_TEXT,
-      acceptedAt,
-      cfRay,
-      userAgentSha256,
-      authenticationMethod: "email_otp" as const,
-      challengeId: challenge.id,
-      locationSource: locationSignal.source,
-      locationCountryCode: locationSignal.countryCode,
-      locationRegionCode: locationSignal.regionCode,
-      issuerReferenceProximity: locationSignal.issuerReferenceProximity,
-    };
-    const acceptance = this.options.acceptances.record({
-      id: this.idFactory(),
-      ...evidence,
-      evidenceSha256: sha256(JSON.stringify(evidence)),
+      contactId: verified.share.recipient_id,
+      otpChallengeId: challenge.id,
+      grantHash: grantHash(input.token, grantId),
+      createdAt: now,
+      expiresAt,
     });
-    this.options.challenges.consume(challenge.id, now);
-    return acceptance;
+    return { grantId, expiresAt };
+  }
+
+  /** grant が「この token のこの share」に対して有効か。 消費はしない。 */
+  findValidGrant(token: string, shareId: string, grantId: string): InvoiceShareEnrollmentGrantRow | undefined {
+    const grant = this.options.grants.find(grantId);
+    if (!grant || grant.share_id !== shareId || grant.consumed_at !== null) return undefined;
+    if (grant.expires_at < this.now()) return undefined;
+    const expected = Buffer.from(grant.grant_hash, "hex");
+    const actual = Buffer.from(grantHash(token, grantId), "hex");
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return undefined;
+    return grant;
+  }
+
+  consumeGrant(grantId: string): boolean {
+    return this.options.grants.consume(grantId, this.now());
   }
 
   /**
@@ -229,9 +234,8 @@ function challengeHash(token: string, challengeId: string, code: string): string
   return createHmac("sha256", token).update(`${challengeId}:${code}`).digest("hex");
 }
 
-function safeCfRay(value: string | undefined): string | null {
-  const candidate = value?.trim();
-  return candidate && /^[A-Za-z0-9-]{1,100}$/.test(candidate) ? candidate : null;
+function grantHash(token: string, grantId: string): string {
+  return createHmac("sha256", token).update(`enrollment-grant:${grantId}`).digest("hex");
 }
 
 function sha256(value: string): string {

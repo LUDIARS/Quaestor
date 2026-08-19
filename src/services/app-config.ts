@@ -62,6 +62,11 @@ export interface AppConfig {
       fromAddress: string | null;
       configurationSet: string | null;
     };
+    /** 合意証跡への外部タイムスタンプ (RFC 3161)。 enabled=false で打刻しない (status は skipped) */
+    timestampAuthority: {
+      url: string;
+      enabled: boolean;
+    };
   };
   /** 補助金の定期クロール (#278)。 */
   subsidyCrawl: {
@@ -94,6 +99,7 @@ const DEFAULTS: AppConfig = {
     publicUrl: null,
     roots: ["data", "app_data/invoices"],
     email: { region: null, fromAddress: null, configurationSet: null },
+    timestampAuthority: { url: "https://freetsa.org/tsr", enabled: true },
   },
   subsidyCrawl: {
     enabled: false,
@@ -151,6 +157,10 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
         fromAddress:      strOrNull(env("QUAESTOR_SES_FROM_ADDRESS"),      fromFile?.invoiceShare?.email?.fromAddress),
         configurationSet: strOrNull(env("QUAESTOR_SES_CONFIGURATION_SET"), fromFile?.invoiceShare?.email?.configurationSet),
       },
+      timestampAuthority: {
+        url:     str(env("QUAESTOR_TSA_URL"),      fromFile?.invoiceShare?.timestampAuthority?.url,     DEFAULTS.invoiceShare.timestampAuthority.url),
+        enabled: flag(env("QUAESTOR_TSA_ENABLED"), fromFile?.invoiceShare?.timestampAuthority?.enabled, DEFAULTS.invoiceShare.timestampAuthority.enabled),
+      },
     },
     subsidyCrawl: {
       enabled:         flag(env("QUAESTOR_SUBSIDY_CRAWL"),          fromFile?.subsidyCrawl?.enabled,         DEFAULTS.subsidyCrawl.enabled),
@@ -192,8 +202,9 @@ type PartialConfig = {
   subsidyCrawl?: Partial<AppConfig["subsidyCrawl"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
-  invoiceShare?: Partial<Omit<AppConfig["invoiceShare"], "email">> & {
+  invoiceShare?: Partial<Omit<AppConfig["invoiceShare"], "email" | "timestampAuthority">> & {
     email?: Partial<AppConfig["invoiceShare"]["email"]>;
+    timestampAuthority?: Partial<AppConfig["invoiceShare"]["timestampAuthority"]>;
   };
   notifications?: Partial<Omit<AppConfig["notifications"], "subsidies">> & {
     subsidies?: Partial<AppConfig["notifications"]["subsidies"]>;

@@ -306,7 +306,7 @@ describe("invoice share schema migration", () => {
       expect(db.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'invoice_share_acceptances'",
       ).get()).toEqual({ name: "invoice_share_acceptances" });
-      expect(db.pragma("user_version", { simple: true })).toBe(14);
+      expect(db.pragma("user_version", { simple: true })).toBe(15);
     } finally {
       db.close();
     }
@@ -518,7 +518,7 @@ describe("API: /v1/invoices share links", () => {
     expect((await app.request(`/v1/invoices/share/${token}/document.pdf`)).status).toBe(404);
   });
 
-  it("登録送信先をリンクへ固定し、明示合意と監査記録を冪等に保存する", async () => {
+  it("登録送信先をリンクへ固定し、OTP 通過はパスキー登録ゲートとして働き合意は作らない", async () => {
     const create = await createShare({
       document_path: pdfPath,
       expires_in_days: 7,
@@ -538,6 +538,7 @@ describe("API: /v1/invoices share links", () => {
     expect(before).not.toContain("Changed Customer");
     expect(before).toContain("メール確認へ進む");
     expect(before).toContain("電子証明書を使う電子署名ではありません");
+    expect(before).toContain("パスキー");
     expect(before).toContain(created.document_sha256.slice(0, 16));
     expect(before).not.toContain("billing@example.com");
 
@@ -570,59 +571,37 @@ describe("API: /v1/invoices share links", () => {
     expect(repeatedBegin.status).toBe(200);
     expect(sentMessages).toHaveLength(1);
 
-    const accept = await app.request(`/v1/invoices/share/${token}/accept`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        "CF-Ray": "abc123-NRT",
-        "CF-Connecting-IP": "203.0.113.10",
-        "user-agent": "Acceptance Test Browser/1.0",
-        "cf-iplatitude": "34.6937",
-        "cf-iplongitude": "135.5023",
-        "cf-ipcountry": "JP",
-        "cf-region-code": "27",
-      },
-      body: new URLSearchParams({ challenge_id: challengeId!, code: code! }).toString(),
-    });
-    expect(accept.status).toBe(200);
-    expect(await accept.text()).toContain("請求内容への合意を記録しました");
+    const confirmationBody = new URLSearchParams({ challenge_id: challengeId!, code: code! }).toString();
+    const confirmations = await Promise.all([
+      app.request(`/v1/invoices/share/${token}/accept`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: confirmationBody,
+      }),
+      app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: confirmationBody,
+      }),
+    ]);
+    expect(confirmations.map((response) => response.status).sort()).toEqual([200, 404]);
+    const confirm = confirmations.find((response) => response.status === 200)!;
+    // OTP 通過は合意ではなく、 パスキー登録ページ (grant 付き) へ進む
+    expect(confirm.status).toBe(200);
+    const enrollPage = await confirm.text();
+    expect(enrollPage).toContain("data-mode=\"enroll\"");
+    expect(enrollPage).toMatch(/data-grant="[0-9a-f-]{36}"/);
+    expect(enrollPage).not.toContain("請求内容への合意を記録しました");
+    expect(db.prepare(
+      "SELECT COUNT(*) AS count FROM invoice_share_enrollment_grants WHERE share_id = ?",
+    ).get(created.share_id)).toEqual({ count: 1 });
 
     const audit = await app.request(
       `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
     );
-    expect(audit.status).toBe(200);
-    const first = await audit.json() as { acceptance: Record<string, unknown> };
-    expect(first.acceptance).toMatchObject({
-      share_id: created.share_id,
-      invoice_id: invoiceId,
-      recipient_company: "Example Customer",
-      recipient_email: "billing@example.com",
-      document_sha256: created.document_sha256,
-      agreement_version: "invoice-content-v1",
-      cf_ray: "abc123-NRT",
-      authentication_method: "email_otp",
-      challenge_id: challengeId,
-      location_source: "cloudflare_ip_geolocation",
-      location_country_code: "JP",
-      location_region_code: "27",
-      issuer_reference_proximity: "outside",
-    });
-    expect(first.acceptance.user_agent_sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(first.acceptance.evidence_sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect(JSON.stringify(first)).not.toContain("Acceptance Test Browser/1.0");
-    expect(JSON.stringify(first)).not.toContain("34.6937");
-    expect(JSON.stringify(first)).not.toContain("135.5023");
+    expect(audit.status).toBe(404);
 
-    const again = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ challenge_id: challengeId!, code: code! }).toString(),
-    });
-    expect(again.status).toBe(200);
-    const second = await (await app.request(
-      `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
-    )).json() as { acceptance: Record<string, unknown> };
-    expect(second.acceptance).toEqual(first.acceptance);
+    // 並行した再送の片方は 404 となり、grant を複数発行しない。
   });
 
   it("PDF差し替え後の合意は409で拒否し、監査行を作らない", async () => {

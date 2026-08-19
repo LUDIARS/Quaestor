@@ -10,9 +10,11 @@ Access; only `/v1/invoices/share/*` is eligible for a narrowly scoped Access Byp
 
 The target domain is **`invoice-delivery`**. It owns the registered delivery-contact ledger,
 immutable document/recipient snapshots at link issuance, SES/Slack link delivery, recipient-channel
-challenge-and-response, and explicit acceptance of invoice contents. It does not own the Google OAuth
-consent UI, Slack OAuth, contract drafting, government-ID proofing, certificate-backed electronic
-signatures, or qualified timestamp services.
+challenge-and-response used as the passkey-enrollment gate, recipient passkeys (WebAuthn public keys),
+passkey-signed explicit acceptance of invoice contents, the recipient-facing evidence bundle, and the
+RFC 3161 timestamp request for that evidence. It does not own the Google OAuth consent UI, Slack OAuth,
+contract drafting, government-ID proofing, certificate-backed (accredited CA) electronic signatures, or
+operating a timestamp authority.
 
 ## Configuration
 
@@ -26,6 +28,8 @@ the source of truth, env is override only — see `spec/setup/config-and-secrets
 | `invoiceShare.email.region` | for email | `QUAESTOR_SES_REGION` | Amazon SES region that hosts the verified sending identity, for example `ap-northeast-1`. |
 | `invoiceShare.email.fromAddress` | for email | `QUAESTOR_SES_FROM_ADDRESS` | Bare sender address on a domain verified in SES (DKIM/SPF/DMARC published), for example `invoice@qs-magiclink.ai-run-do.com`. |
 | `invoiceShare.email.configurationSet` | no | `QUAESTOR_SES_CONFIGURATION_SET` | Optional SES configuration set for reputation/event metrics. Event destinations never receive message bodies. |
+| `invoiceShare.timestampAuthority.url` | no | `QUAESTOR_TSA_URL` | RFC 3161 timestamp authority that stamps the acceptance evidence digest. Defaults to `https://freetsa.org/tsr`. |
+| `invoiceShare.timestampAuthority.enabled` | no | `QUAESTOR_TSA_ENABLED` | `false` skips external timestamping (`timestamp_status = skipped`). Defaults to `true`. |
 
 The send-only IAM credentials (`QUAESTOR_SES_ACCESS_KEY_ID`, `QUAESTOR_SES_SECRET_ACCESS_KEY`,
 optional `QUAESTOR_SES_SESSION_TOKEN`) live in the encrypted secret store and are injected into env
@@ -139,15 +143,22 @@ Clauses:
 
 | Route | Result |
 |---|---|
-| `GET /v1/invoices/share/:token` | Minimal Japanese landing page with invoice summary. |
+| `GET /v1/invoices/share/:token` | Minimal Japanese landing page with invoice summary. The acceptance control depends on state: accepted → record + evidence link; recipient has an active passkey → "sign with passkey" (JS); recipient registered but no passkey → email-OTP enrollment form; link not bound to a registered recipient → notice that on-page acceptance is unavailable. |
 | `GET /v1/invoices/share/:token/document.pdf` | Verified PDF rendered inline. |
-| `POST /v1/invoices/share/:token/accept` | With `confirm=accepted`, records intent and emails a six-digit challenge. With `challenge_id` and `code`, verifies the challenge and only then records final agreement. Once either confirmation field is present the request is treated as a confirmation and fails closed on a malformed body, so a broken confirmation never re-enters the challenge-issuing branch. Keeping both phases on this stable path avoids Cloudflare ingress drift. |
-| `POST /v1/invoices/share/:token/accept/confirm` | Backward-compatible confirmation alias. New challenge pages do not depend on this child path. |
+| `POST /v1/invoices/share/:token/accept` | Enrollment gate only. With `confirm=accepted`, emails a six-digit challenge to the snapshotted recipient address. With `challenge_id` and `code`, verifies the challenge and — **without creating acceptance** — issues a one-time, 15-minute passkey *enrollment grant* and renders the enrollment page. Once either confirmation field is present the request is treated as a confirmation and fails closed on a malformed body. |
+| `POST /v1/invoices/share/:token/accept/confirm` | Backward-compatible confirmation alias with the same behaviour. |
+| `POST /v1/invoices/share/:token/passkey/options` | JSON. `{purpose:"register", grant_id}` returns WebAuthn creation options bound to a valid grant; `{purpose:"assert"}` builds the acceptance statement (§ below), stores a 5-minute challenge and returns request options plus the statement. |
+| `POST /v1/invoices/share/:token/passkey/register` | JSON. Verifies the attestation response (`attestation: none`, user verification required, ES256/RS256) against the stored challenge and grant, stores the credential for the delivery contact, and consumes the grant. |
+| `POST /v1/invoices/share/:token/passkey/accept` | JSON. Verifies the assertion against the stored challenge, the stored public key and the live document, records acceptance (`authentication_method = passkey`), requests the external timestamp once, emails the evidence bundle to the recipient, and returns `201`. A second call on an accepted share returns the existing record. |
+| `GET /v1/invoices/share/:token/evidence.json` | The evidence bundle for an accepted share (attachment). `404` until acceptance exists. |
+| `GET /v1/invoices/share/assets/passkey.js` | Same-origin browser script used by the landing/enrollment pages. |
 
 Invalid, expired, revoked, cancelled-invoice, and unknown links return the same public error page.
 The public response never exposes invoice metadata, storage paths, token hashes, or audit rows.
-Responses use `no-store`, `no-referrer`, `nosniff`, frame denial, no-index headers, and restrictive
-CSP. A local fixed-window limiter allows 60 requests per five minutes per Cloudflare client address.
+Responses use `no-store`, `no-referrer`, `nosniff`, frame denial, no-index headers, and a restrictive
+CSP (`default-src 'none'; script-src 'self'; connect-src 'self'`). The rate limiter and these headers
+are applied once at `/v1/invoices/share/*` in `src/app.ts` because several routers share that prefix.
+A local fixed-window limiter allows 60 requests per five minutes per Cloudflare client address.
 Because that address comes from a client-supplied header, the limiter tracks at most 10,000 distinct
 addresses and evicts the oldest, so header rotation cannot grow process memory without bound.
 Opening a link increments an audit counter but never consumes it, because email security scanners
@@ -159,25 +170,89 @@ may prefetch links. Links remain reusable until expiry or explicit revocation.
 
 ## Explicit acceptance
 
+Acceptance is a **passkey (WebAuthn) signature over an acceptance statement that embeds the PDF digest**.
+The private key exists only on the recipient's device, so neither the issuer nor the Quaestor operator
+can produce a valid acceptance after the fact; the recipient additionally receives a self-contained
+evidence bundle, and the evidence digest is stamped by an external RFC 3161 timestamp authority.
+
+### Enrollment (first passkey per delivery contact)
+
 The landing page shows the PDF link, a document-hash identifier, a required confirmation checkbox,
 and a button that starts email verification. This first POST never creates acceptance. Quaestor sends
 a six-digit code to the recipient email snapshotted at link creation. The code is valid for 15 minutes
 and five attempts, and a share issues at most five challenges in total. The database stores only an
-HMAC keyed by the bearer token; neither code nor token is persisted in plaintext. A mail scanner can open the link and submit the first form, but cannot read
-the separate recipient mailbox and therefore cannot finalize agreement.
+HMAC keyed by the bearer token. A successful code does **not** record agreement: it consumes the
+challenge and issues a one-time enrollment grant (15 minutes, HMAC keyed by the bearer token) that
+authorises `navigator.credentials.create()` for the delivery contact. The enrollment page then
+registers the passkey and immediately continues to the signature step below. A mail scanner can open
+the link and submit the first form, but cannot read the recipient mailbox, cannot obtain a grant, and
+cannot sign.
 
-The confirm POST re-reads and hashes the PDF before accepting; a changed document returns `409` and
-creates no audit row. One acceptance is stored per share, so successful retries are idempotent. The
-append-only record snapshots:
+What the email gate does and does not protect: it binds the first credential to control of the
+registered mailbox, so a party holding only the bearer link (forwarded mail, a scanner, a leaked log)
+cannot enroll their own key as the recipient. It gives **no** protection against the Quaestor operator,
+who can observe both the link and the code at send time and could enroll a key of their own; the only
+defence against that actor is an out-of-band binding of the public-key fingerprint (contract text,
+or a separate-channel confirmation of `public_key_sha256` after enrollment). That binding is reserved
+(`enrolled_via = contract_fingerprint`) and not implemented yet, so today the non-repudiation argument
+against the operator rests on the recipient keeping their evidence bundle and fingerprint.
 
-- share/invoice IDs and recipient company/email;
-- the full PDF SHA-256;
-- agreement version and exact agreement text;
-- acceptance timestamp, Cloudflare Ray ID when valid, and a SHA-256 of the User-Agent;
-- authentication method (`email_otp`) and the consumed challenge ID;
-- Cloudflare IP-geolocation source, country/region codes, and whether the estimated acceptance
-  location was inside or outside the issuer reference radius;
-- an evidence checksum over the canonical event fields.
+Later invoices for the same contact and the same normalized recipient-email identity skip email entirely:
+the landing page offers "sign with passkey" whenever that identity has an active credential. A contact
+email change does not carry the old identity's keys into newly issued shares. The issuer can list and revoke credentials via
+`GET /v1/invoice-delivery-contacts/:id/passkeys` and `POST …/passkeys/:passkeyId/revoke`; revocation is
+irreversible and returns the contact to the enrollment gate. `enrolled_via` is `email_otp` today;
+`contract_fingerprint` is reserved for registering a public-key fingerprint written into the contract.
+
+### Acceptance statement and challenge
+
+`POST …/passkey/options {purpose:"assert"}` builds:
+
+```json
+{ "v": "invoice-acceptance-statement-v1", "share_id": "…", "invoice_id": 12,
+  "document_sha256": "…", "agreement_version": "invoice-content-v1", "agreement_text": "…",
+  "recipient_company": "…", "recipient_email_sha256": "…",
+  "issued_at": 1787130000, "expires_at": 1787130300, "nonce": "…" }
+```
+
+The WebAuthn challenge is `base64url(SHA-256(canonical JSON))` (keys sorted, no whitespace). The
+authenticator signs `authenticatorData || SHA-256(clientDataJSON)` and clientDataJSON carries the
+challenge, so signature → challenge → statement → PDF digest is one verifiable chain. Quaestor stores
+the statement and `HMAC(token, challenge_id, challenge)`; challenges expire after five minutes, are
+consumed once, and a share issues at most 30. Enrollment challenges are random and not content-bound.
+
+### Verification and record
+
+The accept POST re-reads and hashes the PDF; a changed document returns `409` and creates no audit
+row. It then checks, in order: challenge unconsumed/unexpired and HMAC-matching the value presented in
+clientDataJSON; statement matches the live share, PDF digest, and agreement version; the credential
+belongs to the share's delivery contact and is not revoked; the assertion verifies (`@simplewebauthn/server`:
+origin = `invoiceShare.publicUrl`, RP ID = its hostname, type `webauthn.get`, user verification, signature
+counter not regressed). Failures are `400`/`404`/`409`/`410`, never acceptance. One acceptance is stored
+per share. The append-only record snapshots everything the OTP design recorded plus:
+
+- `authentication_method = passkey`, the passkey ID and credential ID, the public-key fingerprint
+  (SHA-256 of the COSE key);
+- the statement JSON, the exact clientDataJSON, authenticatorData and signature (base64url);
+- `evidence_sha256` over the canonical, timestamp-independent fields emitted in the evidence bundle
+  (format, statement, assertion, credential ID/algorithm/COSE key/fingerprint, and core acceptance fields),
+  so a recipient can recompute the TSA message imprint from the JSON alone;
+- timestamp state: `pending | granted | failed | skipped`, authority URL, the raw RFC 3161
+  `TimeStampResp` (DER), request/grant times, attempt count, last error code.
+
+### Evidence bundle and external timestamp
+
+After the row is written, Quaestor (1) requests one RFC 3161 timestamp for `evidence_sha256`
+(DER `TimeStampReq` built with `node:crypto`, `certReq TRUE`, 10 s timeout; the response must be
+`granted`/`grantedWithMods` and must contain the request imprint and nonce, otherwise it is treated as
+a failure), and (2) emails the recipient the evidence bundle as a JSON attachment (SESv2 `Raw`, MIME
+built in `src/services/mime-message.ts`). Neither step can undo acceptance: a timestamp failure
+leaves `pending` and an hourly job retries for seven days (then `failed`); a mail failure is logged. The
+bundle (`quaestor-invoice-acceptance-evidence-v1`) contains the statement, the assertion parts, the
+public key as COSE, SPKI PEM and JWK with its fingerprint, the acceptance metadata and digest, and
+the timestamp token when granted. It is re-downloadable from `…/evidence.json` while the link is valid
+and by the issuer from `GET /v1/invoices/:id/share-links/:shareId/acceptance/evidence`; third-party
+verification steps are in `docs/invoice-acceptance-evidence-verification.md`.
 
 The location signal is defense-in-depth, not identity proof or an acceptance condition. Quaestor
 uses latitude and longitude only transiently to compare the request with an issuer reference point,
@@ -188,26 +263,43 @@ itself. A valid `CF-Ray` and syntactically valid `CF-Connecting-IP` are both req
 headers are trusted; the origin must remain reachable only through the private Cloudflare Tunnel.
 The connecting IP is used for this trust check only and is not added to the acceptance ledger.
 
-The issuer can retrieve it with `GET /v1/invoices/:id/share-links/:shareId/acceptance`. The evidence
-checksum detects accidental inconsistency but is not an independent timestamp or protection against
-an administrator who can rewrite both the row and checksum.
+The issuer can retrieve the record with `GET /v1/invoices/:id/share-links/:shareId/acceptance` (the DER
+token is reported as `timestamp_token_present`; the token itself is in the evidence endpoint).
 
 Clauses:
 
-- **SPEC-INVOICE-ACCEPTANCE-001** — acceptance requires both an explicit checked form POST and a
-  valid, unexpired, unconsumed email challenge while the link/invoice remain active and the exact
-  issued PDF still matches its stored size and SHA-256; cross-site form requests are rejected.
+- **SPEC-INVOICE-ACCEPTANCE-001** — acceptance requires a valid passkey assertion over the stored
+  acceptance statement while the link/invoice remain active, the exact issued PDF still matches its
+  stored size and SHA-256, and the credential is an unrevoked key of the share's delivery contact;
+  cross-site requests are rejected.
 - **SPEC-INVOICE-ACCEPTANCE-002** — acceptance is append-only and idempotent per share; it stores the
   exact terms, recipient snapshot, document digest, authentication method, challenge ID, timestamp,
-  and privacy-reduced request metadata.
-- **SPEC-INVOICE-ACCEPTANCE-003** — failed code attempts never create acceptance; challenges expire
-  after 15 minutes, lock after five failures, and are marked consumed after successful confirmation.
-  A share issues at most five challenges in total, so holding the link bounds code guesses at 25 and
-  confirmation emails at 5; beyond that the flow fails closed with `429` and the sender must reissue.
+  privacy-reduced request metadata, and the full signature material needed for independent verification.
+- **SPEC-INVOICE-ACCEPTANCE-003** — the email code is only the enrollment gate: a verified code issues
+  a one-time grant and never an acceptance; challenges expire after 15 minutes, lock after five
+  failures, and a share issues at most five, so holding the link bounds code guesses at 25 and
+  confirmation emails at 5; beyond that the flow fails closed with `429`.
 - **SPEC-INVOICE-ACCEPTANCE-004** — when Cloudflare visitor-location headers and an encrypted issuer
   reference point are available, acceptance evidence stores only coarse country/region and an
   inside/outside/unavailable proximity result. Raw coordinates and distance are never persisted,
   and the signal is non-blocking corroboration rather than proof of identity or legal consent.
+- **SPEC-INVOICE-ACCEPTANCE-005** — passkeys belong to delivery contacts; registration requires an
+  unconsumed enrollment grant obtained through the email gate (or, reserved, a contract fingerprint),
+  uses `attestation: none` with user verification, stores the normalized recipient-email identity hash,
+  COSE public key, fingerprint, algorithm, counter and transports, and the issuer can list and
+  irreversibly revoke them. A key is offered only to shares with the same contact and email identity hash.
+- **SPEC-INVOICE-ACCEPTANCE-006** — the signed challenge is the SHA-256 of the canonical acceptance
+  statement carrying the PDF digest, agreement text/version, share and invoice IDs, a nonce and a
+  five-minute expiry; challenges are stored as token-keyed HMACs and consumed once; a presented
+  challenge that does not reproduce the stored HMAC, or a statement that no longer matches the live
+  share/document, creates no acceptance.
+- **SPEC-INVOICE-ACCEPTANCE-007** — after acceptance the recipient is sent, and can re-download, a
+  self-contained evidence bundle from which a third party can verify the signature against the public
+  key and the PDF digest without Quaestor's database; delivery failure never revokes acceptance.
+- **SPEC-INVOICE-ACCEPTANCE-008** — the evidence digest is submitted to the configured RFC 3161
+  authority; the raw response is stored only when granted and carrying the same imprint and nonce;
+  failure leaves `pending` for periodic retry (seven days, then `failed`), `enabled:false` records
+  `skipped`, and no timestamp outcome blocks or reverses acceptance.
 
 ## Access audit log
 
@@ -233,12 +325,15 @@ response returns both `items` and the uncapped `total`.
   coarse country/region, and an inside/outside/unavailable issuer-reference result. Raw coordinates,
   distance, and the connecting IP are never persisted.
 
-This is a clickwrap-style evidence record authenticated by control of the registered recipient email,
-in addition to possession of the delivery link. It is not proof that a natural person rather than an
-authorized mailbox automation acted, nor is it a certificate-backed electronic signature. Japanese
-Electronic Signatures Act guidance describes an electronic signature as requiring both attribution
-to the actor and a way to verify that the signed information was not altered; stronger identity or
-statutory presumptions require a separate signature/identity-proofing design.
+This record is a clickwrap-style agreement authenticated by a public-key signature from a credential
+enrolled through control of the registered recipient email, in addition to possession of the delivery
+link. The signature binds the signer's key to the exact PDF digest and agreement text, which gives the
+two elements Japanese Electronic Signatures Act guidance describes for an electronic signature —
+attribution to the actor and detection of alteration — and the recipient-held evidence bundle plus the
+external timestamp make the record verifiable without trusting Quaestor's operator. It is still not a
+signature backed by an accredited certification authority, so the statutory presumption of Article 3
+is not claimed, and it does not prove that a natural person rather than an authorised device holder
+acted.
 
 Legal references: [Ministry of Justice overview of the Electronic Signatures Act](https://www.moj.go.jp/MINJI/minji32-1.html)
 and the [MIC/MOJ/METI Q&A on Article 2(1)](https://www.meti.go.jp/covid-19/denshishomei_qa.html).
@@ -297,7 +392,7 @@ Slack App setup:
    Quaestor through Excubitor.
 
 Posting or opening the link proves delivery/access, not consent. Slack read state is never treated as
-acceptance. Final consent still requires the registered-email C&R flow described above.
+acceptance. Final consent still requires the passkey signature flow described above (email C&R only gates the first enrollment).
 
 Slack references: [`conversations.open`](https://docs.slack.dev/reference/methods/conversations.open/)
 and [`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessage/).
@@ -305,9 +400,11 @@ and [`chat.postMessage`](https://docs.slack.dev/reference/methods/chat.postMessa
 ## Storage migration
 
 Contacts live in `invoice_delivery_contacts`, share tokens and recipient snapshots in
-`invoice_share_tokens`, delivery attempts in `invoice_share_deliveries`, one-time challenges in
-`invoice_share_challenges`, and final acceptances in `invoice_share_acceptances` (schema version 13;
-see `src/db/schema.ts`).
+`invoice_share_tokens`, delivery attempts in `invoice_share_deliveries`, one-time email challenges in
+`invoice_share_challenges`, passkey enrollment grants in `invoice_share_enrollment_grants`, recipient
+public keys in `invoice_recipient_passkeys`, WebAuthn challenges (with the signed statement) in
+`invoice_share_webauthn_challenges`, and final acceptances with signature material and timestamp state
+in `invoice_share_acceptances` (schema version 15; see `src/db/schema.ts`).
 Local databases created before
 this feature shipped may hold a same-named but incompatible table. On startup `applyMigrations`
 renames such a table to `invoice_share_tokens_legacy_v8` — rows are retained for manual inspection,

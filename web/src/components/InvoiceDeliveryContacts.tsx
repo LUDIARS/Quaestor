@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { InvoiceContactPasskeys } from "./InvoiceContactPasskeys";
 
 interface InvoiceDeliveryContact {
   id: string;
@@ -116,7 +117,7 @@ export function InvoiceDeliveryContacts() {
         <div>
           <h3 style={{ margin: 0 }}>請求書の送信先</h3>
           <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.2rem 0 0" }}>
-            マジックリンク送信時に選択する企業名とメールアドレスを管理します。
+            マジックリンク送信時に選択する企業名とメールアドレス、 合意署名に使うパスキーを管理します。
           </p>
         </div>
         <button className="btn secondary" type="button" onClick={open ? closeForm : beginCreate}>
@@ -167,6 +168,7 @@ export function InvoiceDeliveryContacts() {
               <tr style={{ borderBottom: "1px solid var(--border)" }}>
                 <th style={{ textAlign: "left", padding: "0.4rem" }}>企業名</th>
                 <th style={{ textAlign: "left", padding: "0.4rem" }}>メールアドレス</th>
+                <th style={{ textAlign: "left", padding: "0.4rem" }}>パスキー</th>
                 <th aria-label="操作" />
               </tr>
             </thead>
@@ -175,6 +177,9 @@ export function InvoiceDeliveryContacts() {
                 <tr key={contact.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <td style={{ padding: "0.4rem" }}>{contact.company_name}</td>
                   <td style={{ padding: "0.4rem" }}>{contact.email}</td>
+                  <td style={{ padding: "0.4rem" }}>
+                    <InvoiceContactPasskeys contactId={contact.id} companyName={contact.company_name} />
+                  </td>
                   <td style={{ padding: "0.4rem", textAlign: "right", whiteSpace: "nowrap" }}>
                     <button className="btn secondary" type="button" onClick={() => beginEdit(contact)}>編集</button>{" "}
                     <button className="btn secondary" type="button" onClick={() => void deactivate(contact)}>無効化</button>

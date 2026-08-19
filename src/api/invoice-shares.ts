@@ -12,21 +12,28 @@
 
 import { Hono, type Context } from "hono";
 import { z } from "zod";
-import { invalidInvoiceSharePage, invoiceSharePage } from "../invoices/invoice-share-page.js";
+import {
+  invalidInvoiceSharePage,
+  invoiceSharePage,
+  type InvoiceShareAcceptanceState,
+} from "../invoices/invoice-share-page.js";
 import {
   invoiceShareChallengePage,
   invoiceShareChallengeUnavailablePage,
 } from "../invoices/invoice-share-challenge-page.js";
+import { invoiceSharePasskeyEnrollPage } from "../invoices/invoice-share-passkey-page.js";
 import { InvoiceShareError, type InvoiceShareService } from "../services/invoice-share-service.js";
-import type { InvoiceShareRateLimiter } from "../services/invoice-share-rate-limiter.js";
 import {
   InvoiceShareChallengeError,
   MASKED_RECIPIENT_EMAIL_FALLBACK,
   type InvoiceShareAcceptanceService,
 } from "../services/invoice-share-acceptance-service.js";
+import type { InvoiceSharePasskeyAcceptanceService } from "../services/invoice-share-passkey-acceptance-service.js";
 import { InvoiceEmailError } from "../services/invoice-email-notifier.js";
 import type { InvoiceShareAccessService } from "../services/invoice-share-access-service.js";
+import type { InvoiceShareAcceptanceRow } from "../db/invoice-share-acceptance-repo.js";
 import type { CloudflareVisitorLocation } from "../services/invoice-acceptance-location-signal.js";
+import { clientAddress, rejectCrossSite, visitorLocation } from "./invoice-share-public-guard.js";
 
 const DEFAULT_ACCESS_LOG_LIMIT = 100;
 const MAX_ACCESS_LOG_LIMIT = 500;
@@ -39,23 +46,12 @@ const CreateShareSchema = z.object({
 
 export function invoiceSharesRouter(deps: {
   service: InvoiceShareService;
-  rateLimiter: InvoiceShareRateLimiter;
   acceptances: InvoiceShareAcceptanceService;
+  passkeyAcceptances: InvoiceSharePasskeyAcceptanceService;
   accesses: InvoiceShareAccessService;
   allowUnsafeIssueApi?: boolean;
 }): Hono {
   const app = new Hono();
-
-  app.use("/share/*", async (c, next) => {
-    const rate = deps.rateLimiter.check(clientAddress(c));
-    if (!rate.allowed) {
-      setPublicShareHeaders(c);
-      c.header("Retry-After", String(rate.retryAfterSeconds));
-      return c.json({ error: "rate_limited" }, 429);
-    }
-    await next();
-    setPublicShareHeaders(c);
-  });
 
   app.get("/share/:token", async (c) => {
     try {
@@ -65,14 +61,15 @@ export function invoiceSharesRouter(deps: {
         eventType: "landing_view",
         ...accessMetadata(c),
       });
-      const acceptance = deps.acceptances.find(result.share.id);
+      const status = await deps.passkeyAcceptances.status(c.req.param("token"));
       return c.html(invoiceSharePage({
         token: c.req.param("token"),
         invoice: result.invoice,
         expiresAt: result.share.expires_at,
         documentSha256: result.share.document_sha256,
         recipientCompany: result.share.recipient_company,
-        acceptedAt: acceptance?.accepted_at,
+        acceptedAt: status.accepted?.accepted_at,
+        acceptanceState: acceptanceStateOf(status),
       }));
     } catch (error) {
       return publicShareError(c, error);
@@ -80,7 +77,7 @@ export function invoiceSharesRouter(deps: {
   });
 
   app.post("/share/:token/accept", async (c) => {
-    if (c.req.header("Sec-Fetch-Site")?.toLowerCase() === "cross-site") {
+    if (rejectCrossSite(c)) {
       return c.html(invalidInvoiceSharePage(), 403);
     }
     const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
@@ -110,7 +107,7 @@ export function invoiceSharesRouter(deps: {
   // 後方互換の確認エイリアス。 新しい challenge ページはこの子パスに依存しない。
   // @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
   app.post("/share/:token/accept/confirm", async (c) => {
-    if (c.req.header("Sec-Fetch-Site")?.toLowerCase() === "cross-site") {
+    if (rejectCrossSite(c)) {
       return c.html(invalidInvoiceSharePage(), 403);
     }
     const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
@@ -173,7 +170,16 @@ export function invoiceSharesRouter(deps: {
     const share = deps.service.findById(c.req.param("shareId"));
     if (!share || share.invoice_id !== invoiceId) return c.json({ error: "not_found" }, 404);
     const acceptance = deps.acceptances.find(share.id);
-    return acceptance ? c.json({ acceptance }) : c.json({ error: "not_found" }, 404);
+    return acceptance ? c.json({ acceptance: publicAcceptanceView(acceptance) }) : c.json({ error: "not_found" }, 404);
+  });
+
+  app.get("/:id/share-links/:shareId/acceptance/evidence", (c) => {
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
+    const share = deps.service.findById(c.req.param("shareId"));
+    if (!share || share.invoice_id !== invoiceId) return c.json({ error: "not_found" }, 404);
+    const bundle = deps.passkeyAcceptances.evidenceForShare(share.id);
+    return bundle ? c.json(bundle) : c.json({ error: "not_found" }, 404);
   });
 
   app.get("/:id/share-links/:shareId/access-logs", (c) => {
@@ -197,12 +203,11 @@ export function invoiceSharesRouter(deps: {
 }
 
 /**
- * 確認コード (OTP) フェーズの共通処理。
+ * 確認コード (OTP) フェーズの共通処理。 成功してもここでは合意を作らず、 パスキー登録ページへ進める。
  * `/accept` と後方互換の `/accept/confirm` の双方から呼ばれる。
  *
- * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
- * @implements SPEC-INVOICE-ACCEPTANCE-004 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-005 (spec/feature/invoice-public-magic-link.md)
  */
 async function confirmAcceptance(
   c: Context,
@@ -220,17 +225,13 @@ async function confirmAcceptance(
     return c.html(invalidInvoiceSharePage(), 400);
   }
   try {
-    const acceptance = await deps.acceptances.confirm({
-      token, challengeId, code,
-      cfRay: c.req.header("CF-Ray"), userAgent: c.req.header("user-agent"),
-      cloudflareClientAddress: c.req.header("CF-Connecting-IP"),
-      visitorLocation: visitorLocation(c),
-    });
+    const grant = await deps.acceptances.confirm({ token, challengeId, code });
     const result = await deps.service.findPublic(token, false);
-    return c.html(invoiceSharePage({
-      token, invoice: result.invoice,
-      expiresAt: result.share.expires_at, documentSha256: result.share.document_sha256,
-      recipientCompany: result.share.recipient_company, acceptedAt: acceptance.accepted_at,
+    return c.html(invoiceSharePasskeyEnrollPage({
+      token,
+      grantId: grant.grantId,
+      recipientCompany: result.share.recipient_company,
+      expiresAt: grant.expiresAt,
     }));
   } catch (error) {
     if (error instanceof InvoiceShareChallengeError) {
@@ -250,45 +251,27 @@ function challengeErrorMessage(error: InvoiceShareChallengeError): string {
   return "確認コードが一致しません。";
 }
 
+function acceptanceStateOf(status: {
+  accepted: unknown;
+  hasPasskey: boolean;
+  recipientRegistered: boolean;
+}): InvoiceShareAcceptanceState {
+  if (status.accepted) return "accepted";
+  if (!status.recipientRegistered) return "unavailable";
+  return status.hasPasskey ? "passkey" : "enroll";
+}
+
+/** 発行者 API の合意ビュー。 タイムスタンプトークン (DER) は証跡エンドポイントで base64 として返す。 */
+function publicAcceptanceView(acceptance: InvoiceShareAcceptanceRow): Record<string, unknown> {
+  const { timestamp_token, ...rest } = acceptance;
+  return { ...rest, timestamp_token_present: timestamp_token !== null && timestamp_token !== undefined };
+}
+
 /** `:id` は 10 進の正整数だけを受ける。 `Number.parseInt` の前方一致 ("12abc" → 12) を避ける。 */
 function invoiceIdOf(raw: string): number | null {
   if (!/^[0-9]{1,15}$/.test(raw)) return null;
   const id = Number(raw);
   return Number.isSafeInteger(id) && id > 0 ? id : null;
-}
-
-function setPublicShareHeaders(c: Context): void {
-  c.header("Cache-Control", "no-store");
-  c.header("Pragma", "no-cache");
-  c.header("Referrer-Policy", "no-referrer");
-  c.header("X-Content-Type-Options", "nosniff");
-  c.header("X-Frame-Options", "DENY");
-  c.header("X-Robots-Tag", "noindex, nofollow, noarchive");
-  if (!c.res.headers.has("Content-Security-Policy")) {
-    c.header(
-      "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-    );
-  }
-}
-
-function clientAddress(c: Context): string {
-  return c.req.header("CF-Connecting-IP")
-    ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
-    ?? "unknown";
-}
-
-/**
- * Cloudflare の自己申告位置ヘッダー。 信頼判定と粗粒度への縮約は
- * evaluateAcceptanceLocation 側で行うため、 ここでは素通しする。
- */
-function visitorLocation(c: Context): CloudflareVisitorLocation {
-  return {
-    latitude: c.req.header("cf-iplatitude"),
-    longitude: c.req.header("cf-iplongitude"),
-    countryCode: c.req.header("cf-ipcountry"),
-    regionCode: c.req.header("cf-region-code"),
-  };
 }
 
 function accessMetadata(c: Context): {

@@ -11,6 +11,7 @@
  */
 
 import { createHash, createHmac } from "node:crypto";
+import { buildMimeMessage } from "./mime-message.js";
 import {
   InvoiceEmailError,
   type InvoiceEmailMessage,
@@ -71,15 +72,18 @@ export class SesEmailClient implements InvoiceEmailNotifier {
     if (!EMAIL.test(message.to) || /[\r\n]/.test(message.to)) {
       throw new InvoiceEmailError("api_error", "recipient email is invalid", 502);
     }
-    const body = JSON.stringify({
-      FromEmailAddress: settings.fromAddress,
-      Destination: { ToAddresses: [message.to] },
-      Content: {
+    const content = message.attachments?.length
+      ? { Raw: { Data: buildMimeMessage({ from: settings.fromAddress, message }).toString("base64") } }
+      : {
         Simple: {
           Subject: { Data: stripHeaderBreaks(message.subject), Charset: "UTF-8" },
           Body: { Text: { Data: message.text, Charset: "UTF-8" } },
         },
-      },
+      };
+    const body = JSON.stringify({
+      FromEmailAddress: settings.fromAddress,
+      Destination: { ToAddresses: [message.to] },
+      Content: content,
       ...(settings.configurationSet ? { ConfigurationSetName: settings.configurationSet } : {}),
     });
     const url = new URL("/v2/email/outbound-emails", settings.endpoint);

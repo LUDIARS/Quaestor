@@ -42,6 +42,7 @@ if (injectedSecrets.length > 0) {
 
 const DB_PATH = resolve(config.storage.dbPath);
 const RECEIPTS_ROOT = resolve(config.storage.receiptsRoot);
+const appCleanups: Array<() => void> = [];
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -53,6 +54,10 @@ const app = buildApp({
   invoiceShare: config.invoiceShare,
   // 本番プロセスだけが暗号化ストア由来の送信専用キーで SES クライアントを持つ。 未設定なら 503 not_configured。
   invoiceEmailNotifier: "auto",
+  // 合意証跡の RFC 3161 タイムスタンプも本番プロセスだけが実 TSA を叩く (設定で無効化可)。
+  evidenceTimestamp: "auto",
+  logger: { warn: (fields, message) => log.warn(fields, message) },
+  registerCleanup: (cleanup) => { appCleanups.push(cleanup); },
 });
 
 // OCR worker: ANTHROPIC_API_KEY あり (env or 暗号化ストア) かつ ocrWorker.enabled で起動
@@ -138,6 +143,7 @@ serve({ fetch: app.fetch, hostname: config.server.host, port: config.server.port
 
 const shutdown = (signal: string) => {
   log.info({ signal }, "shutting down");
+  for (const cleanup of appCleanups.splice(0)) cleanup();
   ocrWorker?.stop();
   ocrSidecar?.stop();
   notificationWorker?.stop();

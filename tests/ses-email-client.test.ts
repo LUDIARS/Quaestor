@@ -112,6 +112,27 @@ describe("SesEmailClient", () => {
     );
   });
 
+  it("添付がある場合は Simple ではなく Raw (MIME multipart, base64) で送る", async () => {
+    const calls: Call[] = [];
+    await client(happyResponder, calls).sendMessage({
+      to: "billing@example.com",
+      subject: "合意の控え",
+      text: "本文\n2行目",
+      attachments: [{ filename: "invoice-acceptance-1234abcd.json", contentType: "application/json", content: Buffer.from('{"a":1}') }],
+    });
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body.Content).not.toHaveProperty("Simple");
+    const mime = Buffer.from(body.Content.Raw.Data, "base64").toString("utf8");
+    expect(mime).toContain(`From: ${FROM_ADDRESS}\r\n`);
+    expect(mime).toContain("To: billing@example.com\r\n");
+    expect(mime).toContain(`Subject: =?UTF-8?B?${Buffer.from("合意の控え").toString("base64")}?=\r\n`);
+    expect(mime).toMatch(/Content-Type: multipart\/mixed; boundary="qs-[0-9a-f]{24}"/);
+    expect(mime).toContain('Content-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n' + Buffer.from("本文\n2行目").toString("base64"));
+    expect(mime).toContain('Content-Disposition: attachment; filename="invoice-acceptance-1234abcd.json"');
+    expect(mime).toContain(Buffer.from('{"a":1}').toString("base64"));
+    expect(mime.trimEnd().endsWith("--")).toBe(true);
+  });
+
   it("configurationSet 指定時は body に含み、sessionToken 指定時は署名ヘッダへ含める", async () => {
     const calls: Call[] = [];
     await client(happyResponder, calls, { configurationSet: "invoice-set" }).sendMessage({

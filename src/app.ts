@@ -18,6 +18,9 @@ import { InvoiceDeliveryContactsRepo } from "./db/invoice-delivery-contacts-repo
 import { InvoiceShareAcceptanceRepo } from "./db/invoice-share-acceptance-repo.js";
 import { InvoiceShareAccessRepo } from "./db/invoice-share-access-repo.js";
 import { InvoiceShareChallengeRepo } from "./db/invoice-share-challenge-repo.js";
+import { InvoiceShareEnrollmentGrantRepo } from "./db/invoice-share-enrollment-grant-repo.js";
+import { InvoiceShareWebAuthnChallengeRepo } from "./db/invoice-share-webauthn-challenge-repo.js";
+import { InvoiceRecipientPasskeyRepo } from "./db/invoice-recipient-passkey-repo.js";
 import { InvoiceShareDeliveryRepo } from "./db/invoice-share-delivery-repo.js";
 import { FinancialStatementsRepo } from "./db/financial-statements-repo.js";
 import { SecuritiesRepo } from "./db/securities-repo.js";
@@ -54,6 +57,8 @@ import { reconciliationsRouter } from "./api/reconciliations.js";
 import { exportsRouter } from "./api/exports.js";
 import { invoicesRouter } from "./api/invoices.js";
 import { invoiceSharesRouter } from "./api/invoice-shares.js";
+import { invoiceSharePasskeysRouter } from "./api/invoice-share-passkeys.js";
+import { invoiceSharePublicGuard } from "./api/invoice-share-public-guard.js";
 import { dashboardRouter } from "./api/dashboard.js";
 import { financialStatementsRouter } from "./api/financial-statements.js";
 import { investRouter } from "./api/invest.js";
@@ -85,6 +90,11 @@ import { invoiceEmailDeliveriesRouter } from "./api/invoice-email-deliveries.js"
 import { invoiceDeliveryContactsRouter } from "./api/invoice-delivery-contacts.js";
 import { InvoiceSlackDeliveryService } from "./services/invoice-slack-delivery.js";
 import { InvoiceShareAcceptanceService } from "./services/invoice-share-acceptance-service.js";
+import { InvoiceSharePasskeyAcceptanceService } from "./services/invoice-share-passkey-acceptance-service.js";
+import { InvoicePasskeyService } from "./services/invoice-passkey-service.js";
+import { EvidenceTimestampService, startEvidenceTimestampRetryJob } from "./services/evidence-timestamp-service.js";
+import { Rfc3161TimestampClient } from "./services/rfc3161-timestamp-client.js";
+import { InvoiceAcceptanceEvidenceMailer } from "./services/invoice-acceptance-evidence-mailer.js";
 import {
   locationReferenceFromEnvironment,
   type InvoiceAcceptanceLocationReference,
@@ -99,6 +109,10 @@ import {
   type SlackInvoiceNotifier,
   type SlackInvoiceTarget,
 } from "./services/slack-web-api-client.js";
+
+export interface AppLogger {
+  warn(fields: Record<string, unknown>, message?: string): void;
+}
 
 export interface AppDeps {
   db: Database.Database;
@@ -142,7 +156,15 @@ export interface AppDeps {
     publicUrl?: string | null;
     roots?: string[];
     email?: { region?: string | null; fromAddress?: string | null; configurationSet?: string | null };
+    timestampAuthority?: { url?: string; enabled?: boolean };
   };
+  /**
+   * 合意証跡への RFC 3161 タイムスタンプ。 `"auto"` (本番エントリポイントのみ) で
+   * `invoiceShare.timestampAuthority` の設定どおり実 TSA を叩き、 再試行ジョブも張る。
+   * `"auto"` では timer 解放用の `registerCleanup` も必須。省略時は無効
+   * (テストがネットワークへ出ない)。 テストはクライアントを注入する。
+   */
+  evidenceTimestamp?: Rfc3161TimestampClient | "auto" | "disabled";
   /** Slack 請求書通知。 bot token は暗号化ストアから env 注入し、テスト時のみ明示 DI する。 */
   slackInvoiceNotifier?: SlackInvoiceNotifier | "auto" | "disabled";
   /** 既定の Slack グループ DM。未指定時は暗号化ストアへ注入された env から解決する。 */
@@ -160,6 +182,10 @@ export interface AppDeps {
    * 座標は暗号化ストア経由の env を既定とする。
    */
   invoiceAcceptanceLocationReference?: InvoiceAcceptanceLocationReference | null;
+  /** best-effort 外部処理の失敗を、秘密・個人データを含めず観測可能にする。 */
+  logger?: AppLogger;
+  /** buildApp が所有する timer 等を、プロセス終了時に解放するための登録先。 */
+  registerCleanup?: (cleanup: () => void) => void;
 }
 
 /** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
@@ -177,6 +203,9 @@ export function buildApp(deps: AppDeps): Hono {
   const invoiceShareAcceptances = new InvoiceShareAcceptanceRepo(deps.db);
   const invoiceShareAccesses = new InvoiceShareAccessRepo(deps.db);
   const invoiceShareChallenges = new InvoiceShareChallengeRepo(deps.db);
+  const invoiceShareEnrollmentGrants = new InvoiceShareEnrollmentGrantRepo(deps.db);
+  const invoiceShareWebAuthnChallenges = new InvoiceShareWebAuthnChallengeRepo(deps.db);
+  const invoiceRecipientPasskeys = new InvoiceRecipientPasskeyRepo(deps.db);
   const invoiceShareDeliveries = new InvoiceShareDeliveryRepo(deps.db);
   const fs = new FinancialStatementsRepo(deps.db);
   const securities = new SecuritiesRepo(deps.db);
@@ -285,8 +314,38 @@ export function buildApp(deps: AppDeps): Hono {
     shares: invoiceShareService,
     acceptances: invoiceShareAcceptances,
     challenges: invoiceShareChallenges,
+    grants: invoiceShareEnrollmentGrants,
     notifier: invoiceEmailNotifier,
+  });
+  const evidenceTimestampService = new EvidenceTimestampService({
+    acceptances: invoiceShareAcceptances,
+    client: resolveEvidenceTimestampClient(deps.evidenceTimestamp, deps.invoiceShare?.timestampAuthority),
+    onError: (acceptanceId, error) => deps.logger?.warn(
+      { event: "invoice_evidence_timestamp_failed", acceptanceId, errorCode: operationalErrorCode(error) },
+      "invoice evidence timestamp failed",
+    ),
+  });
+  if (deps.evidenceTimestamp === "auto") {
+    if (!deps.registerCleanup) throw new Error("registerCleanup is required when evidenceTimestamp is auto");
+    deps.registerCleanup(startEvidenceTimestampRetryJob(evidenceTimestampService));
+  }
+  const invoiceSharePasskeyAcceptanceService = new InvoiceSharePasskeyAcceptanceService({
+    shares: invoiceShareService,
+    acceptances: invoiceShareAcceptances,
+    passkeys: invoiceRecipientPasskeys,
+    challenges: invoiceShareWebAuthnChallenges,
+    otpGate: invoiceShareAcceptanceService,
+    webauthn: new InvoicePasskeyService({ publicUrl: deps.invoiceShare?.publicUrl ?? undefined }),
+    timestamps: evidenceTimestampService,
+    evidenceMailer: new InvoiceAcceptanceEvidenceMailer({
+      notifier: invoiceEmailNotifier,
+      onError: (shareId, error) => deps.logger?.warn(
+        { event: "invoice_evidence_mail_failed", shareId, errorCode: operationalErrorCode(error) },
+        "invoice evidence mail failed",
+      ),
+    }),
     locationReference: invoiceShareLocationReference,
+    publicUrl: deps.invoiceShare?.publicUrl ?? undefined,
   });
   const invoiceShareAccessService = new InvoiceShareAccessService({
     accesses: invoiceShareAccesses,
@@ -329,17 +388,23 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
+  // 公開マジックリンク配下のレート制限と応答ヘッダーは、 複数ルータにまたがるためここで 1 回だけ掛ける。
+  app.use("/v1/invoices/share/*", invoiceSharePublicGuard(new InvoiceShareRateLimiter()));
+  app.route("/v1/invoices", invoiceSharePasskeysRouter({ service: invoiceSharePasskeyAcceptanceService }));
   app.route("/v1/invoices", invoiceSharesRouter({
     service: invoiceShareService,
-    rateLimiter: new InvoiceShareRateLimiter(),
     acceptances: invoiceShareAcceptanceService,
+    passkeyAcceptances: invoiceSharePasskeyAcceptanceService,
     accesses: invoiceShareAccessService,
     allowUnsafeIssueApi: deps.unsafeExposeInvoiceShareUrl === true,
   }));
   app.route("/v1/invoices", invoiceSlackDeliveriesRouter({ service: invoiceSlackDeliveryService }));
   app.route("/v1/invoices", invoiceEmailDeliveriesRouter({ service: invoiceEmailDeliveryService }));
   app.route("/v1/invoices", invoicesRouter({ repo: invoices }));
-  app.route("/v1/invoice-delivery-contacts", invoiceDeliveryContactsRouter({ repo: invoiceDeliveryContacts }));
+  app.route("/v1/invoice-delivery-contacts", invoiceDeliveryContactsRouter({
+    repo: invoiceDeliveryContacts,
+    passkeys: invoiceRecipientPasskeys,
+  }));
   app.route("/v1/dashboard", dashboardRouter({ db: deps.db }));
   app.route("/v1/financial-statement", financialStatementsRouter({ repo: fs }));
   app.route("/v1/invest", investRouter({ advisor, securities, payeeSecurities }));
@@ -386,6 +451,17 @@ function resolveInvoiceEmailNotifier(
 }
 
 /** @implements SPEC-INVOICE-SLACK-004 (spec/feature/invoice-public-magic-link.md) */
+/** テストは注入したクライアントだけを使い、 省略時は実 TSA へ出ない。 */
+function resolveEvidenceTimestampClient(
+  opt: Rfc3161TimestampClient | "auto" | "disabled" | undefined,
+  config: { url?: string; enabled?: boolean } | undefined,
+): Rfc3161TimestampClient | undefined {
+  if (opt === undefined || opt === "disabled") return undefined;
+  if (opt !== "auto") return opt;
+  if (config?.enabled === false) return undefined;
+  return new Rfc3161TimestampClient({ url: config?.url });
+}
+
 function resolveSlackNotifier(
   value: SlackInvoiceNotifier | "auto" | "disabled" | undefined,
 ): SlackInvoiceNotifier | undefined {
@@ -393,6 +469,15 @@ function resolveSlackNotifier(
   if (value && typeof value === "object") return value;
   const token = process.env.QUAESTOR_SLACK_BOT_TOKEN?.trim();
   return token ? new SlackWebApiClient({ botToken: token }) : undefined;
+}
+
+function operationalErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "unknown";
+  const code = "code" in error ? error.code : undefined;
+  if (typeof code === "string" && /^[a-z0-9_:-]{1,64}$/i.test(code)) return code;
+  return error instanceof Error && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name)
+    ? error.name
+    : "unknown";
 }
 
 function resolveOcr(opt: OcrClient | "auto" | "disabled" | undefined): OcrClient | undefined {
