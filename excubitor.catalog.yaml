@@ -1,6 +1,25 @@
-# Excubitor catalog fragment — Quaestor owns the definition for its Web service.
+# Excubitor catalog fragment — Quaestor owns the definitions for its backend and Web services.
 # Excubitor discovers and aggregates repository-owned catalogs under ${ARS_ROOT}.
 services:
+  - code: quaestor
+    name: Quaestor
+    tier: personal
+    project_code: quaestor
+    component: backend
+    port: 17400
+    repo: LUDIARS/Quaestor
+    runtime: node
+    cwd: ${ARS_ROOT}/Quaestor
+    command: npm run dev
+    autostart: true
+    allow_hot_reload: true
+    health:
+      type: http
+      url: http://127.0.0.1:17400/health
+      interval_sec: 30
+    provides:
+      QUAESTOR_URL: http://${host}:${port}
+
   - code: quaestor-web
     name: Quaestor Web
     tier: personal
