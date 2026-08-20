@@ -147,6 +147,11 @@ export interface AppDeps {
   allocationAdvicePath?: string;
   /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
   gaRoot?: string;
+  /**
+   * claude CLI OCR の `--model`。 省略すると CLI 既定のモデルに乗るため、
+   * そのモデルの利用上限切れで OCR が画像を見る前に落ちる。
+   */
+  ocrClaudeCodeModel?: string | null;
   /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
   publicConfig?: { ocrSidecarUrl: string };
   /**
@@ -404,7 +409,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/apportionment-advisor", apportionmentAdvisorRouter({ advisor: apportionmentAdvisor }));
-  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake }));
+  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake, claudeCodeModel: deps.ocrClaudeCodeModel }));
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));

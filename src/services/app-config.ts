@@ -29,6 +29,15 @@ export interface AppConfig {
     enabled: boolean;
     intervalMs: number;
   };
+  /** レシート OCR を claude CLI (`claude -p`) で走らせるときの起動条件 */
+  ocrClaudeCode: {
+    /**
+     * `--model` に渡すモデル。 CLI 既定に任せると、 対話セッション側で使い切った
+     * モデルの上限に OCR が巻き込まれて即 exit する (2026-08-20 の failed 2 件)。
+     * null で明示指定せず CLI 既定へ委ねる。
+     */
+    model: string | null;
+  };
   ocrSidecar: {
     /** Quaestor が sidecar を子プロセスとして同時起動するか */
     manage: boolean;
@@ -95,6 +104,7 @@ const DEFAULTS: AppConfig = {
   web: { allowedHosts: [] },
   storage: { dbPath: "app_data/quaestor.db", receiptsRoot: "app_data/receipts" },
   ocrWorker: { enabled: true, intervalMs: 30_000 },
+  ocrClaudeCode: { model: "sonnet" },
   ocrSidecar: {
     manage: true, host: "127.0.0.1", port: 17350,
     lang: "japan", python: null, venvPython: null, externalUrl: null,
@@ -141,6 +151,9 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
     ocrWorker: {
       enabled:    flag(env("QUAESTOR_OCR_WORKER"),         fromFile?.ocrWorker?.enabled,    DEFAULTS.ocrWorker.enabled),
       intervalMs: num(env("QUAESTOR_OCR_INTERVAL_MS"),     fromFile?.ocrWorker?.intervalMs, DEFAULTS.ocrWorker.intervalMs),
+    },
+    ocrClaudeCode: {
+      model: claudeModel(env("QUAESTOR_OCR_CLAUDE_MODEL"), fromFile?.ocrClaudeCode),
     },
     ocrSidecar: {
       manage: flag(env("QUAESTOR_OCR_SIDECAR_MANAGE"), fromFile?.ocrSidecar?.manage, DEFAULTS.ocrSidecar.manage),
@@ -213,6 +226,7 @@ type PartialConfig = {
   server?: Partial<AppConfig["server"]>;
   storage?: Partial<AppConfig["storage"]>;
   ocrWorker?: Partial<AppConfig["ocrWorker"]>;
+  ocrClaudeCode?: Partial<AppConfig["ocrClaudeCode"]>;
   subsidyCrawl?: Partial<AppConfig["subsidyCrawl"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
@@ -247,6 +261,29 @@ function str(envVal: string | undefined, fileVal: string | undefined | null, def
 
 function strOrNull(envVal: string | undefined, fileVal: string | undefined | null): string | null {
   return envVal ?? fileVal ?? null;
+}
+
+/**
+ * @implements SPEC-RECEIPT-OCR-CLI-001 (spec/feature/receipt-ocr-claude-cli.md)
+ *
+ * claude CLI の `--model`。 他の設定と違い「キー未指定」 (既定モデルを使う) と
+ * 「明示 null」 (CLI 既定へ委ねる) を区別する必要があるため専用に解決する。
+ */
+function claudeModel(
+  envVal: string | undefined,
+  fileVal: Partial<AppConfig["ocrClaudeCode"]> | undefined,
+): string | null {
+  if (envVal !== undefined) return validClaudeModel(envVal) ? envVal : DEFAULTS.ocrClaudeCode.model;
+  if (fileVal && "model" in fileVal) {
+    if (fileVal.model === null) return null;
+    return validClaudeModel(fileVal.model) ? fileVal.model : DEFAULTS.ocrClaudeCode.model;
+  }
+  return DEFAULTS.ocrClaudeCode.model;
+}
+
+/** CLI model identifiers must remain a single shell-safe argument. */
+function validClaudeModel(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
 }
 
 function num(envVal: string | undefined, fileVal: number | undefined | null, def: number): number {

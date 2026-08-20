@@ -13,6 +13,10 @@
     "enabled": true,
     "intervalMs": 30000
   },
+  "ocrClaudeCode": {
+    "$comment": "レシート OCR を走らせる claude CLI の --model。CLI 既定に任せると対話セッションで使い切ったモデルの上限に巻き込まれる。null で CLI 既定へ委ねる。",
+    "model": "sonnet"
+  },
   "ocrSidecar": {
     "manage": true,
     "host": "127.0.0.1",

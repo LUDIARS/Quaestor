@@ -1,6 +1,8 @@
 /**
  * Claude Code CLI (`claude -p`) を spawn してレシート画像を解析する OCR backend。
  *
+ * @implements SPEC-RECEIPT-OCR-CLI-001 (spec/feature/receipt-ocr-claude-cli.md)
+ *
  * Anthropic SDK 経由 (AnthropicOcrClient) と並ぶ別経路。 こちらは:
  *  - 機械的 API key 不要 (claude CLI 自身の auth を使う)
  *  - 解析は claude のサイドで行われる (multimodal Read で画像を視認)
@@ -23,6 +25,12 @@ export interface ClaudeCodeOcrOptions {
   timeoutMs?: number;
   /** ログ出力先ディレクトリ。 既定 app_data/claude-code-logs */
   logDir?: string;
+  /**
+   * `--model` に渡すモデル。 未指定だと CLI 既定のモデルに乗るため、
+   * そのモデルの利用上限を対話セッション側で使い切っていると OCR まで巻き込まれて
+   * 画像を見る前に exit する。 null / 未指定で CLI 既定に委ねる。
+   */
+  model?: string | null;
 }
 
 export interface CompleteEvent {
@@ -74,7 +82,12 @@ export class ClaudeCodeOcr {
         const bashPath = this.opts.bashPath ?? process.env.CLAUDE_CODE_GIT_BASH_PATH;
         if (bashPath) env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
 
-        const child = spawn("claude", ["-p", "--dangerously-skip-permissions"], {
+        const model = safeModelName(this.opts.model);
+        const args = ["-p", "--dangerously-skip-permissions"];
+        if (model) args.push("--model", model);
+        logStream.write(`model: ${model ?? "(claude cli default)"}\n`);
+
+        const child = spawn("claude", args, {
           env,
           cwd: this.opts.workingDir,
           stdio: ["pipe", "pipe", "pipe"],
@@ -150,6 +163,13 @@ export class ClaudeCodeOcr {
       }
     });
   }
+}
+
+/** Prevent programmatic callers from turning the Windows shell invocation into command injection. */
+function safeModelName(value: string | null | undefined): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
+    ? value
+    : null;
 }
 
 function buildPrompt(receiptId: string, base: string): string {

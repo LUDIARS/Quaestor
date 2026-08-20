@@ -83,6 +83,8 @@ export interface ReceiptsApiDeps {
   diffEvaluator?: DiffEvaluator;
   /** OCR 完了時の自動投入 + 自動突合。 未設定なら従来どおり手動投入のみ */
   intake?: ReceiptIntake;
+  /** claude CLI OCR の `--model`。 未設定なら CLI 既定 (上限切れに巻き込まれ得る) */
+  claudeCodeModel?: string | null;
 }
 
 /** confirm フェーズの本物 BB 永続化リクエスト */
@@ -105,6 +107,13 @@ const RegionsSchema = z.object({
 
 export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
   const app = new Hono();
+
+  /** claude CLI OCR の起動条件は 3 経路 (自動 spawn / 手動 spawn / ログ参照) で同じにする。 */
+  const newClaudeCodeOcr = (): ClaudeCodeOcr => new ClaudeCodeOcr({
+    backendBaseUrl: `http://127.0.0.1:${process.env.QUAESTOR_PORT ?? 17400}`,
+    workingDir: projectRoot(),
+    model: deps.claudeCodeModel,
+  });
 
   // POST /v1/receipts — captured frame を保存して pending エントリ作成
   // 投機的実行用 server-side dedup: 直近 30 秒で同一画像 hash があれば既存 id を返す
@@ -145,9 +154,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const autoOcr = kind === "stable" || kind === "manual";
     let autoTriggered = false;
     if (autoOcr && !deps.ocr && detectClaudeCli() && takeThrottleSlot(id)) {
-      const port = Number(process.env.QUAESTOR_PORT ?? 17400);
-      const baseUrl = `http://127.0.0.1:${port}`;
-      const cco = new ClaudeCodeOcr({ backendBaseUrl: baseUrl, workingDir: projectRoot() });
+      const cco = newClaudeCodeOcr();
       cco.triggerAsync(id, (ev) => {
         const cur = deps.repo.find(id);
         if (cur && cur.ocr_status === "processing") {
@@ -342,12 +349,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     // status=processing に遷移
     deps.repo.setOcrResult(id, { ocr_status: "processing" });
 
-    const port = Number(process.env.QUAESTOR_PORT ?? 17400);
-    const baseUrl = `http://127.0.0.1:${port}`;
-    const ocr = new ClaudeCodeOcr({
-      backendBaseUrl: baseUrl,
-      workingDir: projectRoot(),
-    });
+    const ocr = newClaudeCodeOcr();
     const triggered = await ocr.triggerAsync(id, (ev) => {
       // claude exit 時の自動 fail-safe: PATCH しないまま終了 (= 依然 processing) なら failed に
       const cur = deps.repo.find(id);
@@ -383,11 +385,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
   app.get("/:id/claude-code-log", (c) => {
     const id = c.req.param("id");
     if (!deps.repo.find(id)) return c.json({ error: "not_found" }, 404);
-    const ocr = new ClaudeCodeOcr({
-      backendBaseUrl: `http://127.0.0.1:${process.env.QUAESTOR_PORT ?? 17400}`,
-      workingDir: projectRoot(),
-    });
-    const path = ocr.logPath(id);
+    const path = newClaudeCodeOcr().logPath(id);
     try {
       if (!existsSync(path)) return c.json({ log: "(no log yet)", path });
       const buf = readFileSync(path, "utf8");

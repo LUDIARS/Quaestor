@@ -7,7 +7,7 @@ import { assertLocalTestAllowed, loadAppConfig, sidecarUrlOf } from "../src/serv
 const ENV_KEYS = [
   "QUAESTOR_HOST", "QUAESTOR_PORT", "QUAESTOR_LOG_LEVEL",
   "QUAESTOR_DB", "QUAESTOR_RECEIPTS_ROOT",
-  "QUAESTOR_OCR_WORKER", "QUAESTOR_OCR_INTERVAL_MS",
+  "QUAESTOR_OCR_WORKER", "QUAESTOR_OCR_INTERVAL_MS", "QUAESTOR_OCR_CLAUDE_MODEL",
   "QUAESTOR_OCR_SIDECAR_MANAGE", "QUAESTOR_OCR_SIDECAR_PORT",
   "QUAESTOR_OCR_SIDECAR_URL", "QUAESTOR_OCR_LANG", "QUAESTOR_OCR_PYTHON",
   "QUAESTOR_PUBLIC_URL", "QUAESTOR_INVOICE_SHARE_ROOTS",
@@ -37,6 +37,29 @@ describe("app-config loader (§7.1)", () => {
     expect(c.ocrSidecar.port).toBe(17350);
     expect(c.ocrSidecar.manage).toBe(true);
     expect(sidecarUrlOf(c)).toBe("http://127.0.0.1:17350");
+  });
+
+  it("ocrClaudeCode.model: 既定は固定モデル、 ファイル/env で変えられ、 null で CLI 既定に委ねる", () => {
+    expect(loadAppConfig(join(dir, "missing.json")).ocrClaudeCode.model).toBe("sonnet");
+
+    const p = join(dir, "model.json");
+    writeFileSync(p, JSON.stringify({ ocrClaudeCode: { model: "opus" } }), "utf8");
+    expect(loadAppConfig(p).ocrClaudeCode.model).toBe("opus");
+
+    process.env.QUAESTOR_OCR_CLAUDE_MODEL = "haiku";
+    expect(loadAppConfig(p).ocrClaudeCode.model).toBe("haiku");
+
+    delete process.env.QUAESTOR_OCR_CLAUDE_MODEL;
+    const nulled = join(dir, "model-null.json");
+    writeFileSync(nulled, JSON.stringify({ ocrClaudeCode: { model: null } }), "utf8");
+    expect(loadAppConfig(nulled).ocrClaudeCode.model).toBeNull();
+
+    const invalid = join(dir, "model-invalid.json");
+    writeFileSync(invalid, JSON.stringify({ ocrClaudeCode: { model: "sonnet & whoami" } }), "utf8");
+    expect(loadAppConfig(invalid).ocrClaudeCode.model).toBe("sonnet");
+
+    process.env.QUAESTOR_OCR_CLAUDE_MODEL = "sonnet & whoami";
+    expect(loadAppConfig(p).ocrClaudeCode.model).toBe("sonnet");
   });
 
   it("ファイル値が既定値を上書きする", () => {

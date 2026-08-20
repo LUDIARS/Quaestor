@@ -68,6 +68,7 @@ const app = buildApp({
   receiptsRoot: RECEIPTS_ROOT,
   gaRoot: config.training.gaRoot,
   publicConfig: { ocrSidecarUrl: sidecarUrlOf(config) },
+  ocrClaudeCodeModel: config.ocrClaudeCode.model,
   invoiceShare: localTest
     ? { ...config.invoiceShare, publicUrl: `http://localhost:${config.server.port}` }
     : config.invoiceShare,
