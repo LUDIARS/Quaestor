@@ -10,6 +10,7 @@ import type { TransactionsRepo } from "../db/transactions-repo.js";
 import type { StatementProfilesRepo } from "../db/statement-profiles-repo.js";
 import type { ImporterResult, SourceKind } from "../shared/types.js";
 import type { SmartImporter, SmartImportResult } from "../services/smart-import.js";
+import type { ReceiptIntake } from "../services/receipt-intake.js";
 
 const PostBodySchema = z.object({
   brand: z.string().optional(),       // 省略時は auto-detect
@@ -26,6 +27,11 @@ export interface ImportsApiDeps {
   smart?: SmartImporter;
   /** 外部登録された明細プロファイル (列マッピング importer)。 省略可 */
   profiles?: StatementProfilesRepo;
+  /**
+   * 取込後の自動突合。 レシートが先に投入済なら、 取引が入ったこの時点で成立させる。
+   * 未設定なら突合は Reconcile 画面の手動 auto-match のみ。
+   */
+  intake?: ReceiptIntake;
 }
 
 const SmartScreenshotSchema = z.object({
@@ -112,9 +118,11 @@ export function importsRouter(deps: ImportsApiDeps): Hono {
       import_id: importId,
     }));
     const bulk = deps.txs.insertBulk(inputs);
+    const reconciled = bulk.inserted > 0 ? deps.intake?.afterTransactionsImported() : undefined;
 
     return c.json({
       import_id: importId,
+      auto_reconciled: reconciled?.matched.length ?? 0,
       brand: brandUsed,
       account: result.account,
       parsed: result.rows.length,
@@ -148,6 +156,7 @@ export function importsRouter(deps: ImportsApiDeps): Hono {
   return app;
 }
 
+/** @implements SPEC-RECEIPT-AUTO-INTAKE-002 (spec/feature/receipt-auto-intake.md) */
 async function persistSmartResult(
   c: Context,
   deps: ImportsApiDeps,
@@ -162,8 +171,10 @@ async function persistSmartResult(
   });
   const inputs = result.rows.map((row) => ({ ...row, source: result.source, import_id: importId }));
   const bulk = deps.txs.insertBulk(inputs);
+  const reconciled = bulk.inserted > 0 ? deps.intake?.afterTransactionsImported() : undefined;
   return c.json({
     import_id: importId,
+    auto_reconciled: reconciled?.matched.length ?? 0,
     brand: result.brand,
     account: result.account,
     parsed: result.rows.length,

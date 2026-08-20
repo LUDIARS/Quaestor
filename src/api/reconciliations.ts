@@ -4,6 +4,7 @@ import type Database from "better-sqlite3";
 import type { ReconciliationsRepo } from "../db/reconciliations-repo.js";
 import type { ReceiptsRepo } from "../db/receipts-repo.js";
 import { findCandidates, DEFAULTS } from "../services/reconcile.js";
+import { autoReconcile, AUTO_MATCH_THRESHOLD } from "../services/auto-reconcile.js";
 
 const CreateSchema = z.object({
   receipt_id: z.string().min(1),
@@ -14,9 +15,9 @@ const CreateSchema = z.object({
 });
 
 const AutoMatchSchema = z.object({
-  /** auto-match の閾値。 既定 0.85 */
+  /** auto-match の閾値。 既定 AUTO_MATCH_THRESHOLD */
   threshold: z.number().min(0).max(1).optional(),
-  /** 対象 receipt id 群 (省略時は OCR 完了済の全 receipt を対象) */
+  /** 対象 receipt id 群 (省略時は未突合の投入済 receipt 全件) */
   receipt_ids: z.array(z.string()).optional(),
 });
 
@@ -69,44 +70,21 @@ export function reconciliationsRouter(deps: ReconciliationsApiDeps): Hono {
     });
   });
 
-  // POST /v1/reconciliations/auto-match — 全 (or 指定) receipt に対し閾値以上を auto 確定
+  // POST /v1/reconciliations/auto-match — 未突合の投入済 receipt に対し閾値以上を auto 確定。
+  // 通常はレシート投入時と取引取込時に自動で走るので、 この endpoint は手動の再実行用。
   app.post("/auto-match", async (c) => {
     const body = await c.req.json().catch(() => ({}));
     const parsed = AutoMatchSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const threshold = parsed.data.threshold ?? 0.85;
 
-    let receipts = parsed.data.receipt_ids
-      ? parsed.data.receipt_ids
-          .map((id) => deps.receipts.find(id))
-          .filter((r) => r != null)
-      : deps.receipts.list({ status: "done", limit: 1000 });
-
-    // 既に reconcile 済の receipt は除外
-    receipts = receipts.filter((r) => deps.repo.byReceipt(r!.id).length === 0);
-
-    const matched: { receipt_id: string; transaction_id: string; confidence: number }[] = [];
-    const skipped: { receipt_id: string; reason: string }[] = [];
-    for (const r of receipts) {
-      if (!r) continue;
-      const cands = findCandidates(deps.db, r);
-      const top = cands[0];
-      if (!top) { skipped.push({ receipt_id: r.id, reason: "no candidates" }); continue; }
-      if (top.score.total < threshold) {
-        skipped.push({ receipt_id: r.id, reason: `top score ${top.score.total.toFixed(2)} < ${threshold}` });
-        continue;
-      }
-      const id = deps.repo.insert({
-        receipt_id: r.id,
-        transaction_id: top.transaction.id,
-        matched_by: "auto",
-        confidence: top.score.total,
-      });
-      if (id != null) matched.push({ receipt_id: r.id, transaction_id: top.transaction.id, confidence: top.score.total });
-      else skipped.push({ receipt_id: r.id, reason: "duplicate (race)" });
-    }
-
-    return c.json({ threshold, matched, skipped });
+    const result = autoReconcile(
+      { db: deps.db, receipts: deps.receipts, reconciliations: deps.repo },
+      {
+        threshold: parsed.data.threshold ?? AUTO_MATCH_THRESHOLD,
+        receiptIds: parsed.data.receipt_ids,
+      },
+    );
+    return c.json(result);
   });
 
   return app;

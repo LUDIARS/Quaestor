@@ -11,6 +11,8 @@ import { ClaudeCodeOcr, detectClaudeCli, projectRoot } from "../services/claude-
 import type { TrainingDataset } from "../services/training-dataset.js";
 import { computeDetectionDiff } from "../services/detection-eval.js";
 import type { DiffEvaluator } from "../services/detection-diff-evaluator.js";
+import type { ReceiptIntake } from "../services/receipt-intake.js";
+import { commitReceipt } from "../services/receipt-commit.js";
 
 /**
  * 同一 receipt への OCR 起動 throttle。 2 秒内の再起動 (auto + 手動 + claude-code) は skip。
@@ -79,6 +81,8 @@ export interface ReceiptsApiDeps {
   dataset?: TrainingDataset;
   /** 差分の Opus 類推器 (ANTHROPIC_API_KEY 未設定なら undefined)。差分がある時だけ呼ぶ */
   diffEvaluator?: DiffEvaluator;
+  /** OCR 完了時の自動投入 + 自動突合。 未設定なら従来どおり手動投入のみ */
+  intake?: ReceiptIntake;
 }
 
 /** confirm フェーズの本物 BB 永続化リクエスト */
@@ -197,6 +201,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     return new Response(buf, { headers: { "content-type": mime } });
   });
 
+  /** @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md) */
   // PATCH /v1/receipts/:id/ocr — OCR 結果を上書き (v0.4 で OCR worker から呼ぶ)
   app.patch("/:id/ocr", async (c) => {
     const id = c.req.param("id");
@@ -206,7 +211,15 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const parsed = OcrResultSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     deps.repo.setOcrResult(id, parsed.data as Parameters<typeof deps.repo.setOcrResult>[1]);
-    return c.json({ receipt: deps.repo.find(id) });
+    // OCR が終わった時点で完備していれば投入まで進める (弾かれたものだけ手動へ残る)
+    const intake = deps.intake?.afterOcr(id);
+    return c.json({
+      receipt: deps.repo.find(id),
+      auto_commit: intake?.commit
+        ? (intake.commit.ok ? { committed: true, already: intake.commit.already } : { committed: false, reason: intake.commit.reason })
+        : null,
+      auto_reconciled: intake?.reconcile?.matched.length ?? 0,
+    });
   });
 
   // POST /v1/receipts/:id/regions — confirm フェーズの本物 BB を学習データに保存
@@ -261,38 +274,36 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     return c.json({ ok: true, saved: real.length, hasDiff: diff.hasDiff });
   });
 
+  /** @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md) */
   // POST /v1/receipts/:id/commit — 「投入」: データ完備チェック + (日付-場所-金額) 重複判定 → 確定
   //  422 incomplete  : date / payee / total のいずれか欠落 (OCR 未完 or 要編集)
   //  409 duplicate   : 既に投入済の中に同じ (日付-場所-金額) がある
   app.post("/:id/commit", (c) => {
     const id = c.req.param("id");
-    const r = deps.repo.find(id);
-    if (!r) return c.json({ error: "not_found" }, 404);
+    const outcome = commitReceipt(deps.repo, id);
 
-    if (r.committed_at != null) {
-      // 冪等: 既に投入済ならそのまま返す
-      return c.json({ ok: true, already: true, receipt: r });
+    if (!outcome.ok && outcome.reason === "not_found") return c.json({ error: "not_found" }, 404);
+    if (!outcome.ok && outcome.reason === "incomplete") {
+      return c.json({
+        error: "incomplete",
+        missing: outcome.missing,
+        message: "日付・場所・金額が揃っていません",
+      }, 422);
     }
-
-    const missing: string[] = [];
-    if (!r.date) missing.push("date");
-    if (!r.payee || !r.payee.trim()) missing.push("payee");
-    if (r.total == null) missing.push("total");
-    if (missing.length > 0) {
-      return c.json({ error: "incomplete", missing, message: "日付・場所・金額が揃っていません" }, 422);
-    }
-
-    const dup = deps.repo.findCommittedDuplicate(r.date!, r.payee!, r.total!, id);
-    if (dup) {
+    if (!outcome.ok) {
+      const r = outcome.receipt;
       return c.json({
         error: "duplicate",
-        existing_id: dup.id,
+        existing_id: outcome.existingId,
         message: `同じ (日付-場所-金額) が投入済: ${r.date} / ${r.payee} / ¥${r.total}`,
       }, 409);
     }
 
-    deps.repo.commit(id);
-    return c.json({ ok: true, receipt: deps.repo.find(id) });
+    // 投入済になった時点で取引と突き合わせる (取引が先に入っていた場合はここで成立)
+    const reconciled = outcome.already ? 0 : (deps.intake?.afterCommit(id)?.matched.length ?? 0);
+    return outcome.already
+      ? c.json({ ok: true, already: true, receipt: outcome.receipt })
+      : c.json({ ok: true, receipt: outcome.receipt, auto_reconciled: reconciled });
   });
 
   // DELETE /v1/receipts/:id

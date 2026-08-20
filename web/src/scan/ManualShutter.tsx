@@ -192,7 +192,7 @@ export function ManualShutter() {
       </div>
       <p style={{ color: "var(--c-subtle)", fontSize: "0.85rem", marginTop: 0 }}>
         レシートを画面に収めて <strong>シャッター</strong> を押すだけ。
-        撮影 → OCR → <strong>日付・場所・金額</strong> が揃ったら投入。
+        撮影 → OCR → <strong>日付・場所・金額</strong> が揃えば自動で投入。 揃わない / 重複したものだけ手で直す。
       </p>
 
       {/* カメラ + スキャンアニメーション — 常時 9:16 ポートレート */}

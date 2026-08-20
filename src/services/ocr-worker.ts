@@ -12,11 +12,14 @@ import type { ReceiptsRepo } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "./receipt-storage.js";
 import type { OcrClient } from "./ocr-client.js";
 import { runOcrFor } from "./ocr-runner.js";
+import type { ReceiptIntake } from "./receipt-intake.js";
 
 export interface OcrWorkerDeps {
   receipts: ReceiptsRepo;
   storage: ReceiptStorage;
   client: OcrClient;
+  /** OCR 完了後の自動投入 + 自動突合。 未設定なら投入は手動のまま */
+  intake?: ReceiptIntake;
   /** ポーリング間隔 (ms)。 既定 30000 = 30 秒 */
   intervalMs?: number;
   /** ログハンドル (pino インスタンスのサブセット)。 省略可 */
@@ -60,6 +63,7 @@ export class OcrWorker {
         receipts: this.deps.receipts,
         storage: this.deps.storage,
         client: this.deps.client,
+        intake: this.deps.intake,
       });
       return { processed: true, receiptId: target.id, status: result.status };
     } finally {
@@ -79,6 +83,7 @@ export class OcrWorker {
             receipts: this.deps.receipts,
             storage: this.deps.storage,
             client: this.deps.client,
+            intake: this.deps.intake,
           });
           this.deps.logger?.info?.({ id: target.id, status: r.status }, "ocr worker processed");
         }

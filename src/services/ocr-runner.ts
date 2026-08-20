@@ -11,6 +11,7 @@
 import type { ReceiptsRepo } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "./receipt-storage.js";
 import type { OcrClient } from "./ocr-client.js";
+import type { ReceiptIntake } from "./receipt-intake.js";
 
 export interface OcrRunResult {
   ok: boolean;
@@ -22,6 +23,8 @@ export interface OcrRunnerDeps {
   receipts: ReceiptsRepo;
   storage: ReceiptStorage;
   client: OcrClient;
+  /** 抽出成功後の自動投入 + 自動突合。 未設定なら投入は手動のまま */
+  intake?: ReceiptIntake;
 }
 
 export async function runOcrFor(receiptId: string, deps: OcrRunnerDeps): Promise<OcrRunResult> {
@@ -50,6 +53,7 @@ export async function runOcrFor(receiptId: string, deps: OcrRunnerDeps): Promise
       items: result.items,
       ocr_raw: result.raw,
     });
+    deps.intake?.afterOcr(receiptId);
     return { ok: true, status };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

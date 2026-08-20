@@ -18,6 +18,8 @@ import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { OcrWorker } from "./services/ocr-worker.js";
+import { ReceiptIntake } from "./services/receipt-intake.js";
+import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
 import { loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
 import { SecretStore } from "./services/secret-store.js";
@@ -66,10 +68,18 @@ if (process.env.ANTHROPIC_API_KEY && config.ocrWorker.enabled) {
   try {
     applyMigrations(db); // buildApp が既にやってるが念のため
     const client = new AnthropicOcrClient();
+    const workerReceipts = new ReceiptsRepo(db);
     ocrWorker = new OcrWorker({
-      receipts: new ReceiptsRepo(db),
+      receipts: workerReceipts,
       storage: new ReceiptStorage(RECEIPTS_ROOT),
       client,
+      // worker 経由の OCR も API 経由と同じく、 完備していれば投入 → 突合まで進める
+      intake: new ReceiptIntake({
+        db,
+        receipts: workerReceipts,
+        reconciliations: new ReconciliationsRepo(db),
+        logger: log,
+      }),
       intervalMs: config.ocrWorker.intervalMs,
       logger: log,
     });

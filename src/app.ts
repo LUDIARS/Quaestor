@@ -42,6 +42,7 @@ import { ocrGaRouter } from "./api/ocr-ga.js";
 import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { SmartImporter } from "./services/smart-import.js";
+import { ReceiptIntake } from "./services/receipt-intake.js";
 import { ClaudeSecurityMapper, type SecurityMapper } from "./services/security-mapper.js";
 import { ClaudePerkClient, type PerkClient } from "./services/perk-client.js";
 import { YahooFinanceStockClient, type StockClient } from "./services/stock-client.js";
@@ -182,6 +183,11 @@ export interface AppDeps {
    * 座標は暗号化ストア経由の env を既定とする。
    */
   invoiceAcceptanceLocationReference?: InvoiceAcceptanceLocationReference | null;
+  /**
+   * OCR 完了時にレシートを自動投入し、 取引と自動突合するか。 既定 true。
+   * false で従来の手動投入 (Scan 画面の「投入」ボタン) のみに戻る。
+   */
+  autoIntake?: boolean;
   /** best-effort 外部処理の失敗を、秘密・個人データを含めず観測可能にする。 */
   logger?: AppLogger;
   /** buildApp が所有する timer 等を、プロセス終了時に解放するための登録先。 */
@@ -197,6 +203,14 @@ export function buildApp(deps: AppDeps): Hono {
   const rules = new ApportionmentRulesRepo(deps.db);
   const receipts = new ReceiptsRepo(deps.db);
   const reconciliations = new ReconciliationsRepo(deps.db);
+  // OCR 完了 → 投入 → 突合 を人手なしで通す。 取引取込側からも同じ突合 sweep を呼ぶ。
+  const receiptIntake = new ReceiptIntake({
+    db: deps.db,
+    receipts,
+    reconciliations,
+    enabled: deps.autoIntake ?? true,
+    logger: deps.logger ? { warn: (f, m) => deps.logger?.warn(f as Record<string, unknown>, m as string | undefined) } : undefined,
+  });
   const invoices = new InvoicesRepo(deps.db);
   const invoiceShares = new InvoiceShareRepo(deps.db);
   const invoiceDeliveryContacts = new InvoiceDeliveryContactsRepo(deps.db);
@@ -380,11 +394,11 @@ export function buildApp(deps: AppDeps): Hono {
   }));
 
   app.route("/v1/transactions", transactionsRouter({ txs, db: deps.db }));
-  app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles }));
+  app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles, intake: receiptIntake }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/apportionment-advisor", apportionmentAdvisorRouter({ advisor: apportionmentAdvisor }));
-  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator }));
+  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake }));
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
