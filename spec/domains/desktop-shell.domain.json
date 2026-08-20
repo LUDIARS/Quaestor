@@ -1,0 +1,11 @@
+{
+  "name": "desktop-shell",
+  "description": "デスクトップアプリの器 (Tauri)。 ネイティブ側の入口と権限。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src-tauri/(?:.*/)?[^/]+$"
+    }
+  ]
+}

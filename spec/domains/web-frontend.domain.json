@@ -1,0 +1,14 @@
+{
+  "name": "web-frontend",
+  "description": "ブラウザ側の画面。 取引・請求・助言の表示と操作。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)web/src/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)web/[^/]+\\.(?:ts|tsx|js)$"
+    }
+  ]
+}

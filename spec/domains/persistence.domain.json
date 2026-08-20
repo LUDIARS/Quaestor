@@ -1,0 +1,14 @@
+{
+  "name": "persistence",
+  "description": "永続化。 スキーマ、 マイグレーション、 リポジトリ。 会計データの唯一の置き場。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/db/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/shared/(?:.*/)?[^/]+$"
+    }
+  ]
+}

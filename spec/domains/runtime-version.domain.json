@@ -12,8 +12,18 @@
     }
   ],
   "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(?:src/(?:app|server)\\.ts|src/services/runtime-version\\.ts|web/src/App\\.tsx)"
+    },
+    {
+      "pathPattern": "(^|/)src/(?:app|server)\\.ts$"
+    },
+    {
+      "pathPattern": "(^|/)src/cli/(?:.*/)?[^/]+$"
+    }
+  ],
   "cardTemplate": "Summarise the runtime-version domain: one deployment-version value is exposed through health, startup logs, and the Web header, with an unavailable fallback.",
-  "source": "spec-draft",
   "mechanics": [
     "health-version-contract",
     "startup-version-log",
@@ -22,6 +32,5 @@
   "specRefs": [
     "SPEC-RUNTIME-VERSION-001 — 配備バージョンの一貫した表示"
   ],
-  "rationale": "配備バージョンの観測は backend と Web UI の共通運用関心であり、業務ドメインや資格情報管理から分離する。",
-  "updatedAt": "2026-08-09T00:00:00.000Z"
+  "rationale": "配備バージョンの観測は backend と Web UI の共通運用関心であり、業務ドメインや資格情報管理から分離する。"
 }

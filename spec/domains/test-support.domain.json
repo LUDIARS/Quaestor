@@ -1,0 +1,14 @@
+{
+  "name": "test-support",
+  "description": "自動テストと運用スクリプト。 各ドメインの振る舞いを検証する置き場。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)tests/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)scripts/(?:.*/)?[^/]+$"
+    }
+  ]
+}

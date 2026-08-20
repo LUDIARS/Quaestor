@@ -1,0 +1,14 @@
+{
+  "name": "accounting-services",
+  "description": "会計の判断ロジック。 突合、 按分と配賦の助言、 費目分類、 各種集計と書き出し。 Quaestor の意味づけの中心。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/services/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/business-plan/(?:.*/)?[^/]+$"
+    }
+  ]
+}

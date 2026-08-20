@@ -1,0 +1,57 @@
+{
+  "name": "invoice-delivery",
+  "description": "請求書PDFを登録送信先へマジックリンクで配信し、リンク発行時の文書・宛先スナップショット、成功アクセス、受領者による請求内容への明示合意を監査可能な形で保持する。メールやSlackは配送経路であり、本人確認済み電子署名や契約書作成そのものは責務外。",
+  "presetRules": [
+    {
+      "preset": "couplingCap",
+      "params": {
+        "targetPattern": "src/(api/invoice|db/invoice|services/invoice|invoices/invoice-share-page)",
+        "by": "path",
+        "maxFanOut": 24
+      }
+    }
+  ],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "src/(api/invoice|db/invoice|services/invoice|invoices/invoice-share-page)"
+    },
+    {
+      "pathPattern": "(^|/)src/invoices/(?:.*/)?[^/]+$"
+    }
+  ],
+  "cardTemplate": "Summarise the invoice-delivery domain: recipient registry, immutable share snapshots, SES and Slack link delivery, privacy-minimized access audit, public PDF delivery, recipient passkey enrollment, signed invoice-content acceptance, and independently verifiable timestamped evidence.",
+  "mechanics": [
+    "delivery-contact-registry",
+    "magic-link-document-binding",
+    "ses-link-delivery",
+    "slack-link-delivery",
+    "magic-link-access-audit",
+    "recipient-passkey-enrollment",
+    "invoice-content-acceptance",
+    "acceptance-evidence-delivery",
+    "acceptance-evidence-timestamping"
+  ],
+  "specRefs": [
+    "SPEC-INVOICE-LOCALTEST-001 — ローカル試験時のみの localhost 配信と outbox",
+    "SPEC-INVOICE-EMAIL-001 — SES 専用資格情報による請求書リンク配送",
+    "SPEC-INVOICE-EMAIL-002 — 発行とメール配送の不可分な失敗処理",
+    "SPEC-INVOICE-EMAIL-003 — 配送 API 応答からのベアラーリンク非開示",
+    "SPEC-INVOICE-DELIVERY-001 — 請求書送信先台帳",
+    "SPEC-INVOICE-DELIVERY-002 — リンク発行時の宛先スナップショット",
+    "SPEC-INVOICE-DELIVERY-003 — 発行側の請求書ID厳密検証",
+    "SPEC-INVOICE-DELIVERY-004 — 発行時サイズに固定したPDF再検証",
+    "SPEC-INVOICE-ACCEPTANCE-001 — 合意対象PDFの再検証と明示操作",
+    "SPEC-INVOICE-ACCEPTANCE-002 — 追記専用・冪等な合意監査記録",
+    "SPEC-INVOICE-ACCEPTANCE-003 — メール検証をパスキー登録ゲートに限定",
+    "SPEC-INVOICE-ACCEPTANCE-004 — プライバシー最小化した位置シグナル",
+    "SPEC-INVOICE-ACCEPTANCE-005 — 送信先に紐づくパスキー登録と失効",
+    "SPEC-INVOICE-ACCEPTANCE-006 — 文書ダイジェストに束縛する署名チャレンジ",
+    "SPEC-INVOICE-ACCEPTANCE-007 — 検証可能な合意証拠バンドルの配送",
+    "SPEC-INVOICE-ACCEPTANCE-008 — RFC 3161 タイムスタンプの再試行",
+    "SPEC-INVOICE-ACCESS-001 — 成功アクセスのプライバシー最小化監査ログ",
+    "SPEC-INVOICE-ACCESS-002 — 公開リンクのレート制限追跡キー上限",
+    "SPEC-INVOICE-SLACK-001..004 — SlackグループDMへのリンク配送"
+  ],
+  "rationale": "送信先の管理、リンク発行、配送、合意証跡は同じ請求書配信ライフサイクルを構成する。一方、Gmail認証・Slack OAuth・認定電子署名・契約条項作成は外部境界として分離する。"
+}

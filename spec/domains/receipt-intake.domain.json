@@ -1,0 +1,20 @@
+{
+  "name": "receipt-intake",
+  "description": "レシート・明細の取り込み。 スキャン画像や外部明細を読み取り、 取引として登録する。 突合の判断は別ドメインが持つ。",
+  "presetRules": [],
+  "templateRules": [],
+  "membership": [
+    {
+      "pathPattern": "(^|/)src/importers/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/detection/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)web/src/(?:scan|scanner)/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)ocr-sidecar/(?:.*/)?[^/]+$"
+    }
+  ]
+}
