@@ -158,6 +158,8 @@ export interface AppDeps {
     roots?: string[];
     email?: { region?: string | null; fromAddress?: string | null; configurationSet?: string | null };
     timestampAuthority?: { url?: string; enabled?: boolean };
+    /** ローカルテストモード: `http://localhost` origin を許可する (server.ts が outbox 送信と併せて設定)。 */
+    localTest?: boolean;
   };
   /**
    * 合意証跡への RFC 3161 タイムスタンプ。 `"auto"` (本番エントリポイントのみ) で
@@ -319,6 +321,7 @@ export function buildApp(deps: AppDeps): Hono {
     publicBaseUrl: deps.invoiceShare?.publicUrl ?? undefined,
     allowedRoots: deps.invoiceShare?.roots?.length ? deps.invoiceShare.roots : undefined,
     contacts: invoiceDeliveryContacts,
+    allowLocalHttpOrigin: deps.invoiceShare?.localTest === true,
   });
   const invoiceEmailNotifier = resolveInvoiceEmailNotifier(deps.invoiceEmailNotifier, deps.invoiceShare?.email);
   const invoiceShareLocationReference = deps.invoiceAcceptanceLocationReference === undefined
@@ -349,7 +352,10 @@ export function buildApp(deps: AppDeps): Hono {
     passkeys: invoiceRecipientPasskeys,
     challenges: invoiceShareWebAuthnChallenges,
     otpGate: invoiceShareAcceptanceService,
-    webauthn: new InvoicePasskeyService({ publicUrl: deps.invoiceShare?.publicUrl ?? undefined }),
+    webauthn: new InvoicePasskeyService({
+      publicUrl: deps.invoiceShare?.publicUrl ?? undefined,
+      allowLocalHttpOrigin: deps.invoiceShare?.localTest === true,
+    }),
     timestamps: evidenceTimestampService,
     evidenceMailer: new InvoiceAcceptanceEvidenceMailer({
       notifier: invoiceEmailNotifier,

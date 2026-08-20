@@ -65,6 +65,11 @@ export interface InvoiceShareServiceOptions {
   tokenFactory?: () => string;
   idFactory?: () => string;
   contacts?: InvoiceDeliveryContactsRepo;
+  /**
+   * ローカルテストモード限定: `http://localhost[:port]` の publicBaseUrl を許可する。
+   * loopback 以外の http は許可しない。 本番構成では常に false。
+   */
+  allowLocalHttpOrigin?: boolean;
 }
 
 export class InvoiceShareService {
@@ -182,8 +187,11 @@ export class InvoiceShareService {
     } catch {
       throw new InvoiceShareError("not_configured", "invoiceShare.publicUrl is invalid", 503);
     }
+    const localTestOrigin = this.options.allowLocalHttpOrigin === true
+      && parsed.protocol === "http:"
+      && parsed.hostname === "localhost";
     if (
-      parsed.protocol !== "https:"
+      (parsed.protocol !== "https:" && !localTestOrigin)
       || parsed.username
       || parsed.password
       || parsed.search

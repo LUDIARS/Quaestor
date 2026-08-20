@@ -13,6 +13,7 @@ import pino from "pino";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { buildApp } from "./app.js";
+import { OutboxFileNotifier } from "./services/outbox-file-notifier.js";
 import { applyMigrations } from "./db/schema.js";
 import { ReceiptsRepo } from "./db/receipts-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
@@ -21,7 +22,7 @@ import { OcrWorker } from "./services/ocr-worker.js";
 import { ReceiptIntake } from "./services/receipt-intake.js";
 import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
-import { loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
+import { assertLocalTestAllowed, loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
 import { SecretStore } from "./services/secret-store.js";
 import { NotificationWorker } from "./services/notification-worker.js";
 import { SubsidyCrawlWorker } from "./services/subsidy-crawl-worker.js";
@@ -30,6 +31,7 @@ import { JGrantsCrawler, MirasapoPlusCrawler, CompositeCrawler } from "./service
 import { runtimeVersionFromEnvironment } from "./services/runtime-version.js";
 
 const config = loadAppConfig();
+assertLocalTestAllowed(config.invoiceShare.localTest);
 
 // シークレット (ANTHROPIC_API_KEY 等) を暗号化ストアから注入 (メモリのみ、平文ファイル無し)
 const injectedSecrets = new SecretStore().injectIntoEnv();
@@ -48,14 +50,30 @@ const appCleanups: Array<() => void> = [];
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
+/**
+ * ローカルテストモード (invoiceShare.localTest / QUAESTOR_LOCAL_TEST):
+ * リンク発行 origin を `http://localhost:<server.port>` に、 メール送信をファイル outbox に
+ * 切り替える。 実メールも Cloudflare も通さずに、 同一マシンのブラウザでマジックリンク〜
+ * パスキー署名を検証するための構成。 本番では必ず false。
+ */
+const localTest = config.invoiceShare.localTest;
+if (localTest) {
+  log.warn(
+    { publicUrl: `http://localhost:${config.server.port}`, outbox: "app_data/outbox" },
+    "invoiceShare.localTest is ON: links use http://localhost and mail is written to the outbox directory",
+  );
+}
 const app = buildApp({
   db,
   receiptsRoot: RECEIPTS_ROOT,
   gaRoot: config.training.gaRoot,
   publicConfig: { ocrSidecarUrl: sidecarUrlOf(config) },
-  invoiceShare: config.invoiceShare,
+  invoiceShare: localTest
+    ? { ...config.invoiceShare, publicUrl: `http://localhost:${config.server.port}` }
+    : config.invoiceShare,
   // 本番プロセスだけが暗号化ストア由来の送信専用キーで SES クライアントを持つ。 未設定なら 503 not_configured。
-  invoiceEmailNotifier: "auto",
+  // ローカルテストモードは SES へ出さず、 送信内容をファイル outbox へ書く。
+  invoiceEmailNotifier: localTest ? new OutboxFileNotifier() : "auto",
   // 合意証跡の RFC 3161 タイムスタンプも本番プロセスだけが実 TSA を叩く (設定で無効化可)。
   evidenceTimestamp: "auto",
   logger: { warn: (fields, message) => log.warn(fields, message) },

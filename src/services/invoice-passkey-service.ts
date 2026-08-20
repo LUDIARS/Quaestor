@@ -60,6 +60,8 @@ export interface InvoicePasskeyServiceOptions {
   /** `https://qs-magiclink.example` のような公開 origin。 未設定なら 503。 */
   publicUrl?: string;
   rpName?: string;
+  /** ローカルテストモード限定: `http://localhost[:port]` を RP origin として許可する。 */
+  allowLocalHttpOrigin?: boolean;
 }
 
 export class InvoicePasskeyService {
@@ -68,7 +70,7 @@ export class InvoicePasskeyService {
   private readonly rpName: string;
 
   constructor(options: InvoicePasskeyServiceOptions) {
-    const parsed = parseOrigin(options.publicUrl);
+    const parsed = parseOrigin(options.publicUrl, options.allowLocalHttpOrigin === true);
     this.origin = parsed?.origin ?? null;
     this.rpId = parsed?.hostname ?? null;
     this.rpName = options.rpName ?? "Quaestor 請求書";
@@ -226,13 +228,18 @@ function toUint8Array(value: Uint8Array): Uint8Array<ArrayBuffer> {
   return new Uint8Array(value);
 }
 
-function parseOrigin(publicUrl: string | undefined): { origin: string; hostname: string } | null {
+function parseOrigin(
+  publicUrl: string | undefined,
+  allowLocalHttpOrigin: boolean,
+): { origin: string; hostname: string } | null {
   const trimmed = publicUrl?.trim();
   if (!trimmed) return null;
   try {
     const url = new URL(trimmed);
+    // RP ID は登録可能ドメインが必要で IP は使えないため、 ローカルテストは localhost に限る。
+    const localTestOrigin = allowLocalHttpOrigin && url.protocol === "http:" && url.hostname === "localhost";
     if (
-      url.protocol !== "https:"
+      (url.protocol !== "https:" && !localTestOrigin)
       || !url.hostname
       || url.username
       || url.password

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadAppConfig, sidecarUrlOf } from "../src/services/app-config.js";
+import { assertLocalTestAllowed, loadAppConfig, sidecarUrlOf } from "../src/services/app-config.js";
 
 const ENV_KEYS = [
   "QUAESTOR_HOST", "QUAESTOR_PORT", "QUAESTOR_LOG_LEVEL",
@@ -12,7 +12,7 @@ const ENV_KEYS = [
   "QUAESTOR_OCR_SIDECAR_URL", "QUAESTOR_OCR_LANG", "QUAESTOR_OCR_PYTHON",
   "QUAESTOR_PUBLIC_URL", "QUAESTOR_INVOICE_SHARE_ROOTS",
   "QUAESTOR_SES_REGION", "QUAESTOR_SES_FROM_ADDRESS", "QUAESTOR_SES_CONFIGURATION_SET",
-  "QUAESTOR_TSA_URL", "QUAESTOR_TSA_ENABLED",
+  "QUAESTOR_TSA_URL", "QUAESTOR_TSA_ENABLED", "QUAESTOR_LOCAL_TEST",
 ];
 
 describe("app-config loader (§7.1)", () => {
@@ -136,6 +136,22 @@ describe("app-config loader (§7.1)", () => {
     process.env.QUAESTOR_TSA_URL = "https://tsa2.example/tsr";
     process.env.QUAESTOR_TSA_ENABLED = "true";
     expect(loadAppConfig(p).invoiceShare.timestampAuthority).toEqual({ url: "https://tsa2.example/tsr", enabled: true });
+  });
+
+  it("invoiceShare.localTest: 既定 false、 ファイルと env で有効化できる", () => {
+    expect(loadAppConfig(join(dir, "missing.json")).invoiceShare.localTest).toBe(false);
+    const p = join(dir, "q.json");
+    writeFileSync(p, JSON.stringify({ invoiceShare: { localTest: true } }), "utf8");
+    expect(loadAppConfig(p).invoiceShare.localTest).toBe(true);
+    process.env.QUAESTOR_LOCAL_TEST = "false";
+    expect(loadAppConfig(p).invoiceShare.localTest).toBe(false);
+  });
+
+  it("invoiceShare.localTest: production では起動を拒否する", () => {
+    expect(() => assertLocalTestAllowed(false, "production")).not.toThrow();
+    expect(() => assertLocalTestAllowed(true, "development")).not.toThrow();
+    expect(() => assertLocalTestAllowed(true, "production"))
+      .toThrow("invoiceShare.localTest must be disabled in production");
   });
 
   it("壊れた JSON は既定値で起動を止めない", () => {

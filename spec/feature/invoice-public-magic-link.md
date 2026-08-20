@@ -30,6 +30,7 @@ the source of truth, env is override only — see `spec/setup/config-and-secrets
 | `invoiceShare.email.configurationSet` | no | `QUAESTOR_SES_CONFIGURATION_SET` | Optional SES configuration set for reputation/event metrics. Event destinations never receive message bodies. |
 | `invoiceShare.timestampAuthority.url` | no | `QUAESTOR_TSA_URL` | RFC 3161 timestamp authority that stamps the acceptance evidence digest. Defaults to `https://freetsa.org/tsr`. |
 | `invoiceShare.timestampAuthority.enabled` | no | `QUAESTOR_TSA_ENABLED` | `false` skips external timestamping (`timestamp_status = skipped`). Defaults to `true`. |
+| `invoiceShare.localTest` | no | `QUAESTOR_LOCAL_TEST` | Local manual-testing mode; defaults to `false` and must stay `false` in production. See "Local test mode". |
 
 The send-only IAM credentials (`QUAESTOR_SES_ACCESS_KEY_ID`, `QUAESTOR_SES_SECRET_ACCESS_KEY`,
 optional `QUAESTOR_SES_SESSION_TOKEN`) live in the encrypted secret store and are injected into env
@@ -39,7 +40,24 @@ from the configured `fromAddress`.
 
 `invoiceShare.publicUrl` must not contain credentials, a path, query, or fragment. Missing or
 insecure configuration fails link creation with `503 not_configured` instead of falling back to a
-loopback URL. Roots are compared after `realpath`, so a root reached through a symlink still matches.
+loopback URL; the only exception is the explicit local test mode below.
+
+### Local test mode
+
+`invoiceShare.localTest: true` reconfigures the running process for same-machine manual testing
+without SES or Cloudflare: the production entrypoint overrides the link origin to
+`http://localhost:<server.port>` (WebAuthn RP ID `localhost` — a plain-HTTP origin is accepted only
+when this flag is set and only for the hostname `localhost`, never for other hosts or IPs), and every
+outgoing mail (magic link, enrollment code, evidence bundle) is written to `app_data/outbox/` as a
+text file with attachments beside it instead of being sent. Nothing reaches SES. The flag is a
+deliberate operator action for a test machine; it must never be enabled in production because the
+issuer can then read links and codes from the outbox directory, which removes the
+operator-cannot-read-the-link property this feature exists to provide.
+
+- **SPEC-INVOICE-LOCALTEST-001** — with `localTest` off (the default), `http://` origins remain
+  rejected with `503 not_configured` and mail goes only through the configured SES notifier. With it
+  on, the accepted insecure origin is exactly `http://localhost[:port]`, and mail is written to the
+  outbox directory instead of any network delivery. Roots are compared after `realpath`, so a root reached through a symlink still matches.
 
 ## Issuer API and link confidentiality
 

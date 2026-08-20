@@ -67,6 +67,11 @@ export interface AppConfig {
       url: string;
       enabled: boolean;
     };
+    /**
+     * ローカルテストモード。 true でリンク発行 origin を `http://localhost:<server.port>` に、
+     * メール送信をファイル outbox (`app_data/outbox/`) に切り替える。 本番では必ず false。
+     */
+    localTest: boolean;
   };
   /** 補助金の定期クロール (#278)。 */
   subsidyCrawl: {
@@ -100,6 +105,7 @@ const DEFAULTS: AppConfig = {
     roots: ["data", "app_data/invoices"],
     email: { region: null, fromAddress: null, configurationSet: null },
     timestampAuthority: { url: "https://freetsa.org/tsr", enabled: true },
+    localTest: false,
   },
   subsidyCrawl: {
     enabled: false,
@@ -161,6 +167,7 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
         url:     str(env("QUAESTOR_TSA_URL"),      fromFile?.invoiceShare?.timestampAuthority?.url,     DEFAULTS.invoiceShare.timestampAuthority.url),
         enabled: flag(env("QUAESTOR_TSA_ENABLED"), fromFile?.invoiceShare?.timestampAuthority?.enabled, DEFAULTS.invoiceShare.timestampAuthority.enabled),
       },
+      localTest: flag(env("QUAESTOR_LOCAL_TEST"), fromFile?.invoiceShare?.localTest, DEFAULTS.invoiceShare.localTest),
     },
     subsidyCrawl: {
       enabled:         flag(env("QUAESTOR_SUBSIDY_CRAWL"),          fromFile?.subsidyCrawl?.enabled,         DEFAULTS.subsidyCrawl.enabled),
@@ -185,6 +192,13 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
   return c;
 }
 
+/** @implements SPEC-INVOICE-LOCALTEST-001 (spec/feature/invoice-public-magic-link.md) */
+export function assertLocalTestAllowed(localTest: boolean, environment = process.env.NODE_ENV): void {
+  if (localTest && environment === "production") {
+    throw new Error("invoiceShare.localTest must be disabled in production");
+  }
+}
+
 /** sidecar の実効 URL (外部指定があればそれ、無ければ自前管理分) */
 export function sidecarUrlOf(c: AppConfig): string {
   return c.ocrSidecar.externalUrl ?? `http://${c.ocrSidecar.host}:${c.ocrSidecar.port}`;
@@ -203,6 +217,7 @@ type PartialConfig = {
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
   training?: Partial<AppConfig["training"]>;
   invoiceShare?: Partial<Omit<AppConfig["invoiceShare"], "email" | "timestampAuthority">> & {
+    localTest?: boolean;
     email?: Partial<AppConfig["invoiceShare"]["email"]>;
     timestampAuthority?: Partial<AppConfig["invoiceShare"]["timestampAuthority"]>;
   };
