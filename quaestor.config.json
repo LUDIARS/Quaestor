@@ -32,7 +32,13 @@
   "invoiceShare": {
     "$comment": "請求書の公開マジックリンク (spec/feature/invoice-public-magic-link.md)。 publicUrl は Cloudflare 経由の HTTPS origin のみ (path/query/credential 不可)。 null の間はリンク発行が 503 で失敗する。 roots はこの PDF 以外を共有させないための許可ルート。",
     "publicUrl": "https://qs-magiclink.ai-run-do.com",
-    "roots": ["data", "app_data/invoices"]
+    "roots": ["data", "app_data/invoices"],
+    "email": {
+      "$comment": "請求書メールの送信元 (Amazon SES, spec/setup/config-and-secrets.md §3)。資格情報は暗号化ストアの QUAESTOR_SES_ACCESS_KEY_ID / QUAESTOR_SES_SECRET_ACCESS_KEY。",
+      "region": "us-east-1",
+      "fromAddress": "invoice@ai-run-do.com",
+      "configurationSet": null
+    }
   },
   "notifications": {
     "$comment": "アドバイザーのアドバイスを Discord webhook に定期通知。 webhook URL は `npm run secret -- set QUAESTOR_DISCORD_WEBHOOK_URL <url>` で登録。 subsidies は crawl+LLM が走るため既定 off (planId 指定で有効化)。",
