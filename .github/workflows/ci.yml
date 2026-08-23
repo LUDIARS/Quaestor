@@ -17,9 +17,12 @@ concurrency:
 
 jobs:
   backend:
-    name: backend (lint + test)
+    name: backend Node ${{ matrix.node-version }} (lint + test)
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        node-version: ['22', '24']
     steps:
       - uses: actions/checkout@v4
 
@@ -27,7 +30,7 @@ jobs:
       # GITHUB_TOKEN (packages:read) で取得する。
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
           cache-dependency-path: package-lock.json
           registry-url: 'https://npm.pkg.github.com'
