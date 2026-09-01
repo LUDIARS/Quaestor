@@ -424,7 +424,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.use("/v1/invoices/share/*", invoiceSharePublicGuard(new InvoiceShareRateLimiter()));
   /** @implements SPEC-INVOICE-ACCESS-003 (spec/feature/invoice-public-magic-link.md) */
   app.use("/v1/invoices/share/*", invoiceShareAccessLog(deps.invoiceShareAccessLogger));
-  app.route("/v1/invoices", invoiceSharePasskeysRouter({ service: invoiceSharePasskeyAcceptanceService }));
+  app.route("/v1/invoices", invoiceSharePasskeysRouter());
   app.route("/v1/invoices", invoiceSharesRouter({
     service: invoiceShareService,
     acceptances: invoiceShareAcceptanceService,

@@ -98,7 +98,7 @@ openssl ts -verify -digest <acceptance.evidence_sha256> -in token.tsr -CAfile ca
 
 `messageImprint` が `acceptance.evidence_sha256` と一致し、 `Verification: OK` が出れば、 その証跡は
 TSA が記した `genTime` に存在していたことになります。 `timestamp.status` が `pending` のバンドルは
-後で `evidence.json` (マジックリンク配下) から最新版を取得してください。
+後でマジックリンクの `?view=evidence` から最新版を取得してください。
 
 ## 5. 何が保証され、 何が保証されないか
 

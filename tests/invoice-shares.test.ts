@@ -500,7 +500,7 @@ describe("API: /v1/invoices share links", () => {
     expect(html).not.toContain("<A&B>");
     expect(html).not.toContain(root);
 
-    const pdf = await app.request(`/v1/invoices/share/${token}/document.pdf`);
+    const pdf = await app.request(`/v1/invoices/share/${token}?view=document`);
     expect(pdf.status).toBe(200);
     expect(pdf.headers.get("content-type")).toBe("application/pdf");
     expect(pdf.headers.get("content-disposition")).toContain("filename*=UTF-8''");
@@ -515,7 +515,7 @@ describe("API: /v1/invoices share links", () => {
     const afterRevoke = await app.request(`/v1/invoices/share/${token}`);
     expect(afterRevoke.status).toBe(404);
     expect(await afterRevoke.text()).toContain("リンクを確認できません");
-    expect((await app.request(`/v1/invoices/share/${token}/document.pdf`)).status).toBe(404);
+    expect((await app.request(`/v1/invoices/share/${token}?view=document`)).status).toBe(404);
   });
 
   it("登録送信先をリンクへ固定し、OTP 通過はパスキー登録ゲートとして働き合意は作らない", async () => {
@@ -578,7 +578,7 @@ describe("API: /v1/invoices share links", () => {
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: confirmationBody,
       }),
-      app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+      app.request(`/v1/invoices/share/${token}/accept`, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: confirmationBody,
@@ -654,7 +654,7 @@ describe("API: /v1/invoices share links", () => {
     });
     const html = await begin.text();
     const challengeId = html.match(/name="challenge_id" value="([^"]+)"/)?.[1] ?? "";
-    const wrong = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+    const wrong = await app.request(`/v1/invoices/share/${token}/accept`, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ challenge_id: challengeId, code: "000000" }).toString(),
@@ -699,7 +699,7 @@ describe("API: /v1/invoices share links", () => {
       const challengeId = (await page.text()).match(/name="challenge_id" value="([^"]+)"/)?.[1] ?? "";
       expect(challengeId).not.toBe("");
       for (let attempt = 0; attempt < 5; attempt += 1) {
-        const wrong = await app.request(`/v1/invoices/share/${token}/accept/confirm`, {
+        const wrong = await app.request(`/v1/invoices/share/${token}/accept`, {
           method: "POST",
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ challenge_id: challengeId, code: "000000" }).toString(),

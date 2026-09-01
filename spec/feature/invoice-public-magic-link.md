@@ -161,15 +161,30 @@ Clauses:
 
 | Route | Result |
 |---|---|
-| `GET /v1/invoices/share/:token` | Minimal Japanese landing page with invoice summary. The acceptance control depends on state: accepted → record + evidence link; recipient has an active passkey → "sign with passkey" (JS); recipient registered but no passkey → email-OTP enrollment form; link not bound to a registered recipient → notice that on-page acceptance is unavailable. |
-| `GET /v1/invoices/share/:token/document.pdf` | Verified PDF rendered inline. |
-| `POST /v1/invoices/share/:token/accept` | Enrollment gate only. With `confirm=accepted`, emails a six-digit challenge to the snapshotted recipient address. With `challenge_id` and `code`, verifies the challenge and — **without creating acceptance** — issues a one-time, 15-minute passkey *enrollment grant* and renders the enrollment page. Once either confirmation field is present the request is treated as a confirmation and fails closed on a malformed body. |
-| `POST /v1/invoices/share/:token/accept/confirm` | Backward-compatible confirmation alias with the same behaviour. |
-| `POST /v1/invoices/share/:token/passkey/options` | JSON. `{purpose:"register", grant_id}` returns WebAuthn creation options bound to a valid grant; `{purpose:"assert"}` builds the acceptance statement (§ below), stores a 5-minute challenge and returns request options plus the statement. |
-| `POST /v1/invoices/share/:token/passkey/register` | JSON. Verifies the attestation response (`attestation: none`, user verification required, ES256/RS256) against the stored challenge and grant, stores the credential for the delivery contact, and consumes the grant. |
-| `POST /v1/invoices/share/:token/passkey/accept` | JSON. Verifies the assertion against the stored challenge, the stored public key and the live document, records acceptance (`authentication_method = passkey`), requests the external timestamp once, emails the evidence bundle to the recipient, and returns `201`. A second call on an accepted share returns the existing record. |
-| `GET /v1/invoices/share/:token/evidence.json` | The evidence bundle for an accepted share (attachment). `404` until acceptance exists. |
-| `GET /v1/invoices/share/passkey.js` | Same-origin browser script used by the landing/enrollment pages. Served directly under `share/` because the public ingress only forwards one path segment below it. |
+| `GET /v1/invoices/share/:token` | Minimal Japanese landing page with invoice summary. `?view=document` returns the verified PDF inline and `?view=evidence` returns the accepted share's evidence bundle as an attachment (`404` until acceptance exists). The acceptance control depends on state: accepted → record + evidence link; recipient has an active passkey → "sign with passkey" (JS); recipient registered but no passkey → email-OTP enrollment form; link not bound to a registered recipient → notice that on-page acceptance is unavailable. |
+| `POST /v1/invoices/share/:token/accept` | The complete acceptance flow. Form bodies implement the enrollment gate: `confirm=accepted` emails a six-digit challenge; `challenge_id` plus `code` verifies it and — **without creating acceptance** — issues a one-time, 15-minute passkey enrollment grant. JSON bodies select `passkey-options`, `passkey-register`, or `passkey-accept` with `phase`; these issue WebAuthn options, register the credential, or verify the assertion and record acceptance respectively. |
+| `GET /v1/invoices/share/passkey.js` | Same-origin browser script used by the landing/enrollment pages. |
+
+### 公開面は 3 本に固定する
+
+前段 (Cloudflare) は `share/` 配下を丸ごと転送する。したがって **何を公開するかの判断は
+アプリ側が持つ**。公開してよい面は次の 3 本だけで、`tests/invoice-share-public-surface.test.ts`
+がこの一覧との一致を検証する (増やすと CI が落ちる)。
+
+| 公開面 | 内容 |
+|---|---|
+| `GET /v1/invoices/share/<token>` | ランディング。`?view=document` で PDF 本体、`?view=evidence` で証跡バンドル |
+| `POST /v1/invoices/share/<token>/accept` | 合意フロー一式。form body = OTP フェーズ、JSON body = パスキーフェーズ (`phase` で分岐) |
+| `GET /v1/invoices/share/passkey.js` | ブラウザスクリプト |
+
+子パスを増やさないのは、前段の転送条件と実装がズレると **ページは出るのに操作だけ無反応**
+という無言の故障になるため (2026-09-01 に `passkey.js` と `passkey/*` で発生)。PDF・証跡は
+クエリで出し分け、パスキーの各段階は `/accept` の `phase` に載せる。
+
+`phase` の値: `passkey-options` (`purpose` が `register` / `assert`) / `passkey-register` /
+`passkey-accept`。OTP フェーズは form-urlencoded のまま `confirm=accepted` と
+`challenge_id` + `code` で分岐する。後方互換だった `/accept/confirm` は削除した
+(前段を通らず、`/accept` の body 分岐で同じことができるため)。
 
 Invalid, expired, revoked, cancelled-invoice, and unknown links return the same public error page.
 The public response never exposes invoice metadata, storage paths, token hashes, or audit rows.
@@ -224,7 +239,7 @@ irreversible and returns the contact to the enrollment gate. `enrolled_via` is `
 
 ### Acceptance statement and challenge
 
-`POST …/passkey/options {purpose:"assert"}` builds:
+`POST …/accept {phase:"passkey-options", purpose:"assert"}` builds:
 
 ```json
 { "v": "invoice-acceptance-statement-v1", "share_id": "…", "invoice_id": 12,
@@ -268,7 +283,7 @@ built in `src/services/mime-message.ts`). Neither step can undo acceptance: a ti
 leaves `pending` and an hourly job retries for seven days (then `failed`); a mail failure is logged. The
 bundle (`quaestor-invoice-acceptance-evidence-v1`) contains the statement, the assertion parts, the
 public key as COSE, SPKI PEM and JWK with its fingerprint, the acceptance metadata and digest, and
-the timestamp token when granted. It is re-downloadable from `…/evidence.json` while the link is valid
+the timestamp token when granted. It is re-downloadable from `…?view=evidence` while the link is valid
 and by the issuer from `GET /v1/invoices/:id/share-links/:shareId/acceptance/evidence`; third-party
 verification steps are in `docs/invoice-acceptance-evidence-verification.md`.
 

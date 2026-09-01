@@ -68,7 +68,7 @@ describe("API: invoice magic-link access logs", () => {
 
     expect((await app.request(`/v1/invoices/share/${created.token}`, { headers: accessHeaders })).status).toBe(200);
     expect((await app.request(
-      `/v1/invoices/share/${created.token}/document.pdf`,
+      `/v1/invoices/share/${created.token}?view=document`,
       { headers: accessHeaders },
     )).status).toBe(200);
 

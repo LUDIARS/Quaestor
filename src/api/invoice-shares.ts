@@ -6,6 +6,7 @@
  * @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-004 (spec/feature/invoice-public-magic-link.md)
+ * @implements SPEC-INVOICE-ACCEPTANCE-007 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCESS-001 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCESS-002 (spec/feature/invoice-public-magic-link.md)
  */
@@ -34,6 +35,12 @@ import type { InvoiceShareAccessService } from "../services/invoice-share-access
 import type { InvoiceShareAcceptanceRow } from "../db/invoice-share-acceptance-repo.js";
 import type { CloudflareVisitorLocation } from "../services/invoice-acceptance-location-signal.js";
 import { clientAddress, rejectCrossSite, visitorLocation } from "./invoice-share-public-guard.js";
+import { evidenceBundleFilename } from "../services/invoice-acceptance-evidence-bundle.js";
+import {
+  handlePasskeyPhase,
+  isPasskeyPhaseRequest,
+  readJsonBody,
+} from "./invoice-share-accept-phases.js";
 
 const DEFAULT_ACCESS_LOG_LIMIT = 100;
 const MAX_ACCESS_LOG_LIMIT = 500;
@@ -44,16 +51,23 @@ const CreateShareSchema = z.object({
   recipient_id: z.string().uuid().optional(),
 }).strict();
 
-export function invoiceSharesRouter(deps: {
+export interface InvoiceSharesApiDeps {
   service: InvoiceShareService;
   acceptances: InvoiceShareAcceptanceService;
   passkeyAcceptances: InvoiceSharePasskeyAcceptanceService;
   accesses: InvoiceShareAccessService;
   allowUnsafeIssueApi?: boolean;
-}): Hono {
+}
+
+export function invoiceSharesRouter(deps: InvoiceSharesApiDeps): Hono {
   const app = new Hono();
 
+  // 公開経路の前段は `share/<token>` と `share/<token>/accept` しか通さないため、
+  // PDF と証跡バンドルも子パスを作らず `?view=` で出し分ける。
   app.get("/share/:token", async (c) => {
+    const view = c.req.query("view");
+    if (view === "document") return serveShareDocument(c, deps);
+    if (view === "evidence") return serveShareEvidence(c, deps);
     try {
       const result = await deps.service.findPublic(c.req.param("token"), false);
       deps.accesses.record({
@@ -76,9 +90,16 @@ export function invoiceSharesRouter(deps: {
     }
   });
 
+  // 公開経路の前段は `share/<token>` と `share/<token>/accept` しか通さないため、
+  // 合意フローの全フェーズをこの 1 パスに載せる (パスを増やすと Cloudflare 側で
+  // 404 になり、 操作だけ無反応という無言の故障になる)。
+  // JSON body = パスキーフェーズ、 form body = OTP フェーズ。
   app.post("/share/:token/accept", async (c) => {
     if (rejectCrossSite(c)) {
       return c.html(invalidInvoiceSharePage(), 403);
+    }
+    if (isPasskeyPhaseRequest(c)) {
+      return handlePasskeyPhase(c, await readJsonBody(c), deps);
     }
     const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
     // 両フェーズを同じ /accept に載せるため、 body のフィールドで分岐する。
@@ -104,37 +125,6 @@ export function invoiceSharesRouter(deps: {
     }
   });
 
-  // 後方互換の確認エイリアス。 新しい challenge ページはこの子パスに依存しない。
-  // @implements SPEC-INVOICE-ACCEPTANCE-001 (spec/feature/invoice-public-magic-link.md)
-  app.post("/share/:token/accept/confirm", async (c) => {
-    if (rejectCrossSite(c)) {
-      return c.html(invalidInvoiceSharePage(), 403);
-    }
-    const body = await c.req.parseBody().catch(() => ({} as Record<string, string | File>));
-    return confirmAcceptance(c, body, deps);
-  });
-
-  app.get("/share/:token/document.pdf", async (c) => {
-    try {
-      const result = await deps.service.loadDocument(c.req.param("token"), false);
-      deps.accesses.record({
-        share: result.share,
-        eventType: "document_view",
-        ...accessMetadata(c),
-      });
-      c.header("Content-Type", "application/pdf");
-      c.header(
-        "Content-Disposition",
-        `inline; filename="invoice.pdf"; filename*=UTF-8''${encodeURIComponent(result.share.filename)}`,
-      );
-      c.header("Content-Security-Policy", "sandbox; default-src 'none'; frame-ancestors 'self'");
-      const responseBody = new Uint8Array(result.contents.byteLength);
-      responseBody.set(result.contents);
-      return c.body(responseBody.buffer);
-    } catch (error) {
-      return publicShareError(c, error);
-    }
-  });
 
   if (deps.allowUnsafeIssueApi) app.post("/:id/share-links", async (c) => {
     const invoiceId = invoiceIdOf(c.req.param("id"));
@@ -204,7 +194,7 @@ export function invoiceSharesRouter(deps: {
 
 /**
  * 確認コード (OTP) フェーズの共通処理。 成功してもここでは合意を作らず、 パスキー登録ページへ進める。
- * `/accept` と後方互換の `/accept/confirm` の双方から呼ばれる。
+ * `/accept` の確認フェーズ (challenge_id / code を伴う form POST) から呼ばれる。
  *
  * @implements SPEC-INVOICE-ACCEPTANCE-003 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-ACCEPTANCE-005 (spec/feature/invoice-public-magic-link.md)
@@ -310,4 +300,45 @@ function adminShareError(c: Context, error: unknown) {
     return c.json({ error: error.code, message: error.message }, error.status);
   }
   return c.json({ error: "invoice_share_failed" }, 500);
+}
+
+/**
+ * PDF 本体。 `GET /share/:token?view=document` から呼ぶ。
+ * @implements SPEC-INVOICE-DELIVERY-004 (spec/feature/invoice-public-magic-link.md)
+ */
+async function serveShareDocument(c: Context, deps: InvoiceSharesApiDeps): Promise<Response> {
+  try {
+    const result = await deps.service.loadDocument(c.req.param("token") ?? "", false);
+    deps.accesses.record({
+      share: result.share,
+      eventType: "document_view",
+      ...accessMetadata(c),
+    });
+    c.header("Content-Type", "application/pdf");
+    c.header(
+      "Content-Disposition",
+      `inline; filename="invoice.pdf"; filename*=UTF-8''${encodeURIComponent(result.share.filename)}`,
+    );
+    c.header("Content-Security-Policy", "sandbox; default-src 'none'; frame-ancestors 'self'");
+    const responseBody = new Uint8Array(result.contents.byteLength);
+    responseBody.set(result.contents);
+    return c.body(responseBody.buffer);
+  } catch (error) {
+    return publicShareError(c, error);
+  }
+}
+
+/**
+ * 合意の証跡バンドル。 `GET /share/:token?view=evidence` から呼ぶ。
+ * @implements SPEC-INVOICE-ACCEPTANCE-007 (spec/feature/invoice-public-magic-link.md)
+ */
+async function serveShareEvidence(c: Context, deps: InvoiceSharesApiDeps): Promise<Response> {
+  try {
+    const bundle = await deps.passkeyAcceptances.evidenceForToken(c.req.param("token") ?? "");
+    if (!bundle) return c.json({ error: "not_found" }, 404);
+    c.header("Content-Disposition", `attachment; filename="${evidenceBundleFilename(bundle.acceptance.share_id)}"`);
+    return c.json(bundle);
+  } catch (error) {
+    return publicShareError(c, error);
+  }
 }

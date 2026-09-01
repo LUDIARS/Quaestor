@@ -26,9 +26,9 @@ export function invoiceSharePage(input: {
   acceptedAt?: number;
   acceptanceState?: InvoiceShareAcceptanceState;
 }): string {
-  const documentUrl = `/v1/invoices/share/${encodeURIComponent(input.token)}/document.pdf`;
+  const documentUrl = `/v1/invoices/share/${encodeURIComponent(input.token)}?view=document`;
   const acceptanceUrl = `/v1/invoices/share/${encodeURIComponent(input.token)}/accept`;
-  const evidenceUrl = `/v1/invoices/share/${encodeURIComponent(input.token)}/evidence.json`;
+  const evidenceUrl = `/v1/invoices/share/${encodeURIComponent(input.token)}?view=evidence`;
   const state: InvoiceShareAcceptanceState = input.acceptedAt !== undefined
     ? "accepted"
     : input.acceptanceState ?? "enroll";

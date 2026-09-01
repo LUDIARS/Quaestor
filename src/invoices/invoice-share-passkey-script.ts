@@ -16,7 +16,7 @@ export const INVOICE_SHARE_PASSKEY_SCRIPT = String.raw`(() => {
   const token = root.getAttribute("data-token") || "";
   const mode = root.getAttribute("data-mode") || "accept";
   const grantId = root.getAttribute("data-grant") || "";
-  const base = "/v1/invoices/share/" + encodeURIComponent(token) + "/passkey";
+  const acceptUrl = "/v1/invoices/share/" + encodeURIComponent(token) + "/accept";
   const button = root.querySelector("[data-passkey-button]");
   const checkbox = root.querySelector("[data-passkey-agree]");
   const status = root.querySelector("[data-passkey-status]");
@@ -39,8 +39,8 @@ export const INVOICE_SHARE_PASSKEY_SCRIPT = String.raw`(() => {
     status.textContent = text;
     status.className = isError ? "status error" : "status";
   };
-  const post = async (path, body) => {
-    const res = await fetch(base + path, {
+  const post = async (body) => {
+    const res = await fetch(acceptUrl, {
       method: "POST",
       headers: { "content-type": "application/json" },
       credentials: "same-origin",
@@ -65,11 +65,12 @@ export const INVOICE_SHARE_PASSKEY_SCRIPT = String.raw`(() => {
 
   const register = async () => {
     say("パスキーを作成しています…");
-    const { challenge_id, options } = await post("/options", { purpose: "register", grant_id: grantId });
+    const { challenge_id, options } = await post({ phase: "passkey-options", purpose: "register", grant_id: grantId });
     const cred = await navigator.credentials.create({ publicKey: toCreationOptions(options) });
     if (!cred) throw new Error("パスキーの作成がキャンセルされました");
     const r = cred.response;
-    await post("/register", {
+    await post({
+      phase: "passkey-register",
       grant_id: grantId,
       challenge_id,
       response: {
@@ -89,11 +90,12 @@ export const INVOICE_SHARE_PASSKEY_SCRIPT = String.raw`(() => {
 
   const accept = async () => {
     say("合意内容に署名しています…");
-    const { challenge_id, options } = await post("/options", { purpose: "assert" });
+    const { challenge_id, options } = await post({ phase: "passkey-options", purpose: "assert" });
     const cred = await navigator.credentials.get({ publicKey: toRequestOptions(options) });
     if (!cred) throw new Error("署名がキャンセルされました");
     const r = cred.response;
-    await post("/accept", {
+    await post({
+      phase: "passkey-accept",
       challenge_id,
       response: {
         id: cred.id,

@@ -7,6 +7,10 @@
   `spec/setup/config-and-secrets.md` (タイムスタンプ局の設定行を追加)
 - ドメイン: `invoice-delivery` (既存)。 Anatomia supply はこのドメインへ紐づける。
 
+> **2026-09-01 追記:** この文書の `/passkey/*`、`/evidence.json`、`/document.pdf`
+> という子パス設計は履歴的記録であり、現行 API ではない。現行の公開面とフェーズ契約の
+> 正本は `spec/feature/invoice-public-magic-link.md` の「公開面は 3 本に固定する」を参照する。
+
 ## 1. 背景と決定
 
 現行の最終合意は「登録メールへ 6 桁 OTP → 入力」 (`email_otp`) である。 OTP はマジックリンクと

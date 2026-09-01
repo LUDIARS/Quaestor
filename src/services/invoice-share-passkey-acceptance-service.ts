@@ -96,7 +96,7 @@ export interface InvoiceSharePasskeyAcceptanceServiceOptions {
   timestamps: EvidenceTimestampService;
   evidenceMailer: InvoiceAcceptanceEvidenceMailer;
   locationReference?: InvoiceAcceptanceLocationReference | null;
-  /** `evidence.json` の絶対 URL を作るための公開 origin。 */
+  /** 証跡バンドル (`?view=evidence`) の絶対 URL を作るための公開 origin。 */
   publicUrl?: string;
   now?: () => number;
   idFactory?: () => string;
@@ -431,7 +431,7 @@ export class InvoiceSharePasskeyAcceptanceService {
 
   private evidenceUrl(token: string): string {
     const origin = this.options.publicUrl?.trim().replace(/\/+$/, "") ?? "";
-    return `${origin}/v1/invoices/share/${encodeURIComponent(token)}/evidence.json`;
+    return `${origin}/v1/invoices/share/${encodeURIComponent(token)}?view=evidence`;
   }
 
   private assertNotAccepted(shareId: string): void {

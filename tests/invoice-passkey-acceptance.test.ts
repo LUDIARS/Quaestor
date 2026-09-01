@@ -146,10 +146,11 @@ describe("API: passkey acceptance", () => {
   }
 
   async function enroll(token: string, grantId: string, authenticator: FakeAuthenticator) {
-    const options = await postJson(`/v1/invoices/share/${token}/passkey/options`, { purpose: "register", grant_id: grantId });
+    const options = await postJson(`/v1/invoices/share/${token}/accept`, { phase: "passkey-options", purpose: "register", grant_id: grantId });
     expect(options.status).toBe(200);
     const { challenge_id, options: creation } = await options.json() as { challenge_id: string; options: { challenge: string; rp: { id?: string } } };
-    const register = await postJson(`/v1/invoices/share/${token}/passkey/register`, {
+    const register = await postJson(`/v1/invoices/share/${token}/accept`, {
+      phase: "passkey-register",
       grant_id: grantId,
       challenge_id,
       response: authenticator.register(creation, ORIGIN),
@@ -159,12 +160,13 @@ describe("API: passkey acceptance", () => {
   }
 
   async function sign(token: string, authenticator: FakeAuthenticator, headers: Record<string, string> = {}) {
-    const options = await postJson(`/v1/invoices/share/${token}/passkey/options`, { purpose: "assert" });
+    const options = await postJson(`/v1/invoices/share/${token}/accept`, { phase: "passkey-options", purpose: "assert" });
     expect(options.status).toBe(200);
     const { challenge_id, options: request, statement } = await options.json() as {
       challenge_id: string; options: { challenge: string; rpId?: string }; statement: Record<string, unknown>;
     };
-    const accept = await postJson(`/v1/invoices/share/${token}/passkey/accept`, {
+    const accept = await postJson(`/v1/invoices/share/${token}/accept`, {
+      phase: "passkey-accept",
       challenge_id,
       response: authenticator.assert(request, ORIGIN),
     }, headers);
@@ -214,7 +216,7 @@ describe("API: passkey acceptance", () => {
     expect(audit.acceptance.timestamp_token).toBeUndefined();
 
     // 証跡バンドル: DB を見ずに署名を検証できる
-    const evidence = await app.request(`/v1/invoices/share/${token}/evidence.json`);
+    const evidence = await app.request(`/v1/invoices/share/${token}?view=evidence`);
     expect(evidence.status).toBe(200);
     const bundle = await evidence.json() as InvoiceAcceptanceEvidenceBundle;
     expect(bundle.credential.public_key_sha256).toBe(registered.public_key_sha256);
@@ -249,10 +251,10 @@ describe("API: passkey acceptance", () => {
     // ランディングは合意済みに変わる
     const after = await (await app.request(`/v1/invoices/share/${token}`)).text();
     expect(after).toContain("請求内容への合意を記録しました");
-    expect(after).toContain("evidence.json");
+    expect(after).toContain("view=evidence");
 
     // 合意済み share では新しい署名 challenge を発行しない
-    const again = await postJson(`/v1/invoices/share/${token}/passkey/options`, { purpose: "assert" });
+    const again = await postJson(`/v1/invoices/share/${token}/accept`, { phase: "passkey-options", purpose: "assert" });
     expect(again.status).toBe(409);
     expect((await again.json() as { error: string }).error).toBe("already_accepted");
   });
@@ -290,29 +292,33 @@ describe("API: passkey acceptance", () => {
     expect(landing).toContain("メール確認へ進む");
     expect(landing).not.toContain("data-mode=\"accept\"");
     const options = await postJson(
-      `/v1/invoices/share/${newIdentityShare.token}/passkey/options`,
-      { purpose: "assert" },
+      `/v1/invoices/share/${newIdentityShare.token}/accept`, { phase: "passkey-options", purpose: "assert" },
     );
     expect(options.status).toBe(409);
-    expect((await options.json() as { error: string }).error).toBe("no_passkey");
+    expect(await options.json()).toEqual({
+      error: "no_passkey",
+      message: "パスキーが登録されていません。メール確認から登録してください。",
+    });
   });
 
   it("同じ share の並行署名でも合意・タイムスタンプ・証跡メールは 1 件だけ作る", async () => {
     const share = await issueShare();
     const authenticator = new FakeAuthenticator();
     await enroll(share.token, await passOtp(share.token), authenticator);
-    const paths = `/v1/invoices/share/${share.token}/passkey`;
-    const first = await (await postJson(`${paths}/options`, { purpose: "assert" })).json() as {
+    const acceptPath = `/v1/invoices/share/${share.token}/accept`;
+    const first = await (await postJson(acceptPath, { phase: "passkey-options", purpose: "assert" })).json() as {
       challenge_id: string; options: { challenge: string; rpId?: string };
     };
-    const second = await (await postJson(`${paths}/options`, { purpose: "assert" })).json() as typeof first;
+    const second = await (await postJson(acceptPath, { phase: "passkey-options", purpose: "assert" })).json() as typeof first;
 
     const responses = await Promise.all([
-      postJson(`${paths}/accept`, {
+      postJson(acceptPath, {
+        phase: "passkey-accept",
         challenge_id: first.challenge_id,
         response: authenticator.assert(first.options, ORIGIN),
       }),
-      postJson(`${paths}/accept`, {
+      postJson(acceptPath, {
+        phase: "passkey-accept",
         challenge_id: second.challenge_id,
         response: authenticator.assert(second.options, ORIGIN),
       }),
@@ -329,23 +335,26 @@ describe("API: passkey acceptance", () => {
     await enroll(share.token, await passOtp(share.token), authenticator);
 
     // 署名改竄
-    let options = await (await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" })).json() as { challenge_id: string; options: { challenge: string } };
-    let res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, {
+    let options = await (await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as { challenge_id: string; options: { challenge: string } };
+    let res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: options.challenge_id, response: authenticator.assert(options.options, ORIGIN, { tamperSignature: true }),
     });
     expect(res.status).toBe(400);
     expect((await res.json() as { error: string }).error).toBe("verification_failed");
 
     // 別 origin
-    options = await (await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" })).json() as typeof options;
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, {
+    options = await (await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as typeof options;
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: options.challenge_id, response: authenticator.assert(options.options, "https://evil.example.com"),
     });
     expect(res.status).toBe(400);
 
     // challenge を別の値にすり替え (statement に紐づかない)
-    options = await (await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" })).json() as typeof options;
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, {
+    options = await (await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as typeof options;
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: options.challenge_id,
       response: authenticator.assert(options.options, ORIGIN, { challenge: Buffer.alloc(32, 1).toString("base64url") }),
     });
@@ -353,31 +362,36 @@ describe("API: passkey acceptance", () => {
     expect((await res.json() as { error: string }).error).toBe("invalid_challenge");
 
     // 同じ challenge の再利用
-    options = await (await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" })).json() as typeof options;
+    options = await (await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as typeof options;
     const assertion = authenticator.assert(options.options, ORIGIN, { tamperSignature: true });
-    await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, { challenge_id: options.challenge_id, response: assertion });
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, { challenge_id: options.challenge_id, response: authenticator.assert(options.options, ORIGIN) });
+    await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept", challenge_id: options.challenge_id, response: assertion });
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept", challenge_id: options.challenge_id, response: authenticator.assert(options.options, ORIGIN) });
     expect(res.status).toBe(400);
 
     // 未登録の認証器
-    options = await (await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" })).json() as typeof options;
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, {
+    options = await (await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as typeof options;
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: options.challenge_id, response: new FakeAuthenticator().assert(options.options, ORIGIN),
     });
     expect(res.status).toBe(404);
 
     // 他 share の challenge
     const other = await issueShare();
-    options = await (await postJson(`/v1/invoices/share/${other.token}/passkey/options`, { purpose: "assert" })).json() as typeof options;
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, {
+    options = await (await postJson(`/v1/invoices/share/${other.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as typeof options;
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: options.challenge_id, response: authenticator.assert(options.options, ORIGIN),
     });
     expect(res.status).toBe(400);
 
     // PDF 差し替え → 409、 合意なし
-    options = await (await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" })).json() as typeof options;
+    options = await (await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as typeof options;
     writeFileSync(pdfPath, Buffer.concat([PDF, Buffer.from("tampered")]));
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/accept`, {
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: options.challenge_id, response: authenticator.assert(options.options, ORIGIN),
     });
     expect(res.status).toBe(409);
@@ -394,7 +408,7 @@ describe("API: passkey acceptance", () => {
     expect(crossSiteRevoke.status).toBe(403);
     const revoke = await app.request(`/v1/invoice-delivery-contacts/${recipientId}/passkeys/${passkeys.items[0]!.id}/revoke`, { method: "POST" });
     expect(revoke.status).toBe(200);
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "assert" });
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "assert" });
     expect(res.status).toBe(409);
     expect((await res.json() as { error: string }).error).toBe("no_passkey");
     expect(await (await app.request(`/v1/invoices/share/${share.token}`)).text()).toContain("メール確認へ進む");
@@ -404,15 +418,14 @@ describe("API: passkey acceptance", () => {
     const share = await issueShare();
     const authenticator = new FakeAuthenticator();
     // 偽の grant
-    let res = await postJson(`/v1/invoices/share/${share.token}/passkey/options`, {
-      purpose: "register", grant_id: "00000000-0000-4000-8000-000000000000",
+    let res = await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "register", grant_id: "00000000-0000-4000-8000-000000000000",
     });
     expect(res.status).toBe(403);
 
     const grantId = await passOtp(share.token);
     await enroll(share.token, grantId, authenticator);
     // 同じ grant で 2 本目は不可
-    res = await postJson(`/v1/invoices/share/${share.token}/passkey/options`, { purpose: "register", grant_id: grantId });
+    res = await postJson(`/v1/invoices/share/${share.token}/accept`, { phase: "passkey-options", purpose: "register", grant_id: grantId });
     expect(res.status).toBe(403);
   });
 
@@ -428,7 +441,7 @@ describe("API: passkey acceptance", () => {
       fields: expect.objectContaining({ event: "invoice_evidence_timestamp_failed", errorCode: "transport" }),
       message: "invoice evidence timestamp failed",
     });
-    const bundle = await (await app.request(`/v1/invoices/share/${share.token}/evidence.json`)).json() as { timestamp: { status: string } };
+    const bundle = await (await app.request(`/v1/invoices/share/${share.token}?view=evidence`)).json() as { timestamp: { status: string } };
     expect(bundle.timestamp.status).toBe("pending");
     // 控えメールは pending の旨を含んで送られている
     expect(sentMessages.at(-1)?.text).toContain("後追い");
@@ -449,7 +462,7 @@ describe("API: passkey acceptance", () => {
     });
     expect(await service.retryPending()).toEqual({ attempted: 1, granted: 1 });
     expect(await service.retryPending()).toEqual({ attempted: 0, granted: 0 });
-    const after = await (await app.request(`/v1/invoices/share/${share.token}/evidence.json`)).json() as { timestamp: { status: string } };
+    const after = await (await app.request(`/v1/invoices/share/${share.token}?view=evidence`)).json() as { timestamp: { status: string } };
     expect(after.timestamp.status).toBe("granted");
   });
 
@@ -482,7 +495,7 @@ describe("API: passkey acceptance", () => {
     const created = await res.json() as { share_url: string };
     const token = created.share_url.slice(created.share_url.lastIndexOf("/") + 1);
     expect(await (await app.request(`/v1/invoices/share/${token}`)).text()).toContain("送信先台帳に紐づいていない");
-    const options = await postJson(`/v1/invoices/share/${token}/passkey/options`, { purpose: "assert" });
+    const options = await postJson(`/v1/invoices/share/${token}/accept`, { phase: "passkey-options", purpose: "assert" });
     expect(options.status).toBe(400);
   });
 

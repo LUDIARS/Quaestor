@@ -85,15 +85,11 @@ export function invoiceShareAccessLog(logger: ShareAccessLogger | undefined): Mi
 /** 公開経路のプレフィクス。 この直下 1 セグメントが token。 */
 const SHARE_PREFIX = "/v1/invoices/share/";
 const PASSKEY_SCRIPT_PATH = `${SHARE_PREFIX}passkey.js`;
+// 公開面は `share/<token>` と `share/<token>/accept` の 2 本だけ (PDF と証跡は
+// `?view=` で出し分ける)。 増やすと前段の Cloudflare を通らなくなる。
 const KNOWN_TOKEN_PATH_SUFFIXES = new Set([
   "",
-  "/document.pdf",
   "/accept",
-  "/accept/confirm",
-  "/passkey/options",
-  "/passkey/register",
-  "/passkey/accept",
-  "/evidence.json",
 ]);
 
 /** パスから token セグメントを取り出す。 token を持たない配信パスは undefined。 */

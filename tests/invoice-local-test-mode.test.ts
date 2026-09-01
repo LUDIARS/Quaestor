@@ -141,14 +141,16 @@ describe("invoiceShare.localTest", () => {
     const postJson = (path: string, body: unknown) => app.request(path, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
     });
-    const reg = await (await postJson(`/v1/invoices/share/${token}/passkey/options`, { purpose: "register", grant_id: grantId })).json() as { challenge_id: string; options: { challenge: string; rp: { id?: string } } };
+    const reg = await (await postJson(`/v1/invoices/share/${token}/accept`, { phase: "passkey-options", purpose: "register", grant_id: grantId })).json() as { challenge_id: string; options: { challenge: string; rp: { id?: string } } };
     expect(reg.options.rp.id).toBe("localhost");
-    expect((await postJson(`/v1/invoices/share/${token}/passkey/register`, {
+    expect((await postJson(`/v1/invoices/share/${token}/accept`, {
+      phase: "passkey-register",
       grant_id: grantId, challenge_id: reg.challenge_id, response: authenticator.register(reg.options, LOCAL_ORIGIN),
     })).status).toBe(201);
-    const assert = await (await postJson(`/v1/invoices/share/${token}/passkey/options`, { purpose: "assert" })).json() as { challenge_id: string; options: { challenge: string; rpId?: string } };
+    const assert = await (await postJson(`/v1/invoices/share/${token}/accept`, { phase: "passkey-options", purpose: "assert" })).json() as { challenge_id: string; options: { challenge: string; rpId?: string } };
     expect(assert.options.rpId).toBe("localhost");
-    const accept = await postJson(`/v1/invoices/share/${token}/passkey/accept`, {
+    const accept = await postJson(`/v1/invoices/share/${token}/accept`, {
+      phase: "passkey-accept",
       challenge_id: assert.challenge_id, response: authenticator.assert(assert.options, LOCAL_ORIGIN),
     });
     expect(accept.status).toBe(201);

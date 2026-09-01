@@ -1,6 +1,6 @@
 /**
  * 合意直後に受領者へ証跡バンドルを添付で送る。 送信失敗は合意を取り消さない (バンドルは
- * マジックリンクの `evidence.json` からも再取得できる)。
+ * マジックリンクの `?view=evidence` からも再取得できる)。
  *
  * @implements SPEC-INVOICE-ACCEPTANCE-007 (spec/feature/invoice-public-magic-link.md)
  */
