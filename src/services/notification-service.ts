@@ -9,11 +9,14 @@ import type { Suggestion } from "./invest-advisor.js";
 import type { DividendCandidateRow } from "../db/dividend-candidates-repo.js";
 import type { SubsidySuggestion } from "./subsidy-advisor.js";
 import { buildInvestAdvice, buildDividendAdvice, buildSubsidyAdvice, type BuiltAdvice } from "./advice-notifications.js";
+import { buildInvoiceNotice } from "./invoice-notice.js";
+import type { InvoiceRow } from "../db/invoices-repo.js";
 
 export interface NotifyResult {
   sent: boolean;
   skipped?: boolean;
   disabled?: boolean;
+  notFound?: boolean;
   reason?: string;
 }
 
@@ -29,6 +32,8 @@ export interface NotificationServiceDeps {
   dividendCandidates: () => DividendCandidateRow[];
   /** 補助金: planId からサジェストを実行 (crawl+LLM)。 計画名も返す */
   subsidySuggest: (planId: string) => Promise<{ planName: string; suggestions: SubsidySuggestion[] }>;
+  /** 請求書 1 件の取得 (通知対象。 見つからなければ null) */
+  findInvoice: (id: number) => InvoiceRow | null;
 }
 
 export class NotificationService {
@@ -45,6 +50,18 @@ export class NotificationService {
   async notifySubsidies(planId: string, opts: NotifyOptions = {}): Promise<NotifyResult> {
     const { planName, suggestions } = await this.deps.subsidySuggest(planId);
     return this.dispatch(`subsidy:${planId}`, buildSubsidyAdvice(planName, suggestions), opts);
+  }
+
+  /**
+   * 請求書 1 件を通知する。 月末の自動作成分を人が確認するための経路で、
+   * 存在しない id は送信ではなく not_found として返す (無言で成功にしない)。
+   * @implements SPEC-INVOICE-NOTICE-001 (spec/feature/invoice-discord-notice.md)
+   * @implements SPEC-INVOICE-NOTICE-002 (spec/feature/invoice-discord-notice.md)
+   */
+  async notifyInvoice(invoiceId: number, opts: NotifyOptions = {}): Promise<NotifyResult> {
+    const invoice = this.deps.findInvoice(invoiceId);
+    if (!invoice) return { sent: false, notFound: true, reason: "invoice not_found" };
+    return this.dispatch(`invoice:${invoiceId}`, buildInvoiceNotice(invoice), opts);
   }
 
   private async dispatch(channel: string, built: BuiltAdvice, opts: NotifyOptions): Promise<NotifyResult> {

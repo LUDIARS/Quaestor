@@ -79,6 +79,7 @@ describe("NotificationService — dedup", () => {
       investSuggestions: () => [investSug("1111")],
       dividendCandidates: () => [divRow("3333", 4.5)],
       subsidySuggest: async () => ({ planName: "P", suggestions: [subSug("A", "high")] }),
+      findInvoice: () => null,
     });
   }
 
@@ -99,6 +100,7 @@ describe("NotificationService — dedup", () => {
       investSuggestions: () => [investSug("1111")],
       dividendCandidates: () => [],
       subsidySuggest: async () => ({ planName: "P", suggestions: [] }),
+      findInvoice: () => null,
     });
     const r1 = await svc.notifyInvest({ dedup: true });
     expect(r1.sent).toBe(true);
@@ -124,6 +126,7 @@ describe("NotificationService — dedup", () => {
       notifier: n, state: new NotificationState(sp),
       investSuggestions: () => [], dividendCandidates: () => [],
       subsidySuggest: async () => ({ planName: "P", suggestions: [] }),
+      findInvoice: () => null,
     });
     expect((await svc.notifyInvest()).skipped).toBe(true);
     expect(n.sent.length).toBe(0);
@@ -181,6 +184,51 @@ describe("API: /v1/notify", () => {
     const app = buildApp({ db: new Database(":memory:"), receiptsRoot: "/tmp/qn2", ocr: "disabled", discordNotifier: fakeNotifier(), notifyStatePath: sp });
     const res = await app.request("/v1/notify/subsidies", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ plan_id: "nope" }) });
     expect(res.status).toBe(404);
+    rmSync(sp, { force: true });
+  });
+
+  it("invoice 通知: 存在する id は送信し、不正・存在しない id は拒否する", async () => {
+    const sp = tmpState();
+    const n = fakeNotifier();
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const inserted = db.prepare(
+      `INSERT INTO invoices
+       (issued_at, client, work_summary, amount, withholding_tax, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("2026-08-31", "サンプル株式会社", "システム開発業務", 110000, 10210, "draft", 1, 1);
+    const invoiceId = Number(inserted.lastInsertRowid);
+    const app = buildApp({
+      db,
+      receiptsRoot: "/tmp/qn-invoice",
+      ocr: "disabled",
+      discordNotifier: n,
+      notifyStatePath: sp,
+    });
+
+    const sent = await app.request("/v1/notify/invoice", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ invoice_id: invoiceId }),
+    });
+    expect(sent.status).toBe(200);
+    expect(n.sent).toHaveLength(1);
+
+    const missing = await app.request("/v1/notify/invoice", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ invoice_id: invoiceId + 1 }),
+    });
+    expect(missing.status).toBe(404);
+    expect(n.sent).toHaveLength(1);
+
+    const invalid = await app.request("/v1/notify/invoice", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ invoice_id: "1" }),
+    });
+    expect(invalid.status).toBe(400);
+    expect(n.sent).toHaveLength(1);
     rmSync(sp, { force: true });
   });
 });

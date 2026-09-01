@@ -317,6 +317,7 @@ export function buildApp(deps: AppDeps): Hono {
       );
       return { planName, suggestions };
     },
+    findInvoice: (id) => invoices.find(id) ?? null,
   });
 
   const app = new Hono();
