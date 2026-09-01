@@ -455,3 +455,28 @@ Attach a `Bypass` / `Everyone` policy to that last application only. Do not bypa
 Cloudflare Tunnel, and the tunnel ingress rule for the magic-link hostname must point at the backend
 (`127.0.0.1:17400`) — routing it through the Vite dev server would additionally require the hostname
 in `web.allowedHosts`.
+
+## 調査ログ (一時)
+
+公開経路は Cloudflare → cloudflared → Quaestor と 3 段を挟むため、「利用者の画面で動かない」
+ときに **サーバまで届いているのか** が分からないと切り分けが始まらない。2026-09-01 に、
+Cloudflare 側で 404 になっていたスクリプトと API を、サーバログが無いために往復して突き止める
+事故が起きた。そのため `/v1/invoices/share/*` の共通 guard を通過したリクエストを入口と出口の
+2 行で記録する。レート制限より後ろで記録し、拒否済みの大量リクエストでログファイルを肥大化させない。
+
+- prefix は `[verbose-invoice-share]`。撤去時はこの文字列で全箇所を grep できる。
+- 出力は stdout に加えて `logs/quaestor.log` (`QUAESTOR_LOG_FILE` で変更可)。端末を閉じても残す。
+- 記録するのは method / 指紋化した path・token・client・User-Agent / Cloudflare 経由か / status / 所要時間。
+- **token 本体は出さない**。パスに埋まった token も指紋 (`<token:xxxxxxxx>`) へ置換する。
+  生の client address・User-Agent・メールアドレス・PDF の中身・WebAuthn の署名・例外本文も出さない。
+- 入口の行だけで出口の行が無ければ、途中で落ちたと判断できる。
+
+- **SPEC-INVOICE-ACCESS-003** — `/v1/invoices/share/*` の共通 guard を通過した調査ログは入口と出口を相関可能な形で
+  stdout と専用ファイルへ記録する。magic-link token、client address、User-Agent、例外本文などの
+  リクエスト由来データは生値を永続化せず、必要な相関情報だけを指紋化する。
+
+これは一時的な足場で、安定後に撤去する。撤去条件:
+
+- [ ] 公開経路について 1 週間以上、利用者報告由来の不具合が出ていない
+- [ ] ログから「これが取れていれば防げた」種類の不具合がもう出てこない
+- [ ] 定常監視に残すべき行を仕分け、一般ログへ降格する

@@ -40,6 +40,27 @@ const log = pino({
   level: config.server.logLevel,
   transport: process.env.NODE_ENV === "production" ? undefined : { target: "pino-pretty" },
 });
+
+// 公開マジックリンク経路の調査ログ (`[verbose-invoice-share]`) だけを、 端末を閉じても
+// 後から grep できるようファイルにも書く。 他のアプリログまで永続化して、 既存ログに
+// 含まれ得るローカルパスや業務識別子の保存範囲を意図せず広げない。
+const INVOICE_SHARE_LOG_FILE = process.env.QUAESTOR_LOG_FILE ?? "logs/quaestor.log";
+const INVOICE_SHARE_LOG_LEVEL = "info";
+const invoiceShareLog = pino({
+  level: INVOICE_SHARE_LOG_LEVEL,
+  transport: {
+    targets: [
+      ...(process.env.NODE_ENV === "production"
+        ? [{ target: "pino/file", options: { destination: 1 }, level: INVOICE_SHARE_LOG_LEVEL }]
+        : [{ target: "pino-pretty", options: {}, level: INVOICE_SHARE_LOG_LEVEL }]),
+      {
+        target: "pino/file",
+        options: { destination: INVOICE_SHARE_LOG_FILE, mkdir: true },
+        level: INVOICE_SHARE_LOG_LEVEL,
+      },
+    ],
+  },
+});
 if (injectedSecrets.length > 0) {
   log.info({ names: injectedSecrets }, "secrets injected from encrypted store");
 }
@@ -77,7 +98,13 @@ const app = buildApp({
   invoiceEmailNotifier: localTest ? new OutboxFileNotifier() : "auto",
   // 合意証跡の RFC 3161 タイムスタンプも本番プロセスだけが実 TSA を叩く (設定で無効化可)。
   evidenceTimestamp: "auto",
-  logger: { warn: (fields, message) => log.warn(fields, message) },
+  logger: {
+    warn: (fields, message) => log.warn(fields, message),
+  },
+  invoiceShareAccessLogger: {
+    info: (fields, message) => invoiceShareLog.info(fields, message),
+    warn: (fields, message) => invoiceShareLog.warn(fields, message),
+  },
   registerCleanup: (cleanup) => { appCleanups.push(cleanup); },
 });
 

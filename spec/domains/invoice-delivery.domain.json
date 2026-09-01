@@ -51,6 +51,7 @@
     "SPEC-INVOICE-ACCEPTANCE-008 — RFC 3161 タイムスタンプの再試行",
     "SPEC-INVOICE-ACCESS-001 — 成功アクセスのプライバシー最小化監査ログ",
     "SPEC-INVOICE-ACCESS-002 — 公開リンクのレート制限追跡キー上限",
+    "SPEC-INVOICE-ACCESS-003 — 公開リンク調査ログのプライバシー最小化と永続化",
     "SPEC-INVOICE-SLACK-001..004 — SlackグループDMへのリンク配送"
   ],
   "rationale": "送信先の管理、リンク発行、配送、合意証跡は同じ請求書配信ライフサイクルを構成する。一方、Gmail認証・Slack OAuth・認定電子署名・契約条項作成は外部境界として分離する。"

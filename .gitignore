@@ -42,6 +42,8 @@ pnpm-debug.log*
 # DB / runtime data
 app_data/
 /claude-code-logs/
+# pino のログ出力 (公開経路の調査ログを含む)
+logs/
 *.db
 *.db-shm
 *.db-wal

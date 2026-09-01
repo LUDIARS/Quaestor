@@ -60,6 +60,7 @@ import { invoicesRouter } from "./api/invoices.js";
 import { invoiceSharesRouter } from "./api/invoice-shares.js";
 import { invoiceSharePasskeysRouter } from "./api/invoice-share-passkeys.js";
 import { invoiceSharePublicGuard } from "./api/invoice-share-public-guard.js";
+import { invoiceShareAccessLog, type ShareAccessLogger } from "./api/invoice-share-access-log.js";
 import { dashboardRouter } from "./api/dashboard.js";
 import { financialStatementsRouter } from "./api/financial-statements.js";
 import { investRouter } from "./api/invest.js";
@@ -197,6 +198,8 @@ export interface AppDeps {
   autoIntake?: boolean;
   /** best-effort 外部処理の失敗を、秘密・個人データを含めず観測可能にする。 */
   logger?: AppLogger;
+  /** 公開マジックリンクの一時アクセスログ。通常ログと保存先を分離する場合に指定する。 */
+  invoiceShareAccessLogger?: ShareAccessLogger;
   /** buildApp が所有する timer 等を、プロセス終了時に解放するための登録先。 */
   registerCleanup?: (cleanup: () => void) => void;
 }
@@ -415,7 +418,12 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
   // 公開マジックリンク配下のレート制限と応答ヘッダーは、 複数ルータにまたがるためここで 1 回だけ掛ける。
+  // 公開経路は Cloudflare → cloudflared → Quaestor と 3 段を挟むため、 到達したリクエストを
+  // 記録する。先に guard を通して、公開入口への大量送信が永続ログの無制限な増加へ直結しない
+  // ようにする。
   app.use("/v1/invoices/share/*", invoiceSharePublicGuard(new InvoiceShareRateLimiter()));
+  /** @implements SPEC-INVOICE-ACCESS-003 (spec/feature/invoice-public-magic-link.md) */
+  app.use("/v1/invoices/share/*", invoiceShareAccessLog(deps.invoiceShareAccessLogger));
   app.route("/v1/invoices", invoiceSharePasskeysRouter({ service: invoiceSharePasskeyAcceptanceService }));
   app.route("/v1/invoices", invoiceSharesRouter({
     service: invoiceShareService,
