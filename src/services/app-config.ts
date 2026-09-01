@@ -12,6 +12,18 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 export interface AppConfig {
+  mailIntake: {
+    enabled: boolean;
+    query: string;
+    documentsRoot: string;
+    maxAttachmentBytes: number;
+    rules: Array<{
+      kind: "invoice" | "cloud_notice";
+      fromDomains?: string[];
+      subjectAny?: string[];
+      attachmentMime?: string[];
+    }>;
+  };
   server: {
     host: string;
     port: number;
@@ -100,6 +112,34 @@ export interface AppConfig {
 }
 
 const DEFAULTS: AppConfig = {
+  mailIntake: {
+    enabled: true,
+    query: "in:inbox newer_than:3d -category:promotions -category:social",
+    documentsRoot: "app_data/inbound",
+    maxAttachmentBytes: 15_728_640,
+    rules: [
+      {
+        kind: "cloud_notice",
+        fromDomains: ["amazonaws.com", "amazon.com"],
+        subjectAny: ["Invoice", "Billing", "SES", "Support", "Production Access", "Your AWS account"],
+      },
+      {
+        kind: "cloud_notice",
+        fromDomains: ["google.com", "cloud.google.com"],
+        subjectAny: ["Invoice", "Billing", "budget", "Cloud"],
+      },
+      {
+        kind: "invoice",
+        attachmentMime: ["application/pdf"],
+        subjectAny: ["請求書", "請求", "インボイス", "Invoice", "領収書", "Receipt"],
+      },
+      {
+        kind: "invoice",
+        attachmentMime: ["application/pdf"],
+        fromDomains: ["freee.co.jp", "moneyforward.com", "misoca.jp", "invoice.ne.jp"],
+      },
+    ],
+  },
   server:  { host: "127.0.0.1", port: 17400, logLevel: "info" },
   web: { allowedHosts: [] },
   storage: { dbPath: "app_data/quaestor.db", receiptsRoot: "app_data/receipts" },
@@ -135,10 +175,26 @@ const DEFAULTS: AppConfig = {
 /**
  * quaestor.config.json → env override → 既定値 の順で解決する。
  * ファイルが無い/壊れている場合は既定値で動く (起動は止めない)。
+ * @implements SPEC-MAIL-INTAKE-003 (spec/feature/mail-intake.md)
  */
 export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
   const fromFile = readConfigFile(resolve(file));
   const c: AppConfig = {
+    mailIntake: {
+      enabled: flag(undefined, fromFile?.mailIntake?.enabled, DEFAULTS.mailIntake.enabled),
+      query: str(undefined, fromFile?.mailIntake?.query, DEFAULTS.mailIntake.query),
+      documentsRoot: str(
+        undefined,
+        fromFile?.mailIntake?.documentsRoot,
+        DEFAULTS.mailIntake.documentsRoot,
+      ),
+      maxAttachmentBytes: num(
+        undefined,
+        fromFile?.mailIntake?.maxAttachmentBytes,
+        DEFAULTS.mailIntake.maxAttachmentBytes,
+      ),
+      rules: fromFile?.mailIntake?.rules ?? DEFAULTS.mailIntake.rules,
+    },
     server: {
       host:     str(env("QUAESTOR_HOST"),      fromFile?.server?.host,     DEFAULTS.server.host),
       port:     num(env("QUAESTOR_PORT"),      fromFile?.server?.port,     DEFAULTS.server.port),
@@ -223,6 +279,7 @@ export function sidecarUrlOf(c: AppConfig): string {
 
 /** 設定ファイルの部分型 (欠けたキーは既定値で補完) */
 type PartialConfig = {
+  mailIntake?: Partial<AppConfig["mailIntake"]>;
   server?: Partial<AppConfig["server"]>;
   storage?: Partial<AppConfig["storage"]>;
   ocrWorker?: Partial<AppConfig["ocrWorker"]>;

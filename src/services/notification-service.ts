@@ -11,6 +11,7 @@ import type { SubsidySuggestion } from "./subsidy-advisor.js";
 import { buildInvestAdvice, buildDividendAdvice, buildSubsidyAdvice, type BuiltAdvice } from "./advice-notifications.js";
 import { buildInvoiceNotice } from "./invoice-notice.js";
 import type { InvoiceRow } from "../db/invoices-repo.js";
+import { buildMailCloudNotice, buildMailInvoiceNotice, type MailNotice } from "./mail-notices.js";
 
 export interface NotifyResult {
   sent: boolean;
@@ -62,6 +63,23 @@ export class NotificationService {
     const invoice = this.deps.findInvoice(invoiceId);
     if (!invoice) return { sent: false, notFound: true, reason: "invoice not_found" };
     return this.dispatch(`invoice:${invoiceId}`, buildInvoiceNotice(invoice), opts);
+  }
+  /** @implements SPEC-MAIL-INTAKE-006 (spec/feature/mail-intake.md) */
+  async notifyMailInvoice(notice: MailNotice): Promise<NotifyResult> {
+    return this.dispatch(
+      `mail:${notice.messageId}`,
+      buildMailInvoiceNotice(notice),
+      { dedup: true },
+    );
+  }
+
+  /** @implements SPEC-MAIL-INTAKE-006 (spec/feature/mail-intake.md) */
+  async notifyMailCloudNotice(notice: MailNotice): Promise<NotifyResult> {
+    return this.dispatch(
+      `mail:${notice.messageId}`,
+      buildMailCloudNotice(notice),
+      { dedup: true },
+    );
   }
 
   private async dispatch(channel: string, built: BuiltAdvice, opts: NotifyOptions): Promise<NotifyResult> {

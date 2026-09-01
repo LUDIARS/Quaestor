@@ -9,6 +9,19 @@
     "dbPath": "app_data/quaestor.db",
     "receiptsRoot": "app_data/receipts"
   },
+  "mailIntake": {
+    "$comment": "メール監視パートタイマー。認証情報は暗号化ストアの QUAESTOR_GMAIL_*。",
+    "enabled": true,
+    "query": "in:inbox newer_than:3d -category:promotions -category:social",
+    "documentsRoot": "app_data/inbound",
+    "maxAttachmentBytes": 15728640,
+    "rules": [
+      { "kind": "cloud_notice", "fromDomains": ["amazonaws.com", "amazon.com"], "subjectAny": ["Invoice", "Billing", "SES", "Support", "Production Access", "Your AWS account"] },
+      { "kind": "cloud_notice", "fromDomains": ["google.com", "cloud.google.com"], "subjectAny": ["Invoice", "Billing", "budget", "Cloud"] },
+      { "kind": "invoice", "attachmentMime": ["application/pdf"], "subjectAny": ["請求書", "請求", "インボイス", "Invoice", "領収書", "Receipt"] },
+      { "kind": "invoice", "attachmentMime": ["application/pdf"], "fromDomains": ["freee.co.jp", "moneyforward.com", "misoca.jp", "invoice.ne.jp"] }
+    ]
+  },
   "ocrWorker": {
     "enabled": true,
     "intervalMs": 30000

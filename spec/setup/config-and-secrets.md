@@ -132,3 +132,6 @@ OCR-GA の世代更新は `app_data/training/ga/evolution.jsonl` に毎回追記
 (ts / key / generation / evaluated / bestFitness / meanFitness / worstFitness / bestGenome)。
 進化が効いているかは `bestFitness` の推移を見る。集団スナップショットは同階層の
 `<key>.json` (内部に直近 200 世代の history も保持)。
+# mail-intake
+
+`quaestor.config.json` の `mailIntake.enabled`、`query`、`documentsRoot`、`maxAttachmentBytes`、`rules` はメール取込の非シークレット設定である。Gmail 認証は暗号化ストアに `QUAESTOR_GMAIL_CLIENT_ID`、`QUAESTOR_GMAIL_CLIENT_SECRET`、`QUAESTOR_GMAIL_REFRESH_TOKEN` を登録する。権限は `gmail.readonly` のみとする。

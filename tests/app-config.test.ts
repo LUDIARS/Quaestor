@@ -81,6 +81,33 @@ describe("app-config loader (§7.1)", () => {
     expect(sidecarUrlOf(c)).toBe("http://10.0.0.5:17350");
   });
 
+  it("mailIntake: 既定値を持ち、ファイル値で上書きできる", () => {
+    const bare = loadAppConfig(join(dir, "missing.json"));
+    expect(bare.mailIntake).toMatchObject({
+      enabled: true,
+      documentsRoot: "app_data/inbound",
+      maxAttachmentBytes: 15_728_640,
+    });
+
+    const p = join(dir, "mail.json");
+    writeFileSync(p, JSON.stringify({
+      mailIntake: {
+        enabled: false,
+        query: "label:accounting",
+        documentsRoot: "data/mail",
+        maxAttachmentBytes: 1024,
+        rules: [{ kind: "invoice", attachmentMime: ["application/pdf"] }],
+      },
+    }), "utf8");
+    expect(loadAppConfig(p).mailIntake).toEqual({
+      enabled: false,
+      query: "label:accounting",
+      documentsRoot: "data/mail",
+      maxAttachmentBytes: 1024,
+      rules: [{ kind: "invoice", attachmentMime: ["application/pdf"] }],
+    });
+  });
+
   it("venvPython 未指定は null (自動探索)", () => {
     const c = loadAppConfig(join(dir, "missing.json"));
     expect(c.ocrSidecar.venvPython).toBeNull();

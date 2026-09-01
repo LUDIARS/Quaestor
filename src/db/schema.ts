@@ -324,6 +324,22 @@ const STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_fs_year ON financial_statements(year, section, display_order)`,
 
+  `CREATE TABLE IF NOT EXISTS mail_messages (
+    message_id TEXT PRIMARY KEY, thread_id TEXT, received_at INTEGER NOT NULL,
+    from_address TEXT NOT NULL, subject TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('invoice','cloud_notice','ignore')),
+    rule_index INTEGER, outcome TEXT NOT NULL, error TEXT, processed_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS inbound_documents (
+    id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES mail_messages(message_id) ON DELETE CASCADE,
+    filename TEXT NOT NULL, mime_type TEXT NOT NULL, file_path TEXT NOT NULL, sha256 TEXT NOT NULL,
+    size INTEGER NOT NULL, extracted TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','committed','needs_review','ignored')),
+    receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_sha ON inbound_documents(sha256)`,
+  `CREATE INDEX IF NOT EXISTS idx_inbound_status ON inbound_documents(status)`,
+
   // ── 投資 / 優待アドバイザ (spec/feature/invest-advisor.md) ──
 
   // securities — 銘柄マスタ。 ticker = 日本株の証券コード (4 桁) を PK にする

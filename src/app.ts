@@ -34,6 +34,8 @@ import { ContributionsRepo } from "./db/contributions-repo.js";
 import { HoldingValuationsRepo } from "./db/holding-valuations-repo.js";
 import { HoldingDividendsRepo } from "./db/holding-dividends-repo.js";
 import { DividendCandidatesRepo } from "./db/dividend-candidates-repo.js";
+import { MailMessagesRepo } from "./db/mail-messages-repo.js";
+import { InboundDocumentsRepo } from "./db/inbound-documents-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import { TrainingDataset } from "./services/training-dataset.js";
 import { OpusDiffEvaluator, type DiffEvaluator } from "./services/detection-diff-evaluator.js";
@@ -85,6 +87,9 @@ import { ApportionmentAdvisor, ClaudeCliApportionmentLlm, type ApportionmentLlm 
 import { apportionmentAdvisorRouter } from "./api/apportionment-advisor.js";
 import { configRouter } from "./api/config.js";
 import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
+import { mailIntakeRouter } from "./api/mail-intake.js";
+import { MailIntakeService, type MailIntakeConfig } from "./services/mail-intake-service.js";
+import { GmailSource, createRefreshTokenProvider, type MailSource } from "@ludiars/mail-inbox";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
 import { invoiceSlackDeliveriesRouter } from "./api/invoice-slack-deliveries.js";
@@ -200,11 +205,18 @@ export interface AppDeps {
   logger?: AppLogger;
   /** 公開マジックリンクの一時アクセスログ。通常ログと保存先を分離する場合に指定する。 */
   invoiceShareAccessLogger?: ShareAccessLogger;
+  /** Gmail 受信メールの分類・請求書取り込み設定。省略時は無効。 */
+  mailIntake?: MailIntakeConfig;
+  /** テスト・埋め込み用途のメール取得元。実運用では GmailSource を自動構築する。 */
+  mailSource?: MailSource;
   /** buildApp が所有する timer 等を、プロセス終了時に解放するための登録先。 */
   registerCleanup?: (cleanup: () => void) => void;
 }
 
-/** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
+/**
+ * @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md)
+ * @implements SPEC-MAIL-INTAKE-003 (spec/feature/mail-intake.md)
+ */
 export function buildApp(deps: AppDeps): Hono {
   applyMigrations(deps.db);
   const imports = new ImportsRepo(deps.db);
@@ -212,6 +224,8 @@ export function buildApp(deps: AppDeps): Hono {
   const accounts = new AccountCodesRepo(deps.db);
   const rules = new ApportionmentRulesRepo(deps.db);
   const receipts = new ReceiptsRepo(deps.db);
+  const mailMessages = new MailMessagesRepo(deps.db);
+  const inboundDocuments = new InboundDocumentsRepo(deps.db);
   const reconciliations = new ReconciliationsRepo(deps.db);
   // OCR 完了 → 投入 → 突合 を人手なしで通す。 取引取込側からも同じ突合 sweep を呼ぶ。
   const receiptIntake = new ReceiptIntake({
@@ -321,6 +335,38 @@ export function buildApp(deps: AppDeps): Hono {
       return { planName, suggestions };
     },
     findInvoice: (id) => invoices.find(id) ?? null,
+  });
+  const mailConfig = deps.mailIntake ?? {
+    enabled: false,
+    query: "",
+    documentsRoot: "app_data/inbound",
+    maxAttachmentBytes: 15_728_640,
+    rules: [],
+  };
+  const mailCredentials = {
+    clientId: process.env.QUAESTOR_GMAIL_CLIENT_ID,
+    clientSecret: process.env.QUAESTOR_GMAIL_CLIENT_SECRET,
+    refreshToken: process.env.QUAESTOR_GMAIL_REFRESH_TOKEN,
+  };
+  const mailSource = deps.mailSource ?? (
+    mailCredentials.clientId && mailCredentials.clientSecret && mailCredentials.refreshToken
+      ? new GmailSource({
+        auth: createRefreshTokenProvider({
+          clientId: mailCredentials.clientId,
+          clientSecret: mailCredentials.clientSecret,
+          refreshToken: mailCredentials.refreshToken,
+        }),
+      })
+      : undefined
+  );
+  const mailIntake = new MailIntakeService({
+    source: mailSource,
+    messages: mailMessages,
+    documents: inboundDocuments,
+    receipts,
+    intake: receiptIntake,
+    notifications: notificationService,
+    config: mailConfig,
   });
 
   const app = new Hono();
@@ -457,6 +503,12 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
   app.route("/v1/config", configRouter());
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
+  app.route("/v1/mail", mailIntakeRouter({
+    service: mailIntake,
+    messages: mailMessages,
+    documents: inboundDocuments,
+    documentsRoot: mailConfig.documentsRoot,
+  }));
 
   return app;
 }
