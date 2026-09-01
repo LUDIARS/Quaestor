@@ -54,7 +54,7 @@ POST /share/:token/passkey/accept   JSON。 assertionResponse → 署名検証 �
 GET  /share/:token/evidence.json  合意済 share の証跡バンドル (リンク所持者向け再取得)。
 ```
 
-- ページ JS は inline ではなく `GET /share/assets/passkey.js` (静的、 `script-src 'self'`) で配信。
+- ページ JS は inline ではなく `GET /share/passkey.js` (静的、 `script-src 'self'`) で配信。
   CSP に `script-src 'self'; connect-src 'self'` を足す (既定 CSP は `default-src 'none'` のまま)。
 - RP ID = `invoiceShare.publicUrl` のホスト名、 origin = `publicUrl`。 設定追加なし。
 - 子パス (`/passkey/*`, `/evidence.json`) は Access Bypass が `/v1/invoices/share/*` 全体なので
@@ -209,7 +209,7 @@ timestamp_granted_at INTEGER, timestamp_attempts INTEGER NOT NULL DEFAULT 0, tim
 | 新規 | `src/services/invoice-acceptance-evidence-mailer.ts` | バンドル添付メール |
 | 変更 | `src/services/invoice-email-notifier.ts` / `ses-email-client.ts` | `attachments` (Raw MIME) |
 | 変更 | `src/services/app-config.ts` | `invoiceShare.timestampAuthority` |
-| 新規 | `src/api/invoice-share-passkeys.ts` | `/share/:token/passkey/*`, `/share/:token/evidence.json`, `/share/assets/passkey.js` |
+| 新規 | `src/api/invoice-share-passkeys.ts` | `/share/:token/passkey/*`, `/share/:token/evidence.json`, `/share/passkey.js` |
 | 変更 | `src/api/invoice-shares.ts` | OTP 成功後の遷移先をパスキー登録ページへ、 acceptance evidence GET、 CSP 追記 |
 | 変更 | `src/api/invoice-delivery-contacts.ts` | passkeys list / revoke |
 | 新規 | `src/invoices/invoice-share-passkey-page.ts` | 登録ページ / 合意ページ (JS は静的配信) |

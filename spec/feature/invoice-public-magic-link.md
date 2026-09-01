@@ -169,7 +169,7 @@ Clauses:
 | `POST /v1/invoices/share/:token/passkey/register` | JSON. Verifies the attestation response (`attestation: none`, user verification required, ES256/RS256) against the stored challenge and grant, stores the credential for the delivery contact, and consumes the grant. |
 | `POST /v1/invoices/share/:token/passkey/accept` | JSON. Verifies the assertion against the stored challenge, the stored public key and the live document, records acceptance (`authentication_method = passkey`), requests the external timestamp once, emails the evidence bundle to the recipient, and returns `201`. A second call on an accepted share returns the existing record. |
 | `GET /v1/invoices/share/:token/evidence.json` | The evidence bundle for an accepted share (attachment). `404` until acceptance exists. |
-| `GET /v1/invoices/share/assets/passkey.js` | Same-origin browser script used by the landing/enrollment pages. |
+| `GET /v1/invoices/share/passkey.js` | Same-origin browser script used by the landing/enrollment pages. Served directly under `share/` because the public ingress only forwards one path segment below it. |
 
 Invalid, expired, revoked, cancelled-invoice, and unknown links return the same public error page.
 The public response never exposes invoice metadata, storage paths, token hashes, or audit rows.

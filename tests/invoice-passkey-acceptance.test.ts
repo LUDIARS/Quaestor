@@ -139,6 +139,7 @@ describe("API: passkey acceptance", () => {
     expect(confirm.status).toBe(200);
     const page = await confirm.text();
     expect(page).toContain("data-mode=\"enroll\"");
+    expect(page).toContain("src=\"/v1/invoices/share/passkey.js\"");
     const grantId = page.match(/data-grant="([^"]+)"/)?.[1];
     expect(grantId).toBeTruthy();
     return grantId!;
@@ -266,7 +267,7 @@ describe("API: passkey acceptance", () => {
     const second = await issueShare();
     const landing = await (await app.request(`/v1/invoices/share/${second.token}`)).text();
     expect(landing).toContain("data-mode=\"accept\"");
-    expect(landing).toContain("passkey.js");
+    expect(landing).toContain("src=\"/v1/invoices/share/passkey.js\"");
     expect(landing).not.toContain("メール確認へ進む");
     const { accept } = await sign(second.token, authenticator);
     expect(accept.status).toBe(201);
@@ -485,8 +486,20 @@ describe("API: passkey acceptance", () => {
     expect(options.status).toBe(400);
   });
 
+  it("スクリプトは share/ 直下 1 階層で配信し、 階層を挟むパスでは配信しない", async () => {
+    // 公開経路の Cloudflare ingress は share/ の下 1 階層しか通さない。 階層を挟むと
+    // ページは表示されるのにスクリプトだけ 404 になり、 ボタンが無反応になる。
+    expect((await app.request("/v1/invoices/share/passkey.js")).status).toBe(200);
+    expect((await app.request("/v1/invoices/share/assets/passkey.js")).status).toBe(404);
+  });
+
+  it("スクリプトのパスは token として解釈されない (ルート登録順)", async () => {
+    const script = await app.request("/v1/invoices/share/passkey.js");
+    expect(script.headers.get("content-type")).toContain("javascript");
+  });
+
   it("パスキー用スクリプトは同一 origin 配信で、 公開ページの CSP が script-src 'self' を許す", async () => {
-    const script = await app.request("/v1/invoices/share/assets/passkey.js");
+    const script = await app.request("/v1/invoices/share/passkey.js");
     expect(script.status).toBe(200);
     expect(script.headers.get("content-type")).toContain("javascript");
     expect(await script.text()).toContain("navigator.credentials");

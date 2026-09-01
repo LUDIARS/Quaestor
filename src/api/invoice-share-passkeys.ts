@@ -53,7 +53,12 @@ export function invoiceSharePasskeysRouter(deps: {
 }): Hono {
   const app = new Hono();
 
-  app.get("/share/assets/passkey.js", (c) => {
+  // 配信パスを `share/` 直下 1 階層に置く。 公開経路の Cloudflare ingress は
+  // `/v1/invoices/share/<1 階層>` だけを通すため、 `share/assets/passkey.js` の
+  // ように階層を挟むと Cloudflare 側で 404 になり、 ページは出るのにボタンが
+  // 動かない (スクリプトが読めない) という無言の故障になる。
+  // `/share/:token` より前に登録することで token として解釈されるのを防ぐ。
+  app.get("/share/passkey.js", (c) => {
     c.header("Content-Type", "text/javascript; charset=utf-8");
     c.header("Cache-Control", "no-store");
     return c.body(INVOICE_SHARE_PASSKEY_SCRIPT);

@@ -1,5 +1,5 @@
 /**
- * 公開ページで動くパスキー用ブラウザスクリプト。 inline ではなく `/share/assets/passkey.js` として配信し、
+ * 公開ページで動くパスキー用ブラウザスクリプト。 inline ではなく `/share/passkey.js` として配信し、
  * CSP は `script-src 'self'` のまま保つ。 依存なし (WebAuthn API + fetch)。
  *
  * data-mode="enroll": OTP 通過後の登録 → そのまま署名して合意。

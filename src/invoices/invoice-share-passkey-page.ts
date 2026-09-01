@@ -1,5 +1,5 @@
 /**
- * OTP 通過後のパスキー登録 → 署名ページ。 スクリプトは `/share/assets/passkey.js` を読み込む。
+ * OTP 通過後のパスキー登録 → 署名ページ。 スクリプトは `/share/passkey.js` を読み込む。
  *
  * @implements SPEC-INVOICE-ACCEPTANCE-005 (spec/feature/invoice-public-magic-link.md)
  */
@@ -7,7 +7,7 @@
 import { INVOICE_AGREEMENT_TEXT } from "./invoice-agreement.js";
 import { escapeHtml } from "./invoice-share-page.js";
 
-export const PASSKEY_SCRIPT_PATH = "/v1/invoices/share/assets/passkey.js";
+export const PASSKEY_SCRIPT_PATH = "/v1/invoices/share/passkey.js";
 
 export function invoiceSharePasskeyEnrollPage(input: {
   token: string;

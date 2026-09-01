@@ -6,7 +6,7 @@
 import type { InvoiceRow } from "../db/invoices-repo.js";
 import { INVOICE_AGREEMENT_TEXT } from "./invoice-agreement.js";
 
-const PASSKEY_SCRIPT_PATH = "/v1/invoices/share/assets/passkey.js";
+const PASSKEY_SCRIPT_PATH = "/v1/invoices/share/passkey.js";
 
 /**
  * 合意 UI の状態。
