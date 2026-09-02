@@ -18,59 +18,35 @@ import { Bookkeeping } from "./pages/Bookkeeping.js";
 import { HouseholdAnalysis } from "./pages/HouseholdAnalysis.js";
 import { ApportionmentSheet } from "./pages/ApportionmentSheet.js";
 import { Depreciation } from "./pages/Depreciation.js";
-
-type Page =
-  | "dashboard"
-  | "financial"
-  | "bookkeeping"
-  | "household"
-  | "apportionment-sheet"
-  | "depreciation"
-  | "business-plan"
-  | "subsidies"
-  | "scan"
-  | "receipts"
-  | "imports"
-  | "profiles"
-  | "transactions"
-  | "reconcile"
-  | "invoices"
-  | "invest"
-  | "portfolio"
-  | "export"
-  | "settings";
-
-const PAGES: { key: Page; label: string }[] = [
-  { key: "dashboard", label: "dashboard" },
-  { key: "financial", label: "決算書" },
-  { key: "bookkeeping", label: "簿記" },
-  { key: "household", label: "家計分析" },
-  { key: "apportionment-sheet", label: "按分シート" },
-  { key: "depreciation", label: "減価償却" },
-  { key: "business-plan", label: "事業計画" },
-  { key: "subsidies", label: "補助金" },
-  { key: "scan", label: "scan" },
-  { key: "receipts", label: "receipts" },
-  { key: "imports", label: "imports" },
-  { key: "profiles", label: "明細プロファイル" },
-  { key: "transactions", label: "transactions" },
-  { key: "reconcile", label: "reconcile" },
-  { key: "invoices", label: "invoices" },
-  { key: "invest", label: "投資/優待" },
-  { key: "portfolio", label: "積立/資産" },
-  { key: "export", label: "export" },
-  { key: "settings", label: "設定" },
-];
+import { MobileHome } from "./pages/MobileHome.js";
+import { Nav } from "./components/Nav.js";
+import { isPage, pageLabel, type Page } from "./lib/pages.js";
+import { recordVisit } from "./lib/page-visits.js";
+import { MOBILE_QUERY, useMediaQuery } from "./lib/useMediaQuery.js";
 
 const UNAVAILABLE_VERSION = "unavailable";
+
+function initialPage(): Page {
+  const hash = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
+  return isPage(hash) ? hash : "dashboard";
+}
 
 /**
  * @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md)
  * @implements SPEC-DEPRECIATION-003 (spec/feature/depreciation.md)
+ * @implements SPEC-MOBILE-HOME-001 (spec/feature/mobile-home.md)
  */
 export function App() {
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPageState] = useState<Page>(() => initialPage());
+  const [menuOpen, setMenuOpen] = useState(false);
   const [runtimeVersion, setRuntimeVersion] = useState(UNAVAILABLE_VERSION);
+  const isMobile = useMediaQuery(MOBILE_QUERY);
+
+  const setPage = (p: Page) => {
+    setPageState(p);
+    recordVisit(p);
+    try { window.history.replaceState(null, "", `#${p}`); } catch { /* history が使えない埋め込み環境は無視 */ }
+  };
 
   useEffect(() => {
     void fetch("/health")
@@ -81,37 +57,55 @@ export function App() {
       .catch(() => undefined);
   }, []);
 
+  useEffect(() => {
+    if (!isMobile) setMenuOpen(false);
+  }, [isMobile]);
+
+  const showMobileHome = isMobile && page === "dashboard";
+
   return (
-    <div className="app">
-      <header>
-        <h1>Quaestor <span className="runtime-version">v{runtimeVersion}</span></h1>
-        <nav>
-          {PAGES.map((p) => (
-            <a key={p.key} href={`#${p.key}`} onClick={(e) => { e.preventDefault(); setPage(p.key); }} aria-current={page === p.key}>
-              {p.label}
-            </a>
-          ))}
-        </nav>
+    <div className="app-shell min-h-screen flex flex-col">
+      <header className="border-b border-border bg-surface px-3 sm:px-6 py-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button
+          type="button"
+          className="md:hidden rounded border border-border px-2 py-1 text-subtle"
+          aria-label="メニューを開く"
+          aria-expanded={menuOpen}
+          onClick={() => setMenuOpen(true)}
+        >
+          ☰
+        </button>
+        <span className="text-lg font-semibold whitespace-nowrap">
+          <span className="text-accent">●</span> Quaestor <span className="runtime-version">v{runtimeVersion}</span>
+        </span>
+        <span className="text-subtle text-xs hidden md:inline">personal accounting</span>
+        {page !== "dashboard" && <span className="ml-auto text-sm text-subtle md:hidden">{pageLabel(page)}</span>}
       </header>
-      {page === "dashboard" && <Dashboard />}
-      {page === "financial" && <FinancialStatement />}
-      {page === "bookkeeping" && <Bookkeeping />}
-      {page === "household" && <HouseholdAnalysis />}
-      {page === "apportionment-sheet" && <ApportionmentSheet />}
-      {page === "depreciation" && <Depreciation />}
-      {page === "business-plan" && <BusinessPlan />}
-      {page === "subsidies" && <Subsidies />}
-      {page === "scan" && <Scan />}
-      {page === "receipts" && <Receipts />}
-      {page === "imports" && <Imports />}
-      {page === "profiles" && <StatementProfiles />}
-      {page === "transactions" && <Transactions />}
-      {page === "reconcile" && <Reconcile />}
-      {page === "invoices" && <Invoices />}
-      {page === "invest" && <Invest />}
-      {page === "portfolio" && <Portfolio />}
-      {page === "export" && <ExportPage />}
-      {page === "settings" && <Settings />}
+      <div className="flex min-h-0 flex-1">
+        <Nav page={page} onSelect={setPage} mobileOpen={menuOpen} onMobileOpenChange={setMenuOpen} />
+        <main className="min-w-0 flex-1 px-3 sm:px-6 py-4">
+          {showMobileHome && <MobileHome onSelect={setPage} onOpenMenu={() => setMenuOpen(true)} />}
+          {!showMobileHome && page === "dashboard" && <Dashboard />}
+          {page === "financial" && <FinancialStatement />}
+          {page === "bookkeeping" && <Bookkeeping />}
+          {page === "household" && <HouseholdAnalysis />}
+          {page === "apportionment-sheet" && <ApportionmentSheet />}
+          {page === "depreciation" && <Depreciation />}
+          {page === "business-plan" && <BusinessPlan />}
+          {page === "subsidies" && <Subsidies />}
+          {page === "scan" && <Scan />}
+          {page === "receipts" && <Receipts />}
+          {page === "imports" && <Imports />}
+          {page === "profiles" && <StatementProfiles />}
+          {page === "transactions" && <Transactions />}
+          {page === "reconcile" && <Reconcile />}
+          {page === "invoices" && <Invoices />}
+          {page === "invest" && <Invest />}
+          {page === "portfolio" && <Portfolio />}
+          {page === "export" && <ExportPage />}
+          {page === "settings" && <Settings />}
+        </main>
+      </div>
     </div>
   );
 }

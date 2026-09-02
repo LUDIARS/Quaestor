@@ -115,11 +115,15 @@ pre {
   --ok: var(--c-ok);
 }
 
-/* 既存 .app, .last-capture 等は v1 で残しつつ Foundation 寄せ */
+/* 既存 .app, .last-capture 等は v1 で残しつつ Foundation 寄せ。
+   .app-shell (Concordia 風レイアウト、 2026-09) は Tailwind ユーティリティだけで組むので以下は当たらない */
 .app {
   max-width: 1100px;
   margin: 0 auto;
   padding: 1rem;
+}
+.app-shell main > * {
+  max-width: 1100px;
 }
 .app header {
   display: flex;

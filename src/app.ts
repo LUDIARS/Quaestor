@@ -108,6 +108,7 @@ import { BookkeepingReports } from "./services/bookkeeping/bookkeeping-reports.j
 import { JournalImportService } from "./services/bookkeeping/journal-import.js";
 import { ObservationCollector } from "./services/apportionment-sheet/observation-collector.js";
 import { depreciationRouter } from "./api/depreciation.js";
+import { activityRouter } from "./api/activity.js";
 import { FixedAssetsRepo } from "./db/fixed-assets-repo.js";
 import { DepreciationSchedule } from "./services/depreciation/depreciation-schedule.js";
 import { DepreciationPosting } from "./services/depreciation/depreciation-posting.js";
@@ -502,6 +503,7 @@ export function buildApp(deps: AppDeps): Hono {
     schedule: depreciationSchedule,
     posting: new DepreciationPosting({ db: deps.db, entries: journalEntries, accounts, schedule: depreciationSchedule, classifier: householdClassifier }),
   }));
+  app.route("/v1/activity", activityRouter({ db: deps.db }));
   app.route("/v1/bookkeeping", bookkeepingRouter({
     accounts,
     receipts,
