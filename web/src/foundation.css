@@ -269,3 +269,28 @@ textarea:focus {
 table {
   background: transparent;
 }
+
+/* 簿記: 仕訳帳 (罫線あり、 日付/科目/金額は 1 行に収める) */
+.journal-table {
+  border-collapse: collapse;
+  min-width: 1320px;
+  font-size: 0.875rem;
+}
+.journal-table th,
+.journal-table td {
+  border: 1px solid var(--c-border);
+  padding: 0.3rem 0.5rem;
+  vertical-align: middle;
+}
+.journal-table th {
+  background: var(--c-muted);
+  color: var(--c-subtle);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+.journal-table td.nowrap { white-space: nowrap; }
+.journal-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.journal-table tr.journal-group td { background: var(--c-muted); }
+.journal-table tr.journal-editing td { background: rgba(167, 139, 250, 0.08); }
+.journal-table button.danger { color: var(--c-danger); border-color: var(--c-danger); }
