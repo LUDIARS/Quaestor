@@ -109,6 +109,9 @@ import { JournalImportService } from "./services/bookkeeping/journal-import.js";
 import { ObservationCollector } from "./services/apportionment-sheet/observation-collector.js";
 import { depreciationRouter } from "./api/depreciation.js";
 import { activityRouter } from "./api/activity.js";
+import { costStructureRouter } from "./api/cost-structure.js";
+import { CostRulesRepo } from "./db/cost-rules-repo.js";
+import { CostStructureService } from "./services/cost-structure/cost-structure.js";
 import { FixedAssetsRepo } from "./db/fixed-assets-repo.js";
 import { DepreciationSchedule } from "./services/depreciation/depreciation-schedule.js";
 import { DepreciationPosting } from "./services/depreciation/depreciation-posting.js";
@@ -504,6 +507,12 @@ export function buildApp(deps: AppDeps): Hono {
     posting: new DepreciationPosting({ db: deps.db, entries: journalEntries, accounts, schedule: depreciationSchedule, classifier: householdClassifier }),
   }));
   app.route("/v1/activity", activityRouter({ db: deps.db }));
+  const costRules = new CostRulesRepo(deps.db);
+  costRules.seedIfEmpty();
+  app.route("/v1/cost-structure", costStructureRouter({
+    rules: costRules,
+    service: new CostStructureService({ db: deps.db, rules: costRules, apportionment: rules }),
+  }));
   app.route("/v1/bookkeeping", bookkeepingRouter({
     accounts,
     receipts,

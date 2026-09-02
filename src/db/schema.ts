@@ -724,6 +724,22 @@ const STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_fixed_assets_acquired ON fixed_assets(acquired_on)`,
+
+  // ---- v18: 固定費 / 変動費と水道光熱費の分類ルール (spec/plan/2026-09-03-cost-structure.md) ----
+  `CREATE TABLE IF NOT EXISTS cost_rules (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern    TEXT NOT NULL,
+    cost_type  TEXT NOT NULL CHECK (cost_type IN ('fixed','variable')),
+    utility    TEXT CHECK (utility IS NULL OR utility IN ('electric','gas','water')),
+    label      TEXT,
+    priority   INTEGER NOT NULL DEFAULT 100,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    note       TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_cost_rules_priority ON cost_rules(enabled, priority)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -812,7 +828,8 @@ export function applyMigrations(db: Database.Database): void {
   // v17: 減価償却。 償却仕訳の行に資産 id を持たせ、 年単位で再計上できるようにする
   ensureColumn(db, "journal_entries", "asset_id", "INTEGER REFERENCES fixed_assets(id) ON DELETE CASCADE");
   db.exec("CREATE INDEX IF NOT EXISTS idx_journal_asset ON journal_entries(fiscal_year, asset_id)");
-  db.pragma("user_version = 17");
+  // v18: cost_rules — STATEMENTS で作成済
+  db.pragma("user_version = 18");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

@@ -4,7 +4,7 @@
 export type Page =
   | "dashboard" | "bookkeeping" | "financial" | "depreciation" | "apportionment-sheet"
   | "scan" | "receipts" | "imports" | "profiles" | "transactions" | "reconcile"
-  | "household" | "invest" | "portfolio"
+  | "household" | "cost-structure" | "invest" | "portfolio"
   | "invoices" | "business-plan" | "subsidies"
   | "export" | "settings";
 
@@ -31,6 +31,7 @@ export const PAGES: readonly PageDef[] = [
   { key: "transactions", label: "取引", section: "取込" },
   { key: "reconcile", label: "突合", section: "取込" },
   { key: "household", label: "家計分析", section: "家計・資産" },
+  { key: "cost-structure", label: "固定費・変動費", section: "家計・資産" },
   { key: "invest", label: "投資・優待", section: "家計・資産" },
   { key: "portfolio", label: "積立・資産", section: "家計・資産" },
   { key: "invoices", label: "請求書", section: "事業" },
