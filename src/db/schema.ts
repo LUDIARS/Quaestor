@@ -692,6 +692,38 @@ const STATEMENTS: string[] = [
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_apportionment_obs_payee ON apportionment_observations(payee_norm, fiscal_year)`,
+
+  // ---- v17: 減価償却 (spec/plan/2026-09-03-depreciation.md) ----
+
+  // fixed_assets — 固定資産台帳 (エクセル簿記 ③ の 1 行 = 1 資産)。 償却額は保存せず年ごとに計算する。
+  `CREATE TABLE IF NOT EXISTS fixed_assets (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    name               TEXT NOT NULL,
+    quantity           TEXT,
+    acquired_on        TEXT NOT NULL,
+    cost               INTEGER NOT NULL CHECK (cost >= 0),
+    method             TEXT NOT NULL CHECK (method IN (
+                         'straight_line','declining_balance','old_straight_line','old_declining_balance','lump_sum_3y','immediate')),
+    useful_life        INTEGER NOT NULL DEFAULT 0 CHECK (
+                         (method IN ('lump_sum_3y','immediate') AND useful_life BETWEEN 0 AND 50)
+                         OR useful_life BETWEEN 2 AND 50),
+    business_ratio     REAL NOT NULL DEFAULT 1 CHECK (business_ratio >= 0 AND business_ratio <= 1),
+    asset_code         INTEGER NOT NULL DEFAULT 115 CHECK (asset_code BETWEEN 1 AND 9999),
+    expense_code       INTEGER NOT NULL DEFAULT 18 CHECK (expense_code BETWEEN 1 AND 9999),
+    opening_book_value INTEGER CHECK (opening_book_value IS NULL OR (opening_book_value >= 0 AND opening_book_value <= cost)),
+    opening_year       INTEGER CHECK (opening_year IS NULL OR (opening_year BETWEEN 1900 AND 2999 AND opening_year >= CAST(substr(acquired_on, 1, 4) AS INTEGER))),
+    revised_cost       INTEGER CHECK (revised_cost IS NULL OR
+                         (method = 'declining_balance' AND opening_year IS NOT NULL AND revised_cost >= 0 AND revised_cost <= cost)),
+    disposed_on        TEXT,
+    notes              TEXT,
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL,
+    CHECK ((opening_book_value IS NULL AND opening_year IS NULL) OR (opening_book_value IS NOT NULL AND opening_year IS NOT NULL)),
+    CHECK (disposed_on IS NULL OR disposed_on >= acquired_on),
+    CHECK (disposed_on IS NULL OR opening_year IS NULL OR opening_year <= CAST(substr(disposed_on, 1, 4) AS INTEGER))
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_fixed_assets_acquired ON fixed_assets(acquired_on)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -777,7 +809,10 @@ export function applyMigrations(db: Database.Database): void {
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
   // v16: 家計簿 × 業務仕訳 (journal_entries / household_* / apportionment_observations) — STATEMENTS で作成済
-  db.pragma("user_version = 16");
+  // v17: 減価償却。 償却仕訳の行に資産 id を持たせ、 年単位で再計上できるようにする
+  ensureColumn(db, "journal_entries", "asset_id", "INTEGER REFERENCES fixed_assets(id) ON DELETE CASCADE");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_journal_asset ON journal_entries(fiscal_year, asset_id)");
+  db.pragma("user_version = 17");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

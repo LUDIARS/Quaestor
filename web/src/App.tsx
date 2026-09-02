@@ -17,6 +17,7 @@ import { Settings } from "./pages/Settings.js";
 import { Bookkeeping } from "./pages/Bookkeeping.js";
 import { HouseholdAnalysis } from "./pages/HouseholdAnalysis.js";
 import { ApportionmentSheet } from "./pages/ApportionmentSheet.js";
+import { Depreciation } from "./pages/Depreciation.js";
 
 type Page =
   | "dashboard"
@@ -24,6 +25,7 @@ type Page =
   | "bookkeeping"
   | "household"
   | "apportionment-sheet"
+  | "depreciation"
   | "business-plan"
   | "subsidies"
   | "scan"
@@ -44,6 +46,7 @@ const PAGES: { key: Page; label: string }[] = [
   { key: "bookkeeping", label: "簿記" },
   { key: "household", label: "家計分析" },
   { key: "apportionment-sheet", label: "按分シート" },
+  { key: "depreciation", label: "減価償却" },
   { key: "business-plan", label: "事業計画" },
   { key: "subsidies", label: "補助金" },
   { key: "scan", label: "scan" },
@@ -61,7 +64,10 @@ const PAGES: { key: Page; label: string }[] = [
 
 const UNAVAILABLE_VERSION = "unavailable";
 
-/** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
+/**
+ * @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md)
+ * @implements SPEC-DEPRECIATION-003 (spec/feature/depreciation.md)
+ */
 export function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [runtimeVersion, setRuntimeVersion] = useState(UNAVAILABLE_VERSION);
@@ -92,6 +98,7 @@ export function App() {
       {page === "bookkeeping" && <Bookkeeping />}
       {page === "household" && <HouseholdAnalysis />}
       {page === "apportionment-sheet" && <ApportionmentSheet />}
+      {page === "depreciation" && <Depreciation />}
       {page === "business-plan" && <BusinessPlan />}
       {page === "subsidies" && <Subsidies />}
       {page === "scan" && <Scan />}

@@ -6,6 +6,7 @@
  * 資産は借方残高、 負債・資本は貸方残高として扱う。
  *
  * @implements SPEC-HOUSEHOLD-BOOKKEEPING-003 (spec/feature/household-bookkeeping.md)
+ * @implements SPEC-DEPRECIATION-002 (spec/feature/depreciation.md)
  */
 
 import type Database from "better-sqlite3";
@@ -18,6 +19,7 @@ import { buildGeneralLedger, type GeneralLedger } from "./general-ledger.js";
 import { summarizeMonthly, type MonthlySummary } from "./monthly-summary.js";
 import { buildFinancialReport, type FinancialReport } from "./financial-report.js";
 import { buildBookkeepingWorkbook } from "./bookkeeping-workbook.js";
+import type { DepreciationSchedule } from "../depreciation/depreciation-schedule.js";
 
 export const OPENING_SECTION = "opening" as const;
 
@@ -31,6 +33,8 @@ export interface BookkeepingReportsDeps {
   entries: JournalEntriesRepo;
   accounts: AccountCodesRepo;
   fs: FinancialStatementsRepo;
+  /** 減価償却表 (ブックの「減価償却」シート用)。 無ければシートを出さない */
+  depreciation?: DepreciationSchedule;
 }
 
 export class BookkeepingReports {
@@ -125,6 +129,7 @@ export class BookkeepingReports {
       ledgers: this.ledgers(year),
       monthly: this.monthly(year),
       report: this.report(year),
+      depreciation: this.deps.depreciation?.forYear(year),
     });
   }
 }

@@ -107,6 +107,10 @@ import { JournalLedger } from "./services/bookkeeping/journal-ledger.js";
 import { BookkeepingReports } from "./services/bookkeeping/bookkeeping-reports.js";
 import { JournalImportService } from "./services/bookkeeping/journal-import.js";
 import { ObservationCollector } from "./services/apportionment-sheet/observation-collector.js";
+import { depreciationRouter } from "./api/depreciation.js";
+import { FixedAssetsRepo } from "./db/fixed-assets-repo.js";
+import { DepreciationSchedule } from "./services/depreciation/depreciation-schedule.js";
+import { DepreciationPosting } from "./services/depreciation/depreciation-posting.js";
 import { InvoiceSlackDeliveryService } from "./services/invoice-slack-delivery.js";
 import { InvoiceShareAcceptanceService } from "./services/invoice-share-acceptance-service.js";
 import { InvoiceSharePasskeyAcceptanceService } from "./services/invoice-share-passkey-acceptance-service.js";
@@ -233,6 +237,7 @@ export interface AppDeps {
 /**
  * @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md)
  * @implements SPEC-MAIL-INTAKE-003 (spec/feature/mail-intake.md)
+ * @implements SPEC-DEPRECIATION-003 (spec/feature/depreciation.md)
  */
 export function buildApp(deps: AppDeps): Hono {
   applyMigrations(deps.db);
@@ -489,12 +494,20 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
+  const fixedAssets = new FixedAssetsRepo(deps.db);
+  const depreciationSchedule = new DepreciationSchedule(fixedAssets);
+  app.route("/v1/depreciation", depreciationRouter({
+    assets: fixedAssets,
+    accounts,
+    schedule: depreciationSchedule,
+    posting: new DepreciationPosting({ db: deps.db, entries: journalEntries, accounts, schedule: depreciationSchedule, classifier: householdClassifier }),
+  }));
   app.route("/v1/bookkeeping", bookkeepingRouter({
     accounts,
     receipts,
     entries: journalEntries,
     ledger: new JournalLedger({ db: deps.db, rules, accounts, entries: journalEntries, classifier: householdClassifier }),
-    reports: new BookkeepingReports({ db: deps.db, entries: journalEntries, accounts, fs }),
+    reports: new BookkeepingReports({ db: deps.db, entries: journalEntries, accounts, fs, depreciation: depreciationSchedule }),
     importer: new JournalImportService({ db: deps.db, entries: journalEntries, accounts, observations: apportionmentObservations }),
     classifier: householdClassifier,
   }));

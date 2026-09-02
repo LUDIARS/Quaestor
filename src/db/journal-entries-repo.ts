@@ -20,6 +20,8 @@ export interface JournalEntryRow {
   source_tx_id: string | null;
   receipt_id: string | null;
   household_category_id: number | null;
+  /** 減価償却の計上行が指す fixed_assets.id (v17) */
+  asset_id: number | null;
   locked: number;
   created_at: number;
   updated_at: number;
@@ -40,6 +42,7 @@ export interface CreateJournalEntryInput {
   source_tx_id?: string | null;
   receipt_id?: string | null;
   household_category_id?: number | null;
+  asset_id?: number | null;
   locked?: boolean;
   no?: number;
 }
@@ -67,6 +70,7 @@ export interface JournalListFilter {
 /**
  * journal_entries の CRUD と年度単位の入れ替え・採番。 集計は services/bookkeeping 側。
  * @implements SPEC-HOUSEHOLD-BOOKKEEPING-001 (spec/feature/household-bookkeeping.md)
+ * @implements SPEC-DEPRECIATION-003 (spec/feature/depreciation.md)
  */
 export class JournalEntriesRepo {
   constructor(private readonly db: Database.Database) {}
@@ -77,14 +81,14 @@ export class JournalEntriesRepo {
       .prepare(
         `INSERT INTO journal_entries
            (fiscal_year, entry_date, no, debit_code, debit_amount, credit_code, credit_amount, description,
-            payment, rate, origin, leg, source_tx_id, receipt_id, household_category_id, locked, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            payment, rate, origin, leg, source_tx_id, receipt_id, household_category_id, locked, asset_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         input.fiscal_year, input.entry_date, input.no ?? 0,
         input.debit_code, input.debit_amount, input.credit_code, input.credit_amount, input.description,
         input.payment, input.rate, input.origin, input.leg ?? null, input.source_tx_id ?? null,
-        input.receipt_id ?? null, input.household_category_id ?? null, input.locked ? 1 : 0, now, now,
+        input.receipt_id ?? null, input.household_category_id ?? null, input.locked ? 1 : 0, input.asset_id ?? null, now, now,
       );
     return Number(r.lastInsertRowid);
   }
@@ -157,6 +161,14 @@ export class JournalEntriesRepo {
   deleteGenerated(fiscalYear: number): number {
     const r = this.db
       .prepare(`DELETE FROM journal_entries WHERE fiscal_year = ? AND origin = 'transaction' AND locked = 0`)
+      .run(fiscalYear);
+    return r.changes;
+  }
+
+  /** 減価償却の計上行 (asset_id あり) を年度単位で削除 (再計上用)。 */
+  deleteAssetEntries(fiscalYear: number): number {
+    const r = this.db
+      .prepare(`DELETE FROM journal_entries WHERE fiscal_year = ? AND asset_id IS NOT NULL`)
       .run(fiscalYear);
     return r.changes;
   }

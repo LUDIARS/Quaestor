@@ -1,8 +1,9 @@
 /**
- * エクセル簿記互換ブックの書き出し。 仕訳帳 / 精算表 / 元帳 / 月別集計 / 決算書 の 5 シート。
+ * エクセル簿記互換ブックの書き出し。 5 つの帳簿シートと、入力がある場合は減価償却シートを作る。
  * 数式は書かず値のみ (集計は Quaestor 側で確定済み)。 仕訳帳はエクセル簿記と同じ 7 行目見出し・8 行目データ。
  *
  * @implements SPEC-HOUSEHOLD-BOOKKEEPING-004 (spec/feature/household-bookkeeping.md)
+ * @implements SPEC-DEPRECIATION-002 (spec/feature/depreciation.md)
  */
 
 import ExcelJS from "exceljs";
@@ -11,6 +12,7 @@ import type { TrialBalance } from "./trial-balance.js";
 import type { GeneralLedger } from "./general-ledger.js";
 import type { MonthlySummary } from "./monthly-summary.js";
 import type { FinancialReport } from "./financial-report.js";
+import type { YearSchedule } from "../depreciation/depreciation-schedule.js";
 
 export interface BookkeepingWorkbookInput {
   fiscal_year: number;
@@ -19,6 +21,8 @@ export interface BookkeepingWorkbookInput {
   ledgers: GeneralLedger[];
   monthly: MonthlySummary;
   report: FinancialReport;
+  /** 減価償却表 (③)。 省略時はシートを作らない */
+  depreciation?: YearSchedule;
 }
 
 const MONEY = "#,##0";
@@ -34,6 +38,7 @@ export async function buildBookkeepingWorkbook(input: BookkeepingWorkbookInput):
   writeLedgers(wb.addWorksheet("元帳"), input.ledgers);
   writeMonthly(wb.addWorksheet("月別集計"), input.monthly);
   writeReport(wb.addWorksheet("決算書"), input.report, input.fiscal_year);
+  if (input.depreciation) writeDepreciation(wb.addWorksheet("減価償却"), input.depreciation);
 
   const arr = await wb.xlsx.writeBuffer();
   return Buffer.from(arr);
@@ -189,4 +194,32 @@ function writeReport(ws: ExcelJS.Worksheet, rep: FinancialReport, year: number):
   for (const c of [3, 4, 7, 8]) ws.getColumn(c).numFmt = MONEY;
   ws.getColumn(2).width = 28;
   ws.getColumn(6).width = 30;
+}
+
+/** ③ 減価償却費の計算 と同じ列 (イ〜ヌ)。 */
+function writeDepreciation(ws: ExcelJS.Worksheet, d: YearSchedule): void {
+  ws.getCell("B2").value = `【減価償却費の計算】 ${d.year} 年`;
+  const head = ["減価償却資産の名称等", "面積又は数量", "取得年月", "取得価額 (イ)", "償却の基礎になる金額 (ロ)", "償却方法", "耐用年数",
+    "償却率 (ハ)", "本年中の償却期間 (ニ)", "本年分の普通償却費 (ホ)", "割増償却費 (ヘ)", "本年分の償却費合計 (ト)", "事業専用割合 (チ)",
+    "本年分の必要経費算入額 (リ)", "未償却残高 (ヌ)", "摘要"];
+  head.forEach((h, i) => { ws.getCell(4, 2 + i).value = h; });
+  ws.getRow(4).font = { bold: true };
+  let r = 5;
+  for (const row of d.rows) {
+    const vals = [row.name, row.quantity, row.acquired_on.slice(0, 7), row.cost, row.basis, row.method, row.useful_life || null,
+      row.rate, row.months, row.ordinary, row.extra, row.total, row.business_ratio, row.expense, row.closing_book, row.notes];
+    vals.forEach((v, i) => { ws.getCell(r, 2 + i).value = v; });
+    r++;
+  }
+  ws.getCell(r, 2).value = "合計";
+  ws.getCell(r, 11).value = d.totals.ordinary;
+  ws.getCell(r, 12).value = d.totals.extra;
+  ws.getCell(r, 13).value = d.totals.total;
+  ws.getCell(r, 15).value = d.totals.expense;
+  ws.getCell(r, 16).value = d.totals.closing_book;
+  ws.getRow(r).font = { bold: true };
+  for (const c of [5, 6, 11, 12, 13, 15, 16]) ws.getColumn(c).numFmt = MONEY;
+  ws.getColumn(9).numFmt = "0.000";
+  ws.getColumn(14).numFmt = "0%";
+  ws.getColumn(2).width = 28;
 }
