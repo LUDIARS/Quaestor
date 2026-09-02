@@ -1,6 +1,7 @@
 /**
  * マジックリンク発行・SES配信・冪等監査を一つの失敗単位として扱う。
  *
+ * @implements SPEC-INVOICE-EMAIL-001 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-EMAIL-002 (spec/feature/invoice-public-magic-link.md)
  * @implements SPEC-INVOICE-EMAIL-003 (spec/feature/invoice-public-magic-link.md)
  */
@@ -36,6 +37,8 @@ export interface InvoiceEmailDeliveryOptions {
   shares: InvoiceShareService;
   deliveries: InvoiceShareDeliveryRepo;
   notifier?: InvoiceEmailNotifier;
+  /** 宛先が送付者を明確に識別できるよう、本文へ記す氏名。 */
+  senderName?: string | null;
   now?: () => number;
   idFactory?: () => string;
 }
@@ -62,6 +65,10 @@ export class InvoiceEmailDeliveryService {
     const notifier = this.options.notifier;
     if (!notifier) throw new InvoiceEmailError("not_configured", "SES email is not configured", 503);
     notifier.assertReady();
+    const senderName = normalizeSenderName(this.options.senderName);
+    if (!senderName) {
+      throw new InvoiceEmailError("not_configured", "invoice sender name is not configured", 503);
+    }
 
     const invoice = this.options.invoices.find(input.invoiceId);
     if (!invoice || invoice.status === "cancelled") {
@@ -99,7 +106,7 @@ export class InvoiceEmailDeliveryService {
     try {
       const sent = await notifier.sendMessage({
         to: share.recipientEmail,
-        ...deliveryMessage(invoice, share.url, share.recipientCompany, share.expiresAt, input.billingPeriod),
+        ...deliveryMessage(invoice, share.url, share.recipientCompany, share.expiresAt, senderName, input.billingPeriod),
       });
       const completed = this.options.deliveries.markSent(delivery.id, sent.messageId, this.now());
       return {
@@ -150,6 +157,7 @@ function deliveryMessage(
   url: string,
   recipientCompany: string,
   expiresAtEpochSeconds: number,
+  senderName: string,
   billingPeriod?: string,
 ): { subject: string; text: string } {
   const subjectName = billingPeriod?.trim() || invoice.work_summary;
@@ -162,6 +170,7 @@ function deliveryMessage(
       `${recipientCompany} ご担当者様`,
       "",
       "いつもお世話になっております。",
+      `${senderName}です。`,
       `${subjectName}の請求書をご用意しました。`,
       "以下のリンクから内容をご確認ください。PDFはメールに添付しておりません。",
       "",
@@ -171,6 +180,13 @@ function deliveryMessage(
       "リンクは第三者へ転送しないようお願いいたします。",
     ].join("\n"),
   };
+}
+
+function normalizeSenderName(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  if (!name || name.length > 100 || /[\r\n]/.test(name)) return null;
+  return name;
 }
 
 function sha256(value: string): string {

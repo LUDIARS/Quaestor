@@ -27,6 +27,7 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `invoiceShare.email.region` | `null` | 請求書メールを送る Amazon SES リージョン (例 `ap-northeast-1`)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_REGION` |
 | `invoiceShare.email.fromAddress` | `null` | SES で検証済みドメイン上の送信元アドレス (表示名なし)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_FROM_ADDRESS` |
 | `invoiceShare.email.configurationSet` | `null` | 任意。 SES configuration set 名 (レピュテーション/配信イベント用。 本文は流れない) | `QUAESTOR_SES_CONFIGURATION_SET` |
+| `invoiceShare.email.senderName` | `null` | 請求書メール本文に入れる送付者名。未設定・改行入り・100文字超は送信不可 (503)。本番値は暗号化ストアに置く | `QUAESTOR_INVOICE_SENDER_NAME` |
 | `invoiceShare.timestampAuthority.url` | `https://freetsa.org/tsr` | 合意証跡の SHA-256 を打刻する RFC 3161 タイムスタンプ局 (TSA) の URL | `QUAESTOR_TSA_URL` |
 | `invoiceShare.timestampAuthority.enabled` | `true` | `false` で外部タイムスタンプを付けない (合意行の `timestamp_status` は `skipped`) | `QUAESTOR_TSA_ENABLED` |
 
@@ -55,6 +56,7 @@ API キー等は **平文でファイル保存しない** (§7.2)。
 | `QUAESTOR_SES_ACCESS_KEY_ID` | 請求書メール送信専用 IAM ユーザーのアクセスキー ID (`ses:SendEmail` のみ) |
 | `QUAESTOR_SES_SECRET_ACCESS_KEY` | 同シークレットアクセスキー |
 | `QUAESTOR_SES_SESSION_TOKEN` | 任意。 一時クレデンシャルを使う場合のセッショントークン |
+| `QUAESTOR_INVOICE_SENDER_NAME` | 請求書メール本文に表示する送付者の氏名 |
 | `QUAESTOR_SLACK_BOT_TOKEN` | 請求書マジックリンク投稿用 Slack Bot User OAuth Token (`xoxb-...`) |
 | `QUAESTOR_SLACK_CONVERSATION_ID` | 既定の Slack グループ DM conversation ID (`G...`) |
 | `QUAESTOR_SLACK_USER_IDS` | グループ DM を開く2〜8名の user ID (`U...` / `W...`) を `;` 区切りで指定 |

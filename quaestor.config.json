@@ -47,10 +47,11 @@
     "publicUrl": "https://qs-magiclink.ai-run-do.com",
     "roots": ["data", "app_data/invoices"],
     "email": {
-      "$comment": "請求書メールの送信元 (Amazon SES, spec/setup/config-and-secrets.md §3)。資格情報は暗号化ストアの QUAESTOR_SES_ACCESS_KEY_ID / QUAESTOR_SES_SECRET_ACCESS_KEY。",
+      "$comment": "請求書メールの送信元 (Amazon SES, spec/setup/config-and-secrets.md §3)。資格情報と senderName は暗号化ストアの QUAESTOR_SES_ACCESS_KEY_ID / QUAESTOR_SES_SECRET_ACCESS_KEY / QUAESTOR_INVOICE_SENDER_NAME。",
       "region": "us-east-1",
       "fromAddress": "invoice@ai-run-do.com",
-      "configurationSet": null
+      "configurationSet": null,
+      "senderName": null
     }
   },
   "notifications": {

@@ -30,11 +30,12 @@ import { SubsidiesRepo } from "./db/subsidies-repo.js";
 import { JGrantsCrawler, MirasapoPlusCrawler, CompositeCrawler } from "./services/subsidy-crawler.js";
 import { runtimeVersionFromEnvironment } from "./services/runtime-version.js";
 
-const config = loadAppConfig();
-assertLocalTestAllowed(config.invoiceShare.localTest);
-
 // シークレット (ANTHROPIC_API_KEY 等) を暗号化ストアから注入 (メモリのみ、平文ファイル無し)
 const injectedSecrets = new SecretStore().injectIntoEnv();
+
+// 注入済みシークレットも通常の env override と同じ扱いで設定へ反映する。
+const config = loadAppConfig();
+assertLocalTestAllowed(config.invoiceShare.localTest);
 
 const log = pino({
   level: config.server.logLevel,

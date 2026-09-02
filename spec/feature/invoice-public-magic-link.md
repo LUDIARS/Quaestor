@@ -28,6 +28,7 @@ the source of truth, env is override only — see `spec/setup/config-and-secrets
 | `invoiceShare.email.region` | for email | `QUAESTOR_SES_REGION` | Amazon SES region that hosts the verified sending identity, for example `ap-northeast-1`. |
 | `invoiceShare.email.fromAddress` | for email | `QUAESTOR_SES_FROM_ADDRESS` | Bare sender address on a domain verified in SES (DKIM/SPF/DMARC published), for example `invoice@qs-magiclink.ai-run-do.com`. |
 | `invoiceShare.email.configurationSet` | no | `QUAESTOR_SES_CONFIGURATION_SET` | Optional SES configuration set for reputation/event metrics. Event destinations never receive message bodies. |
+| `invoiceShare.email.senderName` | for email | `QUAESTOR_INVOICE_SENDER_NAME` | Name included in every invoice-delivery message. Store the production value in the encrypted secret store; an absent or invalid value fails delivery closed. |
 | `invoiceShare.timestampAuthority.url` | no | `QUAESTOR_TSA_URL` | RFC 3161 timestamp authority that stamps the acceptance evidence digest. Defaults to `https://freetsa.org/tsr`. |
 | `invoiceShare.timestampAuthority.enabled` | no | `QUAESTOR_TSA_ENABLED` | `false` skips external timestamping (`timestamp_status = skipped`). Defaults to `true`. |
 | `invoiceShare.localTest` | no | `QUAESTOR_LOCAL_TEST` | Local manual-testing mode; defaults to `false` and must stay `false` in production. See "Local test mode". |
@@ -37,6 +38,9 @@ optional `QUAESTOR_SES_SESSION_TOKEN`) live in the encrypted secret store and ar
 at startup. Quaestor never reads the operator's personal `AWS_*` variables, shared credentials file, or
 SSO cache, so the delivery credential is a dedicated identity whose only permission is `ses:SendEmail`
 from the configured `fromAddress`.
+
+`QUAESTOR_INVOICE_SENDER_NAME` is likewise loaded from the encrypted store before configuration is
+resolved. It is rendered only in the recipient-facing invoice message and is never logged or committed.
 
 `invoiceShare.publicUrl` must not contain credentials, a path, query, or fragment. Missing or
 insecure configuration fails link creation with `503 not_configured` instead of falling back to a
@@ -116,7 +120,7 @@ the exact bytes served on every download; replacement after issuance fails close
   SigV4-signed HTTPS) from the configured verified sender using a dedicated send-only credential
   taken from the encrypted store; it never reads the operator's personal AWS credentials, never keeps
   a copy of the sent message, and never logs credentials, signatures, raw links, or message bodies.
-  Missing region/sender/credentials fail closed with `503 not_configured` before any link is created;
+  Missing region/sender name/credentials fail closed with `503 not_configured` before any link is created;
   a signature rejection maps to `502 authentication_failed`, other provider failures to `502 api_error`.
   Implemented by `src/services/ses-email-client.ts` and `resolveInvoiceEmailNotifier` in `src/app.ts`.
 - **SPEC-INVOICE-EMAIL-002** — issue and delivery are one failure unit; failed delivery revokes the

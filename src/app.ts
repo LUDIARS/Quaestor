@@ -167,7 +167,12 @@ export interface AppDeps {
   invoiceShare?: {
     publicUrl?: string | null;
     roots?: string[];
-    email?: { region?: string | null; fromAddress?: string | null; configurationSet?: string | null };
+    email?: {
+      region?: string | null;
+      fromAddress?: string | null;
+      configurationSet?: string | null;
+      senderName?: string | null;
+    };
     timestampAuthority?: { url?: string; enabled?: boolean };
     /** ローカルテストモード: `http://localhost` origin を許可する (server.ts が outbox 送信と併せて設定)。 */
     localTest?: boolean;
@@ -438,6 +443,7 @@ export function buildApp(deps: AppDeps): Hono {
     shares: invoiceShareService,
     deliveries: invoiceShareDeliveries,
     notifier: invoiceEmailNotifier,
+    senderName: deps.invoiceShare?.email?.senderName,
   });
 
   app.get("/health", (c) => c.json({
@@ -522,7 +528,11 @@ export function buildApp(deps: AppDeps): Hono {
  */
 function resolveInvoiceEmailNotifier(
   value: InvoiceEmailNotifier | "auto" | "disabled" | undefined,
-  email: { region?: string | null; fromAddress?: string | null; configurationSet?: string | null } | undefined,
+  email: {
+    region?: string | null;
+    fromAddress?: string | null;
+    configurationSet?: string | null;
+  } | undefined,
 ): InvoiceEmailNotifier | undefined {
   if (value === "auto") {
     return new SesEmailClient({

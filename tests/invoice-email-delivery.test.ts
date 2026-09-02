@@ -36,7 +36,11 @@ describe("invoice email delivery", () => {
       db,
       receiptsRoot: join(root, "receipts"),
       ocr: "disabled",
-      invoiceShare: { publicUrl: "https://qs.example.com", roots: [root] },
+      invoiceShare: {
+        publicUrl: "https://qs.example.com",
+        roots: [root],
+        email: { senderName: "Example Sender" },
+      },
       invoiceEmailNotifier: notifier,
     });
     invoiceId = new InvoicesRepo(db).insert({
@@ -80,6 +84,7 @@ describe("invoice email delivery", () => {
     expect(result).toMatchObject({ delivery_status: "sent", recipient_email: "billing@example.com" });
     expect(sent).toHaveLength(1);
     expect(sent[0]?.to).toBe("billing@example.com");
+    expect(sent[0]?.text).toContain("Example Senderです。");
     expect(sent[0]?.text).toContain("https://qs.example.com/v1/invoices/share/");
     expect(sent[0]?.text).not.toContain("123456");
 
@@ -97,6 +102,46 @@ describe("invoice email delivery", () => {
     expect(response.status).toBe(404);
   });
 
+  it.each([
+    { label: "未設定", senderName: undefined },
+    { label: "空文字", senderName: "   " },
+    { label: "改行入り", senderName: "Example\nSender" },
+    { label: "100文字超", senderName: "x".repeat(101) },
+  ])("送付者名が$labelならリンクを作らず 503 not_configured を返す", async ({ senderName }) => {
+    const invalidSenderApp = buildApp({
+      db,
+      receiptsRoot: join(root, "receipts"),
+      ocr: "disabled",
+      invoiceShare: {
+        publicUrl: "https://qs.example.com",
+        roots: [root],
+        email: { senderName },
+      },
+      invoiceEmailNotifier: {
+        assertReady: () => undefined,
+        sendMessage: async (message) => {
+          sent.push(message);
+          return { messageId: `ses-${sent.length}` };
+        },
+      },
+    });
+    const response = await invalidSenderApp.request(`/v1/invoices/${invoiceId}/share-links/email`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        document_path: pdfPath,
+        recipient_id: recipientId,
+        idempotency_key: "540ae2c1-4a32-4e75-a7fe-dbc1b3d6a81c",
+      }),
+    });
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ error: "not_configured" });
+    expect(sent).toHaveLength(0);
+    expect(db.prepare("SELECT COUNT(*) FROM invoice_share_tokens").pluck().get()).toBe(0);
+    expect(db.prepare("SELECT COUNT(*) FROM invoice_share_deliveries").pluck().get()).toBe(0);
+  });
+
   // notifier 未注入の buildApp が実 SES クライアントへ落ちると、テストが開発機の
   // 資格情報で fixture 宛に実メールを送りうる。 未注入は送信到達前に 503 で閉じる。
   it("notifier 未注入なら実SESへ fallback せず 503 not_configured を返す", async () => {
@@ -104,7 +149,11 @@ describe("invoice email delivery", () => {
       db,
       receiptsRoot: join(root, "receipts"),
       ocr: "disabled",
-      invoiceShare: { publicUrl: "https://qs.example.com", roots: [root] },
+      invoiceShare: {
+        publicUrl: "https://qs.example.com",
+        roots: [root],
+        email: { senderName: "Example Sender" },
+      },
     });
     const response = await uninjected.request(`/v1/invoices/${invoiceId}/share-links/email`, {
       method: "POST",

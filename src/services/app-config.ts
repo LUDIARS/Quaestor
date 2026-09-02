@@ -82,6 +82,8 @@ export interface AppConfig {
       region: string | null;
       fromAddress: string | null;
       configurationSet: string | null;
+      /** 請求書メール本文に記す送付者名。 null のままでは請求書メールを送らない。 */
+      senderName: string | null;
     };
     /** 合意証跡への外部タイムスタンプ (RFC 3161)。 enabled=false で打刻しない (status は skipped) */
     timestampAuthority: {
@@ -153,7 +155,7 @@ const DEFAULTS: AppConfig = {
   invoiceShare: {
     publicUrl: null,
     roots: ["data", "app_data/invoices"],
-    email: { region: null, fromAddress: null, configurationSet: null },
+    email: { region: null, fromAddress: null, configurationSet: null, senderName: null },
     timestampAuthority: { url: "https://freetsa.org/tsr", enabled: true },
     localTest: false,
   },
@@ -231,6 +233,7 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
         region:           strOrNull(env("QUAESTOR_SES_REGION"),            fromFile?.invoiceShare?.email?.region),
         fromAddress:      strOrNull(env("QUAESTOR_SES_FROM_ADDRESS"),      fromFile?.invoiceShare?.email?.fromAddress),
         configurationSet: strOrNull(env("QUAESTOR_SES_CONFIGURATION_SET"), fromFile?.invoiceShare?.email?.configurationSet),
+        senderName:       strOrNull(env("QUAESTOR_INVOICE_SENDER_NAME"),   fromFile?.invoiceShare?.email?.senderName),
       },
       timestampAuthority: {
         url:     str(env("QUAESTOR_TSA_URL"),      fromFile?.invoiceShare?.timestampAuthority?.url,     DEFAULTS.invoiceShare.timestampAuthority.url),
