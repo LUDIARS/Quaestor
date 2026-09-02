@@ -29,26 +29,44 @@ export function isoToExcelSerial(iso: string): number {
   return Math.round((dt.getTime() - epoch) / 86_400_000);
 }
 
-export async function buildJournalWorkbook(entries: JournalEntry[]): Promise<Buffer> {
-  const wb = new ExcelJS.Workbook();
-  wb.creator = "Quaestor";
-  wb.created = new Date();
-  const ws = wb.addWorksheet("仕訳帳", { properties: { defaultColWidth: 14 } });
+/** 仕訳帳シートに書く 1 行 (JournalEntry / journal_entries どちらからも作れる最小形)。 */
+export interface JournalSheetRow {
+  date: string;
+  no: number;
+  debit_code: number;
+  debit_name: string;
+  debit_amount: number;
+  credit_code: number;
+  credit_name: string;
+  credit_amount: number;
+  description: string;
+  payment: number;
+  rate: number;
+}
 
-  // header (row 6 を見出し、 row 7 からデータ — calc 慣習)
-  ws.getCell("B6").value = "日付";
-  ws.getCell("C6").value = "№";
-  ws.getCell("D6").value = "借方科目コード";
-  ws.getCell("E6").value = "借方勘定科目";
-  ws.getCell("F6").value = "借方金額";
-  ws.getCell("G6").value = "貸方科目コード";
-  ws.getCell("H6").value = "貸方勘定科目";
-  ws.getCell("I6").value = "貸方金額";
-  ws.getCell("J6").value = "摘要";
-  ws.getCell("K6").value = "支払";
-  ws.getCell("L6").value = "按分率";
-  ws.getRow(6).font = { bold: true };
-  ws.getRow(6).alignment = { horizontal: "center" };
+export interface JournalSheetOptions {
+  /** 見出し行。 Quaestor 既定は 6 (データは 7 から)。 エクセル簿記互換は 7 (データは 8 から) */
+  headerRow?: number;
+}
+
+/**
+ * 既存 worksheet に仕訳帳の列構造 (B..L) を書く。 ブック生成側 (単体 export / 簿記ブック) が共用する。
+ */
+export function writeJournalSheet(ws: ExcelJS.Worksheet, entries: JournalSheetRow[], opts: JournalSheetOptions = {}): number {
+  const header = opts.headerRow ?? 6;
+  ws.getCell(`B${header}`).value = "日付";
+  ws.getCell(`C${header}`).value = "№";
+  ws.getCell(`D${header}`).value = "借方科目コード";
+  ws.getCell(`E${header}`).value = "借方勘定科目";
+  ws.getCell(`F${header}`).value = "借方金額";
+  ws.getCell(`G${header}`).value = "貸方科目コード";
+  ws.getCell(`H${header}`).value = "貸方勘定科目";
+  ws.getCell(`I${header}`).value = "貸方金額";
+  ws.getCell(`J${header}`).value = "摘要";
+  ws.getCell(`K${header}`).value = "支払";
+  ws.getCell(`L${header}`).value = "按分率";
+  ws.getRow(header).font = { bold: true };
+  ws.getRow(header).alignment = { horizontal: "center" };
 
   // 日付列 (B) は数値書式
   ws.getColumn("B").numFmt = "yyyy/m/d";
@@ -60,7 +78,7 @@ export async function buildJournalWorkbook(entries: JournalEntry[]): Promise<Buf
   ws.getColumn("E").width = 16;
   ws.getColumn("H").width = 16;
 
-  let row = 7;
+  let row = header + 1;
   for (const e of entries) {
     ws.getCell(`B${row}`).value = isoToExcelSerial(e.date);
     ws.getCell(`C${row}`).value = e.no;
@@ -77,8 +95,16 @@ export async function buildJournalWorkbook(entries: JournalEntry[]): Promise<Buf
   }
 
   // freeze header
-  ws.views = [{ state: "frozen", ySplit: 6 }];
+  ws.views = [{ state: "frozen", ySplit: header }];
+  return row - 1;
+}
 
+export async function buildJournalWorkbook(entries: JournalEntry[]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Quaestor";
+  wb.created = new Date();
+  const ws = wb.addWorksheet("仕訳帳", { properties: { defaultColWidth: 14 } });
+  writeJournalSheet(ws, entries, { headerRow: 6 });
   const arr = await wb.xlsx.writeBuffer();
   return Buffer.from(arr);
 }

@@ -6,7 +6,8 @@ export type FsSection =
   | "bs_liabilities" // 貸借対照表 負債・資本の部
   | "monthly_sales" // 月別売上 (発生主義)
   | "deduction"     // 控除 (医療費 / 国民年金 / 社保 等)
-  | "summary";      // 家計サマリ (収入 / 税金 / 生活費 / 投資 / 貯蓄)
+  | "summary"       // 家計サマリ (収入 / 税金 / 生活費 / 投資 / 貯蓄)
+  | "opening";      // 期首残高 (label = 科目コード、 amount = 残高)。 簿記の精算表 / BS が読む
 
 export type FsSource = "manual" | "imported" | "computed";
 

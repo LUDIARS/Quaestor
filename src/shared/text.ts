@@ -66,12 +66,17 @@ export function parseAmount(s: string | null | undefined): number | null {
   return Math.round(n);
 }
 
-/** 全角英数字 → 半角、 ノーマライズして店名比較しやすく */
+/** 全角 ASCII → 半角、 ノーマライズして店名比較しやすく */
 export function normalizePayee(s: string | null | undefined): string {
   if (!s) return "";
   return s
-    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .replace(/[！-～]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
     .replace(/[　\s]+/g, " ")
     .trim()
     .toUpperCase();
+}
+
+/** 厳密な ISO 暦日 (yyyy-mm-dd) か。Date の月末繰り上がりを許さない。 */
+export function isIsoDate(s: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) && normalizeDate(s) === s;
 }

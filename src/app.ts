@@ -95,6 +95,18 @@ import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.j
 import { invoiceSlackDeliveriesRouter } from "./api/invoice-slack-deliveries.js";
 import { invoiceEmailDeliveriesRouter } from "./api/invoice-email-deliveries.js";
 import { invoiceDeliveryContactsRouter } from "./api/invoice-delivery-contacts.js";
+import { bookkeepingRouter } from "./api/bookkeeping.js";
+import { householdRouter } from "./api/household.js";
+import { apportionmentSheetRouter } from "./api/apportionment-sheet.js";
+import { JournalEntriesRepo } from "./db/journal-entries-repo.js";
+import { HouseholdCategoriesRepo } from "./db/household-categories-repo.js";
+import { HouseholdRulesRepo } from "./db/household-rules-repo.js";
+import { ApportionmentObservationsRepo } from "./db/apportionment-observations-repo.js";
+import { HouseholdClassifier } from "./services/household/household-classifier.js";
+import { JournalLedger } from "./services/bookkeeping/journal-ledger.js";
+import { BookkeepingReports } from "./services/bookkeeping/bookkeeping-reports.js";
+import { JournalImportService } from "./services/bookkeeping/journal-import.js";
+import { ObservationCollector } from "./services/apportionment-sheet/observation-collector.js";
 import { InvoiceSlackDeliveryService } from "./services/invoice-slack-delivery.js";
 import { InvoiceShareAcceptanceService } from "./services/invoice-share-acceptance-service.js";
 import { InvoiceSharePasskeyAcceptanceService } from "./services/invoice-share-passkey-acceptance-service.js";
@@ -232,6 +244,14 @@ export function buildApp(deps: AppDeps): Hono {
   const mailMessages = new MailMessagesRepo(deps.db);
   const inboundDocuments = new InboundDocumentsRepo(deps.db);
   const reconciliations = new ReconciliationsRepo(deps.db);
+  // 家計簿 × 業務仕訳 (spec/plan/2026-09-03-household-bookkeeping-analysis.md)
+  const journalEntries = new JournalEntriesRepo(deps.db);
+  const householdCategories = new HouseholdCategoriesRepo(deps.db);
+  const householdRules = new HouseholdRulesRepo(deps.db);
+  const apportionmentObservations = new ApportionmentObservationsRepo(deps.db);
+  householdCategories.seedMissing();
+  householdRules.seedIfEmpty(householdCategories);
+  const householdClassifier = new HouseholdClassifier(householdRules, householdCategories);
   // OCR 完了 → 投入 → 突合 を人手なしで通す。 取引取込側からも同じ突合 sweep を呼ぶ。
   const receiptIntake = new ReceiptIntake({
     db: deps.db,
@@ -469,6 +489,27 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
+  app.route("/v1/bookkeeping", bookkeepingRouter({
+    accounts,
+    receipts,
+    entries: journalEntries,
+    ledger: new JournalLedger({ db: deps.db, rules, accounts, entries: journalEntries, classifier: householdClassifier }),
+    reports: new BookkeepingReports({ db: deps.db, entries: journalEntries, accounts, fs }),
+    importer: new JournalImportService({ db: deps.db, entries: journalEntries, accounts, observations: apportionmentObservations }),
+    classifier: householdClassifier,
+  }));
+  app.route("/v1/household", householdRouter({
+    analysis: { db: deps.db, rules, classifier: householdClassifier },
+    categories: householdCategories,
+    rules: householdRules,
+    classifier: householdClassifier,
+  }));
+  app.route("/v1/apportionment-sheet", apportionmentSheetRouter({
+    db: deps.db,
+    observations: apportionmentObservations,
+    rules,
+    collector: new ObservationCollector(journalEntries, apportionmentObservations, (txId) => txs.find(txId)?.payee ?? null),
+  }));
   // 公開マジックリンク配下のレート制限と応答ヘッダーは、 複数ルータにまたがるためここで 1 回だけ掛ける。
   // 公開経路は Cloudflare → cloudflared → Quaestor と 3 段を挟むため、 到達したリクエストを
   // 記録する。先に guard を通して、公開入口への大量送信が永続ログの無制限な増加へ直結しない

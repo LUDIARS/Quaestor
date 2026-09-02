@@ -21,6 +21,7 @@
 import type Database from "better-sqlite3";
 import type { TransactionRow } from "../shared/types.js";
 import type { ApportionmentRulesRepo } from "../db/apportionment-rules-repo.js";
+import type { JournalLeg } from "../db/journal-entries-repo.js";
 
 export interface JournalEntry {
   /** 仕訳番号 (連番) */
@@ -40,6 +41,10 @@ export interface JournalEntry {
   rate: number;
   /** 元 transaction id (帳簿外、 trace 用) */
   source_tx_id: string;
+  /** この行が取引のどの脚か (経費 / 家計 = 事業主貸 / 入金)。 永続化と家計費目付与に使う */
+  leg: JournalLeg;
+  /** 元取引の payee (家計費目の解決用、 摘要が固定文言になる家計行でも店名を保つ) */
+  payee: string | null;
 }
 
 export interface AccountCodeMap {
@@ -92,20 +97,20 @@ export function buildJournal(
 
       if (rate >= 1.0) {
         // 100% 経費 1 行
-        out.push(makeEntry(no++, tx, code, expensePart, creditCode, expensePart, tx.payee ?? tx.description, rate, accountName));
+        out.push(makeEntry(no++, tx, code, expensePart, creditCode, expensePart, tx.payee ?? tx.description, rate, accountName, "expense"));
       } else if (rate > 0) {
         // 経費部分
-        out.push(makeEntry(no++, tx, code, expensePart, creditCode, expensePart, tx.payee ?? tx.description, rate, accountName));
+        out.push(makeEntry(no++, tx, code, expensePart, creditCode, expensePart, tx.payee ?? tx.description, rate, accountName, "expense"));
         // 家計部分
-        out.push(makeEntry(no++, tx, 124, householdPart, creditCode, householdPart, "クレカ引き落とし調整", rate, accountName));
+        out.push(makeEntry(no++, tx, 124, householdPart, creditCode, householdPart, "クレカ引き落とし調整", rate, accountName, "household"));
       } else {
         // 家計のみ
-        out.push(makeEntry(no++, tx, 124, tx.amount_out, creditCode, tx.amount_out, "クレカ引き落とし調整", rate, accountName));
+        out.push(makeEntry(no++, tx, 124, tx.amount_out, creditCode, tx.amount_out, "クレカ引き落とし調整", rate, accountName, "household"));
       }
     }
     if (tx.amount_in != null && tx.amount_in > 0) {
       // 銀行入金 → 売上仮置き
-      out.push(makeEntry(no++, tx, defaultCredit, tx.amount_in, 1, tx.amount_in, tx.payee ?? tx.description, 1.0, accountName));
+      out.push(makeEntry(no++, tx, defaultCredit, tx.amount_in, 1, tx.amount_in, tx.payee ?? tx.description, 1.0, accountName, "income"));
     }
   }
 
@@ -122,6 +127,7 @@ function makeEntry(
   desc: string,
   rate: number,
   accountName: (c: number) => string,
+  leg: JournalLeg,
 ): JournalEntry {
   return {
     no,
@@ -136,6 +142,8 @@ function makeEntry(
     payment: tx.amount_out ?? tx.amount_in ?? 0,
     rate,
     source_tx_id: tx.id,
+    leg,
+    payee: tx.payee,
   };
 }
 

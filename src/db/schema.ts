@@ -617,6 +617,81 @@ const STATEMENTS: string[] = [
     fetched_at                 INTEGER NOT NULL,
     updated_at                 INTEGER NOT NULL
   )`,
+
+  // ---- v16: 家計簿 × 業務仕訳 (spec/plan/2026-09-03-household-bookkeeping-analysis.md) ----
+
+  // household_categories — 家計費目 (食費 / 旅行・レジャー / ATM 現金引出 …)。 2 階層。
+  `CREATE TABLE IF NOT EXISTS household_categories (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL UNIQUE,
+    parent_id     INTEGER REFERENCES household_categories(id) ON DELETE SET NULL,
+    display_order INTEGER NOT NULL DEFAULT 0,
+    created_at    INTEGER NOT NULL
+  )`,
+
+  // household_rules — payee pattern → 家計費目。 apportionment_rules と同じ優先順位規則。
+  `CREATE TABLE IF NOT EXISTS household_rules (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pattern     TEXT NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES household_categories(id) ON DELETE CASCADE,
+    priority    INTEGER NOT NULL DEFAULT 100,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    note        TEXT,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_household_rules_priority ON household_rules(enabled, priority)`,
+
+  // journal_entries — 仕訳帳の正本 (エクセル簿記の 仕訳帳 シート B..L 列と同じ意味)。
+  // origin=transaction は取引からの自動生成行で、 rebuild で入れ替わる (locked=1 は保持)。
+  `CREATE TABLE IF NOT EXISTS journal_entries (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    fiscal_year           INTEGER NOT NULL CHECK (fiscal_year BETWEEN 1900 AND 2999),
+    entry_date            TEXT NOT NULL,
+    no                    INTEGER NOT NULL DEFAULT 0,
+    debit_code            INTEGER NOT NULL CHECK (debit_code > 0),
+    debit_amount          INTEGER NOT NULL CHECK (debit_amount >= 0),
+    credit_code           INTEGER NOT NULL CHECK (credit_code > 0),
+    credit_amount         INTEGER NOT NULL CHECK (credit_amount >= 0 AND credit_amount = debit_amount),
+    description           TEXT NOT NULL,
+    payment               INTEGER NOT NULL CHECK (payment >= 0),
+    rate                  REAL NOT NULL DEFAULT 1 CHECK (rate >= 0 AND rate <= 1),
+    origin                TEXT NOT NULL CHECK (origin IN ('transaction','manual','imported')),
+    leg                   TEXT CHECK (leg IN ('expense','household','income')),
+    source_tx_id          TEXT REFERENCES transactions(id) ON DELETE SET NULL,
+    receipt_id            TEXT REFERENCES receipts(id) ON DELETE SET NULL,
+    household_category_id INTEGER REFERENCES household_categories(id) ON DELETE SET NULL,
+    locked                INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0, 1)),
+    created_at            INTEGER NOT NULL,
+    updated_at            INTEGER NOT NULL
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_journal_year_date ON journal_entries(fiscal_year, entry_date, no)`,
+  `CREATE INDEX IF NOT EXISTS idx_journal_debit ON journal_entries(fiscal_year, debit_code)`,
+  `CREATE INDEX IF NOT EXISTS idx_journal_credit ON journal_entries(fiscal_year, credit_code)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uniq_journal_tx_leg
+     ON journal_entries(source_tx_id, leg)
+     WHERE source_tx_id IS NOT NULL AND origin = 'transaction'`,
+
+  // apportionment_observations — 按分シートの素材。 過去帳簿で「この店をどの率・科目で処理したか」の集計。
+  `CREATE TABLE IF NOT EXISTS apportionment_observations (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    fiscal_year  INTEGER NOT NULL CHECK (fiscal_year BETWEEN 1900 AND 2999),
+    payee_norm   TEXT NOT NULL,
+    payee_sample TEXT NOT NULL,
+    rate         REAL NOT NULL CHECK (rate >= 0 AND rate <= 1),
+    code         INTEGER NOT NULL CHECK (code > 0),
+    occurrences  INTEGER NOT NULL DEFAULT 0 CHECK (occurrences >= 0),
+    total_amount INTEGER NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+    first_seen   TEXT,
+    last_seen    TEXT,
+    source       TEXT NOT NULL CHECK (source IN ('journal-xlsx','ledger')),
+    updated_at   INTEGER NOT NULL,
+    UNIQUE (fiscal_year, payee_norm, rate, code, source)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_apportionment_obs_payee ON apportionment_observations(payee_norm, fiscal_year)`,
 ];
 
 export function applyMigrations(db: Database.Database): void {
@@ -701,7 +776,8 @@ export function applyMigrations(db: Database.Database): void {
   // 投入時の (日付-場所-金額) 重複判定用。 payee は JS 側で正規化比較するため
   // ここでは date + total の絞り込みに使う。
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_commit_key ON receipts(date, total) WHERE committed_at IS NOT NULL");
-  db.pragma("user_version = 15");
+  // v16: 家計簿 × 業務仕訳 (journal_entries / household_* / apportionment_observations) — STATEMENTS で作成済
+  db.pragma("user_version = 16");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

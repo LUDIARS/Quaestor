@@ -40,7 +40,13 @@ export function reconciliationsRouter(deps: ReconciliationsApiDeps): Hono {
     const body = await c.req.json().catch(() => null);
     const parsed = CreateSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    const id = deps.repo.insert(parsed.data);
+    let id: number | null;
+    try {
+      id = deps.repo.insert(parsed.data);
+    } catch (error: unknown) {
+      if (isForeignKeyConstraint(error)) return c.json({ error: "invalid_reference" }, 400);
+      throw error;
+    }
     if (id == null) return c.json({ error: "duplicate" }, 409);
     return c.json({ reconciliation: deps.repo.find(id) }, 201);
   });
@@ -88,6 +94,13 @@ export function reconciliationsRouter(deps: ReconciliationsApiDeps): Hono {
   });
 
   return app;
+}
+
+function isForeignKeyConstraint(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "SQLITE_CONSTRAINT_FOREIGNKEY";
 }
 
 function bandFor(score: number): "auto" | "suggest" | "weak" {

@@ -14,10 +14,16 @@ import { StatementProfiles } from "./pages/StatementProfiles.js";
 import { BusinessPlan } from "./pages/BusinessPlan.js";
 import { Subsidies } from "./pages/Subsidies.js";
 import { Settings } from "./pages/Settings.js";
+import { Bookkeeping } from "./pages/Bookkeeping.js";
+import { HouseholdAnalysis } from "./pages/HouseholdAnalysis.js";
+import { ApportionmentSheet } from "./pages/ApportionmentSheet.js";
 
 type Page =
   | "dashboard"
   | "financial"
+  | "bookkeeping"
+  | "household"
+  | "apportionment-sheet"
   | "business-plan"
   | "subsidies"
   | "scan"
@@ -35,6 +41,9 @@ type Page =
 const PAGES: { key: Page; label: string }[] = [
   { key: "dashboard", label: "dashboard" },
   { key: "financial", label: "決算書" },
+  { key: "bookkeeping", label: "簿記" },
+  { key: "household", label: "家計分析" },
+  { key: "apportionment-sheet", label: "按分シート" },
   { key: "business-plan", label: "事業計画" },
   { key: "subsidies", label: "補助金" },
   { key: "scan", label: "scan" },
@@ -80,6 +89,9 @@ export function App() {
       </header>
       {page === "dashboard" && <Dashboard />}
       {page === "financial" && <FinancialStatement />}
+      {page === "bookkeeping" && <Bookkeeping />}
+      {page === "household" && <HouseholdAnalysis />}
+      {page === "apportionment-sheet" && <ApportionmentSheet />}
       {page === "business-plan" && <BusinessPlan />}
       {page === "subsidies" && <Subsidies />}
       {page === "scan" && <Scan />}
