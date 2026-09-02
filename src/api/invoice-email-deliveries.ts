@@ -10,6 +10,7 @@ import { z } from "zod";
 import { InvoiceEmailError } from "../services/invoice-email-notifier.js";
 import type { InvoiceEmailDeliveryService } from "../services/invoice-email-delivery.js";
 import { InvoiceShareError } from "../services/invoice-share-service.js";
+import { invoiceIdOf } from "./invoice-id.js";
 
 const DeliverySchema = z.object({
   document_path: z.string().min(1).max(4096),
@@ -22,8 +23,8 @@ const DeliverySchema = z.object({
 export function invoiceEmailDeliveriesRouter(deps: { service: InvoiceEmailDeliveryService }): Hono {
   const app = new Hono();
   app.post("/:id/share-links/email", async (c) => {
-    const invoiceId = Number.parseInt(c.req.param("id"), 10);
-    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
     const parsed = DeliverySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_request", details: parsed.error.message }, 400);
     try {

@@ -56,6 +56,36 @@ describe("InvoicesRepo", () => {
   });
 });
 
+describe("API: /v1/invoices/:id は十進整数完全一致", () => {
+  it("前方一致・負数・0・十進以外は全発行者ルートで 400、 正整数だけ通す", async () => {
+    const app = buildApp({ db: new Database(":memory:") });
+    for (const bad of ["12abc", "-1", "0", "1.5", "0x10", "1e3", "00000000000000001"]) {
+      expect((await app.request(`/v1/invoices/${bad}`)).status, bad).toBe(400);
+      expect((await app.request(`/v1/invoices/${bad}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      })).status, bad).toBe(400);
+      expect((await app.request(`/v1/invoices/${bad}`, { method: "DELETE" })).status, bad).toBe(400);
+      const email = await app.request(`/v1/invoices/${bad}/share-links/email`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(email.status, bad).toBe(400);
+      expect((await email.json() as { error: string }).error).toBe("invalid_id");
+      const slack = await app.request(`/v1/invoices/${bad}/share-links/slack`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(slack.status, bad).toBe(400);
+      expect((await slack.json() as { error: string }).error).toBe("invalid_id");
+    }
+    expect((await app.request("/v1/invoices/123")).status).toBe(404);
+  });
+});
+
 describe("API: /v1/invoices + /v1/dashboard", () => {
   let app: ReturnType<typeof buildApp>;
 

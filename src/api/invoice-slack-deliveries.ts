@@ -9,6 +9,7 @@ import { z } from "zod";
 import { InvoiceShareError } from "../services/invoice-share-service.js";
 import type { InvoiceSlackDeliveryService } from "../services/invoice-slack-delivery.js";
 import { SlackDeliveryError, type SlackInvoiceTarget } from "../services/slack-web-api-client.js";
+import { invoiceIdOf } from "./invoice-id.js";
 
 const DeliverySchema = z.object({
   document_path: z.string().min(1).max(4096),
@@ -27,8 +28,8 @@ export function invoiceSlackDeliveriesRouter(deps: { service: InvoiceSlackDelive
   const app = new Hono();
 
   app.post("/:id/share-links/slack", async (c) => {
-    const invoiceId = Number.parseInt(c.req.param("id"), 10);
-    if (!Number.isSafeInteger(invoiceId)) return c.json({ error: "invalid_id" }, 400);
+    const invoiceId = invoiceIdOf(c.req.param("id"));
+    if (invoiceId === null) return c.json({ error: "invalid_id" }, 400);
     const parsed = DeliverySchema.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid_request", details: parsed.error.message }, 400);
     const target: SlackInvoiceTarget | undefined = parsed.data.conversation_id

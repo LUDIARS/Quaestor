@@ -41,6 +41,7 @@ import {
   isPasskeyPhaseRequest,
   readJsonBody,
 } from "./invoice-share-accept-phases.js";
+import { invoiceIdOf } from "./invoice-id.js";
 
 const DEFAULT_ACCESS_LOG_LIMIT = 100;
 const MAX_ACCESS_LOG_LIMIT = 500;
@@ -257,12 +258,6 @@ function publicAcceptanceView(acceptance: InvoiceShareAcceptanceRow): Record<str
   return { ...rest, timestamp_token_present: timestamp_token !== null && timestamp_token !== undefined };
 }
 
-/** `:id` は 10 進の正整数だけを受ける。 `Number.parseInt` の前方一致 ("12abc" → 12) を避ける。 */
-function invoiceIdOf(raw: string): number | null {
-  if (!/^[0-9]{1,15}$/.test(raw)) return null;
-  const id = Number(raw);
-  return Number.isSafeInteger(id) && id > 0 ? id : null;
-}
 
 function accessMetadata(c: Context): {
   clientAddress: string;

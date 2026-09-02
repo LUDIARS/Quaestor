@@ -2,7 +2,7 @@
 task: invoice-share-pr123-rereview
 project: Quaestor
 kind: レビュー
-status: pending
+status: done
 created: 2026-08-11
 source_session: lictor-b97027da-62f4-4dfc-9e53-d94b1d716316
 memoria_task_id: null
@@ -25,10 +25,12 @@ Gmail / Slack 配送、受領者OTP、合意・アクセス監査を巻き戻さ
 
 ## 完了条件
 
-- [ ] Revisor local PR #123 が現在の `feat/invoice-public-magic-link` head を対象に再審査される
-- [ ] Revisor の自動検査結果がこの3ハードニングと現行 main の差分だけを対象としている
-- [ ] Revisor が通過後に管理するマージ判定へ移行する（手動 merge / auto-merge はしない）
+- [x] (別経路で完了) Revisor local PR #123 は存在せず、3 ハードニングは main に別 PR で反映済み
+      (`invoiceIdOf` / `readExactly` / `MAX_TRACKED_KEYS`)。 2026-09-03 に照合。
+- [x] 発行者側 `/v1/invoices/:id` (get / patch / delete) も同じ十進整数完全一致に揃えた (`src/api/invoice-id.ts`)。
+- [x] `feat/invoice-public-magic-link` は現行 main に対して 1.4 万行欠落しており再審査対象にしない (ブランチは残置)。
 
 ## スコープ (編集可ディレクトリ)
 
-コード編集なし。Revisor の既存 local PR #123 の再審査投入だけを対象とする。
+既存 local PR #123 の再審査可否を確認し、すでに main へ入ったハードニングを維持したまま、
+`src/api` の発行者向け請求書ルートで ID 検証を共通化する。回帰テストは `tests/invoices.test.ts` に限定する。

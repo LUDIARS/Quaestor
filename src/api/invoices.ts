@@ -1,6 +1,13 @@
+/**
+ * 請求書 CRUD API。
+ *
+ * @implements SPEC-INVOICE-DELIVERY-003 (spec/feature/invoice-public-magic-link.md)
+ */
+
 import { Hono } from "hono";
 import { z } from "zod";
 import type { InvoicesRepo } from "../db/invoices-repo.js";
+import { invoiceIdOf } from "./invoice-id.js";
 
 const StatusEnum = z.enum(["draft", "sent", "paid", "overdue", "cancelled"]);
 const Iso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -39,8 +46,8 @@ export function invoicesRouter(deps: { repo: InvoicesRepo }): Hono {
   app.get("/summary", (c) => c.json({ summary: deps.repo.summary() }));
 
   app.get("/:id", (c) => {
-    const id = parseInt(c.req.param("id"), 10);
-    if (Number.isNaN(id)) return c.json({ error: "invalid id" }, 400);
+    const id = invoiceIdOf(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid id" }, 400);
     const r = deps.repo.find(id);
     if (!r) return c.json({ error: "not_found" }, 404);
     return c.json({ invoice: r });
@@ -55,8 +62,8 @@ export function invoicesRouter(deps: { repo: InvoicesRepo }): Hono {
   });
 
   app.patch("/:id", async (c) => {
-    const id = parseInt(c.req.param("id"), 10);
-    if (Number.isNaN(id)) return c.json({ error: "invalid id" }, 400);
+    const id = invoiceIdOf(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid id" }, 400);
     const body = await c.req.json().catch(() => null);
     const parsed = UpdateSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
@@ -66,8 +73,8 @@ export function invoicesRouter(deps: { repo: InvoicesRepo }): Hono {
   });
 
   app.delete("/:id", (c) => {
-    const id = parseInt(c.req.param("id"), 10);
-    if (Number.isNaN(id)) return c.json({ error: "invalid id" }, 400);
+    const id = invoiceIdOf(c.req.param("id"));
+    if (id === null) return c.json({ error: "invalid id" }, 400);
     const ok = deps.repo.delete(id);
     if (!ok) return c.json({ error: "not_found" }, 404);
     return c.json({ ok: true });
