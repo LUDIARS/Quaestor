@@ -15,8 +15,12 @@ PaddleOCR は 2.x (PP-OCRv4, det_db_* / .ocr) と 3.x (PP-OCRv5, text_det_* / .p
 の両 API に対応する (インストールされた版を自動判別)。
 
 起動: uvicorn main:app --host 127.0.0.1 --port 17350
+      python main.py --device gpu --port 17351   (GA バッチ用の 2 本目、README「GPU」参照)
 依存: requirements.txt 参照。初回起動時にモデルを自動 DL する (~数十MB)。
 言語は QUAESTOR_OCR_LANG (supervisor が quaestor.config.json から起動時注入。既定 japan)。
+device は QUAESTOR_OCR_DEVICE / QS_OCR_DEVICE (cpu | gpu、既定 cpu)。gpu は paddle の GPU 初期化を
+試し、使えなければ CPU に落として /health の device / device_error で見えるようにする
+(spec/feature/ocr-ga-evaluation.md SPEC-OCR-GA-EVAL-005)。運用の常駐 sidecar は CPU のまま。
 """
 
 from __future__ import annotations
@@ -42,6 +46,70 @@ app.add_middleware(
 )
 
 _LANG = os.environ.get("QUAESTOR_OCR_LANG", "japan")
+
+# 実行 device。QS_OCR_DEVICE=gpu (または `python main.py --device gpu`) で GPU を試み、
+# 使えなければ CPU に落として理由を /health に出す (黙って劣化しない)。
+# 運用の常駐 sidecar は supervisor が device を渡さないので cpu のまま。
+_DEVICE_ENV_KEYS = ("QS_OCR_DEVICE", "QUAESTOR_OCR_DEVICE")
+_DEVICE_STATE: dict[str, Optional[str]] = {"requested": None, "actual": None, "error": None}
+
+
+def _device_error_summary(error: Exception) -> str:
+    """GPU 初期化失敗を、ローカル path 等を公開せず診断可能な分類にする。"""
+    message = str(error).lower()
+    if "cpu build" in message:
+        return "paddlepaddle is a CPU build (install paddlepaddle-gpu, see README)"
+    if "no cuda device" in message:
+        return "no CUDA device visible"
+    if "no kernel image" in message:
+        return "CUDA error: no kernel image is available for this device"
+    if "invalid ptx" in message:
+        return "CUDA error: invalid PTX"
+    return f"{type(error).__name__}: GPU initialization failed"
+
+
+def _requested_device() -> str:
+    for key in _DEVICE_ENV_KEYS:
+        v = os.environ.get(key)
+        if v:
+            return v.strip().lower()
+    return "cpu"
+
+
+def _resolve_device() -> str:
+    """要求 device を実際に使える device に解決する (最初の 1 回だけ試し、結果を保持)。"""
+    if _DEVICE_STATE["actual"]:
+        return _DEVICE_STATE["actual"]
+    requested = _requested_device()
+    _DEVICE_STATE["requested"] = requested
+    actual = "cpu"
+    if requested == "gpu":
+        try:
+            import paddle  # 遅延 import (起動を軽くする)
+            if not paddle.is_compiled_with_cuda():
+                raise RuntimeError("paddlepaddle is a CPU build (install paddlepaddle-gpu, see README)")
+            if paddle.device.cuda.device_count() < 1:
+                raise RuntimeError("no CUDA device visible")
+            paddle.device.set_device("gpu:0")
+            # カーネル読込をここで起こす。PTX 不一致 (古い GPU × 新しい CUDA) はこの matmul で表面化する
+            paddle.matmul(paddle.ones([2, 2]), paddle.ones([2, 2]))
+            actual = "gpu"
+        except Exception as e:  # noqa: BLE001
+            _DEVICE_STATE["error"] = _device_error_summary(e)
+            try:
+                import paddle
+                paddle.device.set_device("cpu")
+            except Exception:  # noqa: BLE001
+                pass  # paddle 自体が import できない環境。CPU パスで後段が失敗すれば /detect が 500 で見える
+            print(
+                f"[ocr-sidecar] gpu requested but unavailable, falling back to cpu: {_DEVICE_STATE['error']}",
+                flush=True,
+            )
+    elif requested != "cpu":
+        _DEVICE_STATE["error"] = f"unknown device '{requested}', using cpu"
+    _DEVICE_STATE["actual"] = actual
+    return actual
+
 
 # det/rec パラメータ (遺伝子) ごとに PaddleOCR インスタンスをキャッシュ。
 # モデル重みは内部で共有されるため、複数パラメータの並存は概ね許容範囲。
@@ -76,6 +144,7 @@ def _genome_key(g: dict) -> tuple:
 
 def _make_ocr(key: tuple) -> Any:
     from paddleocr import PaddleOCR  # 遅延 import (起動を軽くする)
+    device = _resolve_device()
     if _paddleocr_major() >= 3:
         # 3.x (PP-OCRv5): パラメータ名が text_det_* / text_rec_* に変更。
         # useDilation 相当は廃止されたため無視する (遺伝子としては no-op)。
@@ -83,7 +152,7 @@ def _make_ocr(key: tuple) -> Any:
         # "ConvertPirAttribute2RuntimeAttribute not support" クラッシュを回避。
         return PaddleOCR(
             lang=_LANG,
-            device="cpu",
+            device=device,
             enable_mkldnn=False,
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
@@ -98,6 +167,7 @@ def _make_ocr(key: tuple) -> Any:
     # 2.x (PP-OCRv4 以前)
     return PaddleOCR(
         use_angle_cls=True,
+        use_gpu=(device == "gpu"),
         lang=_LANG,
         show_log=False,
         det_db_thresh=key[0],
@@ -180,7 +250,16 @@ def _lines_v2(result: Any) -> list[dict]:
 def health() -> dict:
     major = _paddleocr_major()
     model = f"PP-OCRv5/{_LANG}" if major >= 3 else f"PP-OCRv4/{_LANG}"
-    return {"ok": True, "model": model, "paddleocr_major": major, "cached_genomes": len(_OCR_CACHE)}
+    device = _resolve_device()
+    return {
+        "ok": True,
+        "model": model,
+        "paddleocr_major": major,
+        "cached_genomes": len(_OCR_CACHE),
+        "device": device,
+        "requested_device": _DEVICE_STATE["requested"],
+        "device_error": _DEVICE_STATE["error"],
+    }
 
 
 @app.post("/detect")
@@ -208,3 +287,21 @@ async def detect(image: UploadFile = File(...), genome: Optional[str] = Form(def
         lines = _lines_v2(inst.ocr(arr, cls=True))
 
     return {"lines": lines, "width": pil.width, "height": pil.height, "genome": g}
+
+
+if __name__ == "__main__":
+    # GA バッチ用の 2 本目 (別 port、GPU) を手で立てるための入口。
+    # 運用の常駐 sidecar は supervisor が `python -m uvicorn main:app` で起動する (device は env)。
+    import argparse
+
+    import uvicorn
+
+    parser = argparse.ArgumentParser(description="Quaestor OCR sidecar")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=17350)
+    parser.add_argument("--device", choices=["cpu", "gpu"], default=None,
+                        help="cpu | gpu (既定: QS_OCR_DEVICE / QUAESTOR_OCR_DEVICE、無ければ cpu)")
+    cli = parser.parse_args()
+    if cli.device:
+        os.environ["QS_OCR_DEVICE"] = cli.device  # _resolve_device は最初の OCR / health で env を読む
+    uvicorn.run(app, host=cli.host, port=cli.port)

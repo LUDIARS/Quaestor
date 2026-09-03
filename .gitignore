@@ -58,3 +58,6 @@ coverage/
 
 # Anatomia のローカル状態 (ドメイン定義の正本は spec/domains/)
 .anatomia/
+
+# 一時 DB / ga:bench スモーク出力 (tmp/ga-smoke 等)
+tmp/

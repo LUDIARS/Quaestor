@@ -38,30 +38,31 @@ export class ReceiptStorage {
     const dir = join(this.root, yyyy, mm);
     mkdirSync(dir, { recursive: true });
     const filename = `${id}.${ext}`;
-    const abs = resolve(dir, filename);
+    const relativePath = join(yyyy, mm, filename);
+    const abs = this.resolveWithinRoot(relativePath);
+    if (!abs) throw new Error("receipt path must stay within the configured storage root");
     writeFileSync(abs, buf);
-    const rel = join(yyyy, mm, filename).replaceAll("\\", "/");
+    const rel = relativePath.replaceAll("\\", "/");
     return { relativePath: rel, absolutePath: abs, size: buf.length };
   }
 
   /** relativePath から Buffer を読む。 ファイル無しなら null */
   load(relativePath: string): Buffer | null {
-    let abs: string;
-    try {
-      abs = this.resolve(relativePath);
-    } catch {
-      return null;
-    }
+    const abs = this.resolveWithinRoot(relativePath);
+    if (!abs) return null;
     if (!existsSync(abs)) return null;
     return readFileSync(abs);
   }
 
   resolve(relativePath: string): string {
-    const absolutePath = resolve(this.root, relativePath);
-    const pathFromRoot = relative(this.root, absolutePath);
-    if (pathFromRoot === ".." || pathFromRoot.startsWith(`..${sep}`) || isAbsolute(pathFromRoot)) {
-      throw new Error("receipt image path escapes storage root");
-    }
-    return absolutePath;
+    const abs = this.resolveWithinRoot(relativePath);
+    if (!abs) throw new Error("receipt image path escapes storage root");
+    return abs;
+  }
+
+  private resolveWithinRoot(relativePath: string): string | null {
+    const abs = resolve(this.root, relativePath);
+    const rel = relative(this.root, abs);
+    return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`) ? abs : null;
   }
 }

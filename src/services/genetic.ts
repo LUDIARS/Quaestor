@@ -11,8 +11,9 @@
  * fitness の計算 (評価) は呼び出し側の責務。本モジュールは「探索の骨格」のみ。
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync, existsSync, appendFileSync, readdirSync, renameSync, unlinkSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
+import { acquireExclusiveFileLock } from "./exclusive-file-lock.js";
 
 /** 遺伝子 1 個の宣言 */
 export type GeneSpec =
@@ -125,6 +126,11 @@ export interface GaStoreState<G extends Genome> {
   generation: number;
   population: G[];
   history: Array<{ generation: number; bestFitness: number; bestGenome: G }>;
+  /**
+   * best が baseline を下回った世代の連続回数 (再 seed ガード用)。
+   * 旧形式の JSON には無いので省略可 (= 0 扱い)。
+   */
+  belowBaselineStreak?: number;
 }
 
 export interface GaStoreOptions<G extends Genome> {
@@ -137,10 +143,47 @@ export interface GaStoreOptions<G extends Genome> {
   seed?: () => G[];
   /**
    * 学習ログ (JSONL)。指定すると recordGeneration ごとに 1 行追記する:
-   * { ts, key, generation, evaluated, bestFitness, meanFitness, worstFitness, bestGenome }
+   * { ts, key, generation, evaluated, bestFitness, meanFitness, worstFitness, bestGenome,
+   *   baselineFitness, reseeded }
    * 進化が効いているか (fitness の推移) を後から追うための永続ログ。
    */
   logFile?: string;
+  /**
+   * 再 seed ガード: recordGeneration に baselineFitness が渡され、best がそれを下回る世代が
+   * この回数連続したら、次世代を交叉/変異で作らず seed() で作り直す (探索の迷子を切る)。
+   * 0 / 未指定で無効。
+   */
+  reseedAfterBelowBaseline?: number;
+}
+
+/** recordGeneration の追加情報 */
+export interface RecordGenerationOptions {
+  /** 同じコーパスで既定遺伝子を採点した fitness。再 seed ガードの比較対象 */
+  baselineFitness?: number;
+  /** 評価を始めた時点の世代。現在値と違えば stale な評価として拒否する */
+  expectedGeneration?: number;
+}
+
+export class StaleGaGenerationError extends Error {
+  constructor(readonly key: string, readonly expected: number, readonly actual: number) {
+    super(`stale GA generation for ${key}: expected ${expected}, current ${actual}`);
+    this.name = "StaleGaGenerationError";
+  }
+}
+
+export interface RecordGenerationResult<G extends Genome> {
+  generation: number;
+  best: Evaluated<G> | null;
+  /** 再 seed ガードが発動し、次世代を seed() で作り直したか */
+  reseeded: boolean;
+}
+
+/** history から引いた「その key の歴代最良」 */
+export interface GaBest<G extends Genome> {
+  key: string;
+  generation: number;
+  fitness: number;
+  genome: G;
 }
 
 export class GaStore<G extends Genome> {
@@ -151,6 +194,7 @@ export class GaStore<G extends Genome> {
   private readonly mutationRate: number;
   private readonly seed: () => G[];
   private readonly logFile: string | null;
+  private readonly reseedAfterBelowBaseline: number;
 
   constructor(opts: GaStoreOptions<G>) {
     this.root = resolve(opts.root);
@@ -160,6 +204,7 @@ export class GaStore<G extends Genome> {
     this.mutationRate = opts.mutationRate ?? 0.3;
     this.seed = opts.seed ?? (() => Array.from({ length: this.size }, () => randomGenome<G>(this.schema)));
     this.logFile = opts.logFile ? resolve(opts.logFile) : null;
+    this.reseedAfterBelowBaseline = opts.reseedAfterBelowBaseline ?? 0;
     mkdirSync(this.root, { recursive: true });
   }
 
@@ -168,25 +213,104 @@ export class GaStore<G extends Genome> {
   }
 
   population(key = "global"): { key: string; generation: number; genomes: G[] } {
-    const st = this.load(key);
-    return { key: st.key, generation: st.generation, genomes: st.population };
+    const release = this.acquireStoreLock();
+    try {
+      const st = this.load(key);
+      return { key: st.key, generation: st.generation, genomes: st.population };
+    } finally {
+      release();
+    }
   }
 
-  recordGeneration(key: string, evaluated: Evaluated<G>[]): { generation: number; best: Evaluated<G> | null } {
-    const st = this.load(key);
-    const best = evaluated.length > 0 ? [...evaluated].sort((a, b) => b.fitness - a.fitness)[0]! : null;
+  /** key の集団ファイルが既にあるか (population() と違い、無くても seed しない) */
+  has(key: string): boolean {
+    return existsSync(this.path(key));
+  }
 
-    st.population = nextGeneration(this.schema, evaluated, {
-      size: this.size, elite: this.elite, mutationRate: this.mutationRate,
-    });
-    st.generation += 1;
-    if (best) {
-      st.history.push({ generation: st.generation, bestFitness: round3(best.fitness), bestGenome: best.genome });
-      if (st.history.length > 200) st.history = st.history.slice(-200);
+  /** 永続済の集団 key 一覧 (ファイル内の key を返す) */
+  keys(): string[] {
+    const release = this.acquireStoreLock();
+    try {
+      if (!existsSync(this.root)) return [];
+      const keys: string[] = [];
+      for (const f of readdirSync(this.root)) {
+        if (!f.endsWith(".json")) continue;
+        try {
+          const st = JSON.parse(readFileSync(join(this.root, f), "utf8")) as Partial<GaStoreState<G>>;
+          if (typeof st.key === "string") keys.push(st.key);
+        } catch { /* 壊れたファイルは一覧に出さない (population() が再 seed する) */ }
+      }
+      return keys.sort();
+    } finally {
+      release();
     }
-    this.save(st);
-    this.appendEvolutionLog(st, evaluated, best);
-    return { generation: st.generation, best };
+  }
+
+  /**
+   * key の歴代最良 (history 中の最大 bestFitness)。集団ファイルが無い / 1 世代も
+   * 記録が無ければ null (呼び出し側が global / 既定値へフォールバックする)。
+   */
+  best(key: string): GaBest<G> | null {
+    if (!this.has(key)) return null;
+    const release = this.acquireStoreLock();
+    try {
+      const st = this.load(key);
+      let top: GaStoreState<G>["history"][number] | null = null;
+      for (const h of st.history) {
+        if (!top || h.bestFitness > top.bestFitness) top = h;
+      }
+      return top ? { key: st.key, generation: top.generation, fitness: top.bestFitness, genome: top.bestGenome } : null;
+    } finally {
+      release();
+    }
+  }
+
+  recordGeneration(
+    key: string,
+    evaluated: Evaluated<G>[],
+    opts: RecordGenerationOptions = {},
+  ): RecordGenerationResult<G> {
+    const release = this.acquireStoreLock();
+    try {
+      const st = this.load(key);
+      if (opts.expectedGeneration != null && st.generation !== opts.expectedGeneration) {
+        throw new StaleGaGenerationError(key, opts.expectedGeneration, st.generation);
+      }
+      const best = evaluated.length > 0 ? [...evaluated].sort((a, b) => b.fitness - a.fitness)[0]! : null;
+
+      const reseeded = this.updateBelowBaselineStreak(st, best, opts.baselineFitness);
+      st.population = reseeded
+        ? this.seed().slice(0, this.size)
+        : nextGeneration(this.schema, evaluated, {
+          size: this.size, elite: this.elite, mutationRate: this.mutationRate,
+        });
+      st.generation += 1;
+      if (best) {
+        st.history.push({ generation: st.generation, bestFitness: round3(best.fitness), bestGenome: best.genome });
+        if (st.history.length > 200) st.history = st.history.slice(-200);
+      }
+      this.save(st);
+      this.appendEvolutionLog(st, evaluated, best, opts.baselineFitness, reseeded);
+      return { generation: st.generation, best, reseeded };
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * 再 seed ガードの連続カウンタを更新し、閾値到達なら true (= この世代は seed で作り直す)。
+   * baseline 未指定の呼び出し (撮影時評価など) はカウンタを動かさない。
+   */
+  private updateBelowBaselineStreak(
+    st: GaStoreState<G>,
+    best: Evaluated<G> | null,
+    baselineFitness: number | undefined,
+  ): boolean {
+    if (this.reseedAfterBelowBaseline <= 0 || baselineFitness == null || !best) return false;
+    st.belowBaselineStreak = best.fitness < baselineFitness ? (st.belowBaselineStreak ?? 0) + 1 : 0;
+    if (st.belowBaselineStreak < this.reseedAfterBelowBaseline) return false;
+    st.belowBaselineStreak = 0;
+    return true;
   }
 
   /** 学習ログ (JSONL) に 1 世代分を追記。ログ失敗で本処理は止めない。 */
@@ -194,6 +318,8 @@ export class GaStore<G extends Genome> {
     st: GaStoreState<G>,
     evaluated: Evaluated<G>[],
     best: Evaluated<G> | null,
+    baselineFitness: number | undefined,
+    reseeded: boolean,
   ): void {
     if (!this.logFile) return;
     const fits = evaluated.map((e) => e.fitness);
@@ -207,17 +333,19 @@ export class GaStore<G extends Genome> {
       meanFitness:  fits.length > 0 ? round3(sum / fits.length) : null,
       worstFitness: fits.length > 0 ? round3(Math.min(...fits)) : null,
       bestGenome: best?.genome ?? null,
+      baselineFitness: baselineFitness != null ? round3(baselineFitness) : null,
+      reseeded,
     };
     try {
       mkdirSync(dirname(this.logFile), { recursive: true });
       appendFileSync(this.logFile, `${JSON.stringify(rec)}\n`, "utf8");
-    } catch { /* ignore */ }
+    } catch { /* 学習ログは観測用。書けなくても世代更新は成立させる (best-effort) */ }
   }
 
   private load(key: string): GaStoreState<G> {
     const p = this.path(key);
     if (existsSync(p)) {
-      try { return JSON.parse(readFileSync(p, "utf8")) as GaStoreState<G>; } catch { /* reseed */ }
+      try { return JSON.parse(readFileSync(p, "utf8")) as GaStoreState<G>; } catch { /* 壊れた集団は下で再 seed する */ }
     }
     const st: GaStoreState<G> = { key, generation: 0, population: this.seed().slice(0, this.size), history: [] };
     this.save(st);
@@ -225,7 +353,20 @@ export class GaStore<G extends Genome> {
   }
 
   private save(st: GaStoreState<G>): void {
-    writeFileSync(this.path(st.key), JSON.stringify(st, null, 2), "utf8");
+    const target = this.path(st.key);
+    const temporary = `${target}.${process.pid}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(st, null, 2), "utf8");
+      renameSync(temporary, target);
+    } finally {
+      if (existsSync(temporary)) {
+        try { unlinkSync(temporary); } catch { /* failed atomic-save cleanup */ }
+      }
+    }
+  }
+
+  private acquireStoreLock(): () => void {
+    return acquireExclusiveFileLock(join(this.root, ".ga-store.lock"));
   }
 }
 

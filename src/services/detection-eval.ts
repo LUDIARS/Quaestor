@@ -68,7 +68,7 @@ export function computeDetectionDiff(
   ));
 
   // items: 真値の各品目を最も近い検出 item-* に対応付ける
-  const refItems = parseItems(reference.items);
+  const refItems = parseReferenceItems(reference.items);
   const detItems = [...byLabel.entries()]
     .filter(([k]) => k.startsWith("item-"))
     .map(([, v]) => v);
@@ -108,7 +108,11 @@ function compareField(
   };
 }
 
-function parseItems(json: string | null): string[] {
+/**
+ * 真値 items (JSON `[{name, price}]` or `["name", ...]`) から品目名を取り出す。
+ * 壊れた JSON は空 (真値なし扱い)。OCR-GA fitness (ocr-ga-fitness.ts) と共用。
+ */
+export function parseReferenceItems(json: string | null, max = 10): string[] {
   if (!json) return [];
   try {
     const arr = JSON.parse(json) as Array<unknown>;
@@ -118,7 +122,7 @@ function parseItems(json: string | null): string[] {
         ? (it as { name: string }).name
         : typeof it === "string" ? it : ""))
       .filter((s) => s !== "")
-      .slice(0, 10);
+      .slice(0, max);
   } catch { return []; }
 }
 

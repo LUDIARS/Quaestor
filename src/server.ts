@@ -22,7 +22,10 @@ import { OcrWorker } from "./services/ocr-worker.js";
 import { ReceiptIntake } from "./services/receipt-intake.js";
 import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
 import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
-import { assertLocalTestAllowed, loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
+import { HttpOcrSidecarClient } from "./services/ocr-sidecar-client.js";
+import { GaBenchNightlyJob } from "./services/ocr-ga-bench/nightly-job.js";
+import { runGaBench } from "./services/ocr-ga-bench/bench-runner.js";
+import { assertLocalTestAllowed, gaBenchSidecarUrlOf, loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
 import { SecretStore } from "./services/secret-store.js";
 import { NotificationWorker } from "./services/notification-worker.js";
 import { SubsidyCrawlWorker } from "./services/subsidy-crawl-worker.js";
@@ -152,6 +155,34 @@ if (config.ocrSidecar.manage && !config.ocrSidecar.externalUrl) {
   ocrSidecar.start();
 }
 
+// OCR-GA 夜間評価バッチ (ラベル別コーパスで 1 周 = 1 世代)。training.gaBench.enabled の時のみ
+// (既定 off、手動は `npm run ga:bench`)。ocrWorker と同じくここで起動し shutdown で止める。
+// sidecar 不達 / device 不一致は run 時に warn を出して翌日へ回す (プロセスは落とさない)。
+let gaBenchJob: GaBenchNightlyJob | null = null;
+if (config.training.gaBench.enabled) {
+  const bench = config.training.gaBench;
+  const benchSidecarUrl = gaBenchSidecarUrlOf(config);
+  gaBenchJob = new GaBenchNightlyJob({
+    hour: bench.hour,
+    logger: log,
+    run: () => runGaBench({
+      db,
+      storage: new ReceiptStorage(RECEIPTS_ROOT),
+      gaRoot: config.training.gaRoot,
+      sidecar: new HttpOcrSidecarClient({ baseUrl: benchSidecarUrl }),
+      generations: bench.generationsPerNight,
+      costPerSecond: bench.costPerSecond,
+      expectedDevice: bench.device,
+      logger: log,
+    }),
+  });
+  gaBenchJob.start();
+  log.info(
+    { hour: bench.hour, generationsPerNight: bench.generationsPerNight, sidecarUrl: benchSidecarUrl, device: bench.device },
+    "ga bench nightly job started",
+  );
+}
+
 // 補助金定期クロールワーカー: subsidyCrawl.enabled の時のみ起動
 let subsidyCrawlWorker: SubsidyCrawlWorker | null = null;
 if (config.subsidyCrawl.enabled) {
@@ -204,6 +235,7 @@ const shutdown = (signal: string) => {
   for (const cleanup of appCleanups.splice(0)) cleanup();
   ocrWorker?.stop();
   ocrSidecar?.stop();
+  gaBenchJob?.stop();
   notificationWorker?.stop();
   subsidyCrawlWorker?.stop();
   db.close();

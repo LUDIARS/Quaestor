@@ -6,6 +6,7 @@ import {
   randomGenome, mutate, crossover, nextGeneration, GaStore,
   type GenomeSchema, type Genome,
 } from "../src/services/genetic.js";
+import { acquireExclusiveFileLock } from "../src/services/exclusive-file-lock.js";
 import { createOcrGaStore, defaultOcrGenome, OCR_GENE_SCHEMA, type OcrGenome } from "../src/services/ocr-ga.js";
 
 const SCHEMA: GenomeSchema = {
@@ -123,6 +124,80 @@ describe("GaStore 永続", () => {
     const p = store.population("global");
     store.recordGeneration("global", p.genomes.map((genome) => ({ genome, fitness: 0.5 })));
     expect(existsSync(join(root, "n", "evolution.jsonl"))).toBe(false);
+  });
+
+  it("has / keys / best: 集団ファイルの有無と歴代最良", () => {
+    const store = new GaStore<Genome>({ root: join(root, "b"), schema: SCHEMA, size: 3 });
+    expect(store.has("global")).toBe(false);
+    expect(store.best("global")).toBeNull();
+    const p = store.population("global");
+    expect(store.has("global")).toBe(true);
+    expect(store.best("global")).toBeNull(); // seed しただけでは記録なし
+    store.recordGeneration("global", [{ genome: p.genomes[0]!, fitness: 0.4 }]);
+    store.recordGeneration("global", [{ genome: p.genomes[1]!, fitness: 0.9 }]);
+    store.recordGeneration("global", [{ genome: p.genomes[2]!, fitness: 0.6 }]);
+    expect(store.best("global")).toEqual({ key: "global", generation: 2, fitness: 0.9, genome: p.genomes[1] });
+    store.population("tag:long");
+    expect(store.keys()).toEqual(["global", "tag:long"]);
+  });
+
+  it("exclusive file lock は同じ永続先の同時更新を拒否し、release 後は再取得できる", () => {
+    const lockPath = join(root, "locks", "store.lock");
+    const release = acquireExclusiveFileLock(lockPath);
+    expect(() => acquireExclusiveFileLock(lockPath)).toThrow(/locked by another process/);
+    release();
+    const reacquired = acquireExclusiveFileLock(lockPath);
+    reacquired();
+  });
+
+  it("recordGeneration は評価開始後に世代が変わった stale update を拒否する", () => {
+    const path = join(root, "cas");
+    const first = new GaStore<Genome>({ root: path, schema: SCHEMA, size: 3 });
+    const second = new GaStore<Genome>({ root: path, schema: SCHEMA, size: 3 });
+    const snapshot = first.population("global");
+    const evaluated = snapshot.genomes.map((genome) => ({ genome, fitness: 0.5 }));
+
+    second.recordGeneration("global", evaluated, { expectedGeneration: snapshot.generation });
+    expect(() => first.recordGeneration("global", evaluated, { expectedGeneration: snapshot.generation }))
+      .toThrow(/stale GA generation/);
+    expect(first.population("global").generation).toBe(1);
+  });
+
+  it("再 seed ガード: best が baseline を下回る世代が N 回続いたら seed() で作り直す", () => {
+    const marker: Genome = { a: 7.77, b: 300, c: true };
+    const logFile = join(root, "r", "evolution.jsonl");
+    const store = new GaStore<Genome>({
+      root: join(root, "r"), schema: SCHEMA, size: 3, elite: 1, logFile,
+      reseedAfterBelowBaseline: 2,
+      seed: () => [marker, { a: 1, b: 100, c: false }, { a: 2, b: 200, c: false }],
+    });
+    const weak = { genome: { a: 5, b: 200, c: false } as Genome, fitness: 0.2 };
+
+    // 1 回目: 下回る (streak 1) → 通常進化
+    expect(store.recordGeneration("global", [weak], { baselineFitness: 0.5 }).reseeded).toBe(false);
+    // baseline 以上でリセット
+    expect(store.recordGeneration("global", [{ ...weak, fitness: 0.5 }], { baselineFitness: 0.5 }).reseeded).toBe(false);
+    // 下回る × 2 で再 seed
+    expect(store.recordGeneration("global", [weak], { baselineFitness: 0.5 }).reseeded).toBe(false);
+    const r = store.recordGeneration("global", [weak], { baselineFitness: 0.5 });
+    expect(r.reseeded).toBe(true);
+    expect(r.generation).toBe(4);
+    expect(store.population("global").genomes[0]).toEqual(marker);
+    // baseline 無しの呼び出し (撮影時経路) はカウンタを動かさない
+    expect(store.recordGeneration("global", [weak]).reseeded).toBe(false);
+
+    const lines = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l) as Record<string, unknown>);
+    expect(lines.map((l) => l.reseeded)).toEqual([false, false, false, true, false]);
+    expect(lines[0]!.baselineFitness).toBe(0.5);
+    expect(lines[4]!.baselineFitness).toBeNull();
+  });
+
+  it("再 seed ガード未設定 (既定) では baseline を渡しても再 seed しない", () => {
+    const store = new GaStore<Genome>({ root: join(root, "d"), schema: SCHEMA, size: 3 });
+    const weak = { genome: { a: 5, b: 200, c: false } as Genome, fitness: 0.1 };
+    for (let i = 0; i < 6; i++) {
+      expect(store.recordGeneration("global", [weak], { baselineFitness: 0.9 }).reseeded).toBe(false);
+    }
   });
 });
 

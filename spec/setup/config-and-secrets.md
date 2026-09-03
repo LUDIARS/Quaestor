@@ -21,7 +21,13 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `ocrSidecar.python` | `null` (= .venv 優先) | python 実行体 (supervisor) | `QUAESTOR_OCR_PYTHON` |
 | `ocrSidecar.venvPython` | `null` (= 3.12→3.9 自動探索) | .venv を**作る** python (setup.ps1/sh)。paddlepaddle は 3.9-3.12 のみ wheel 提供 | — |
 | `ocrSidecar.externalUrl` | `null` | 外部 sidecar 利用 (指定時は起動しない) | `QUAESTOR_OCR_SIDECAR_URL` |
-| `training.gaRoot` | `app_data/training/ga` | OCR-GA 永続 + 学習ログ (ocr-ga.ts) | — |
+| `training.gaRoot` | `app_data/training/ga` | OCR-GA 永続 + 学習ログ + bench-report.json (ocr-ga.ts / ocr-ga-bench) | — |
+| `training.gaBench.enabled` | `false` | OCR-GA ラベル別夜間評価ジョブの起動 (server.ts)。手動は `npm run ga:bench` | `QUAESTOR_GA_BENCH` |
+| `training.gaBench.hour` | `3` | 実行時刻 (0-23、ローカル時刻) | `QUAESTOR_GA_BENCH_HOUR` |
+| `training.gaBench.generationsPerNight` | `1` | 1 晩に進める世代数 | — |
+| `training.gaBench.sidecarUrl` | `null` (= 運用 sidecar) | バッチ専用 sidecar (GPU 版など、`ocr-sidecar/README.md`) | `QUAESTOR_GA_BENCH_SIDECAR_URL` |
+| `training.gaBench.device` | `cpu` | バッチ sidecar に期待する device。`gpu` で sidecar が cpu ならバッチは走らない | `QUAESTOR_GA_BENCH_DEVICE` |
+| `training.gaBench.costPerSecond` | `0.0005` | fitness の評価秒数ペナルティ係数 (0 で無効) | — |
 | `invoiceShare.publicUrl` | `null` | 請求書マジックリンクの公開 HTTPS origin。 `null` = 発行不可 (503) | `QUAESTOR_PUBLIC_URL` |
 | `invoiceShare.roots` | `["data","app_data/invoices"]` | 共有を許可する PDF ルート (invoice-share-service.ts) | `QUAESTOR_INVOICE_SHARE_ROOTS` (`;` 区切り) |
 | `invoiceShare.email.region` | `null` | 請求書メールを送る Amazon SES リージョン (例 `ap-northeast-1`)。 `null` = メール送信不可 (503) | `QUAESTOR_SES_REGION` |
@@ -131,9 +137,12 @@ npm run secret -- list
 ## 4. GA 学習ログ
 
 OCR-GA の世代更新は `app_data/training/ga/evolution.jsonl` に毎回追記される
-(ts / key / generation / evaluated / bestFitness / meanFitness / worstFitness / bestGenome)。
-進化が効いているかは `bestFitness` の推移を見る。集団スナップショットは同階層の
-`<key>.json` (内部に直近 200 世代の history も保持)。
+(ts / key / generation / evaluated / bestFitness / meanFitness / worstFitness / bestGenome /
+baselineFitness / reseeded)。進化が効いているかは `bestFitness` と `baselineFitness` (既定遺伝子)
+の差の推移を見る。集団スナップショットは同階層の `<key>.json` (内部に直近 200 世代の history も保持)。
+key はラベル (`global` / `tag:<形状タグ>`、ファイル名は `tag_<タグ>.json`)。
+ラベルごとの直近のベンチ結果 (件数 / 世代 / best / mean / baseline / holdout / 秒数) は
+同階層の `bench-report.json` (`spec/feature/ocr-ga-evaluation.md`)。
 # mail-intake
 
 `quaestor.config.json` の `mailIntake.enabled`、`query`、`documentsRoot`、`maxAttachmentBytes`、`rules` はメール取込の非シークレット設定である。Gmail 認証は暗号化ストアに `QUAESTOR_GMAIL_CLIENT_ID`、`QUAESTOR_GMAIL_CLIENT_SECRET`、`QUAESTOR_GMAIL_REFRESH_TOKEN` を登録する。権限は `gmail.readonly` のみとする。

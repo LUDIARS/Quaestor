@@ -40,7 +40,16 @@
     "externalUrl": null
   },
   "training": {
-    "gaRoot": "app_data/training/ga"
+    "gaRoot": "app_data/training/ga",
+    "gaBench": {
+      "$comment": "OCR-GA のラベル別夜間評価 (spec/feature/ocr-ga-evaluation.md)。enabled=false 既定 (手動は npm run ga:bench)。hour はローカル時刻。sidecarUrl は GPU 版などバッチ専用 sidecar (null = 運用 sidecar)。device=gpu にすると sidecar が gpu で無い限りバッチを走らせない。costPerSecond は fitness の評価秒数ペナルティ (0 で無効)。",
+      "enabled": false,
+      "hour": 3,
+      "generationsPerNight": 1,
+      "sidecarUrl": null,
+      "device": "cpu",
+      "costPerSecond": 0.0005
+    }
   },
   "invoiceShare": {
     "$comment": "請求書の公開マジックリンク (spec/feature/invoice-public-magic-link.md)。 publicUrl は Cloudflare 経由の HTTPS origin のみ (path/query/credential 不可)。 null の間はリンク発行が 503 で失敗する。 roots はこの PDF 以外を共有させないための許可ルート。",

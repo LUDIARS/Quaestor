@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertLocalTestAllowed, loadAppConfig, sidecarUrlOf } from "../src/services/app-config.js";
+import { assertLocalTestAllowed, gaBenchSidecarUrlOf, loadAppConfig, sidecarUrlOf } from "../src/services/app-config.js";
 
 const ENV_KEYS = [
   "QUAESTOR_HOST", "QUAESTOR_PORT", "QUAESTOR_LOG_LEVEL",
@@ -10,6 +10,7 @@ const ENV_KEYS = [
   "QUAESTOR_OCR_WORKER", "QUAESTOR_OCR_INTERVAL_MS", "QUAESTOR_OCR_CLAUDE_MODEL",
   "QUAESTOR_OCR_SIDECAR_MANAGE", "QUAESTOR_OCR_SIDECAR_PORT",
   "QUAESTOR_OCR_SIDECAR_URL", "QUAESTOR_OCR_LANG", "QUAESTOR_OCR_PYTHON",
+  "QUAESTOR_GA_BENCH", "QUAESTOR_GA_BENCH_HOUR", "QUAESTOR_GA_BENCH_SIDECAR_URL", "QUAESTOR_GA_BENCH_DEVICE",
   "QUAESTOR_PUBLIC_URL", "QUAESTOR_INVOICE_SHARE_ROOTS",
   "QUAESTOR_SES_REGION", "QUAESTOR_SES_FROM_ADDRESS", "QUAESTOR_SES_CONFIGURATION_SET", "QUAESTOR_INVOICE_SENDER_NAME",
   "QUAESTOR_TSA_URL", "QUAESTOR_TSA_ENABLED", "QUAESTOR_LOCAL_TEST",
@@ -37,6 +38,36 @@ describe("app-config loader (§7.1)", () => {
     expect(c.ocrSidecar.port).toBe(17350);
     expect(c.ocrSidecar.manage).toBe(true);
     expect(sidecarUrlOf(c)).toBe("http://127.0.0.1:17350");
+  });
+
+  it("training.gaBench: 既定 off / 3 時 / 1 世代 / 運用 sidecar / cpu。ファイルと env で上書きでき、不正 device は cpu", () => {
+    const def = loadAppConfig(join(dir, "missing.json")).training.gaBench;
+    expect(def).toEqual({ enabled: false, hour: 3, generationsPerNight: 1, sidecarUrl: null, device: "cpu", costPerSecond: 0.0005 });
+    expect(gaBenchSidecarUrlOf(loadAppConfig(join(dir, "missing.json")))).toBe("http://127.0.0.1:17350");
+
+    const p = join(dir, "bench.json");
+    writeFileSync(p, JSON.stringify({
+      training: { gaBench: { enabled: true, hour: 4, generationsPerNight: 2, sidecarUrl: "http://127.0.0.1:17351", device: "gpu", costPerSecond: 0 } },
+    }), "utf8");
+    const c = loadAppConfig(p);
+    expect(c.training.gaBench).toEqual({ enabled: true, hour: 4, generationsPerNight: 2, sidecarUrl: "http://127.0.0.1:17351", device: "gpu", costPerSecond: 0 });
+    expect(gaBenchSidecarUrlOf(c)).toBe("http://127.0.0.1:17351");
+    expect(c.training.gaRoot).toBe("app_data/training/ga"); // 兄弟キーは既定のまま
+
+    process.env.QUAESTOR_GA_BENCH = "0";
+    process.env.QUAESTOR_GA_BENCH_DEVICE = "tpu";
+    process.env.QUAESTOR_GA_BENCH_HOUR = "30";
+    const e = loadAppConfig(p).training.gaBench;
+    expect(e.enabled).toBe(false);
+    expect(e.device).toBe("cpu");
+    expect(e.hour).toBe(3);
+
+    writeFileSync(p, JSON.stringify({
+      training: { gaBench: { generationsPerNight: 0, costPerSecond: -1 } },
+    }), "utf8");
+    const invalidNumbers = loadAppConfig(p).training.gaBench;
+    expect(invalidNumbers.generationsPerNight).toBe(1);
+    expect(invalidNumbers.costPerSecond).toBe(0.0005);
   });
 
   it("ocrClaudeCode.model: 既定は固定モデル、 ファイル/env で変えられ、 null で CLI 既定に委ねる", () => {

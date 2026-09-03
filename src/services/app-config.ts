@@ -70,6 +70,21 @@ export interface AppConfig {
   };
   training: {
     gaRoot: string;
+    /** OCR-GA のラベル別夜間評価バッチ (spec/feature/ocr-ga-evaluation.md) */
+    gaBench: {
+      /** 夜間ジョブを起動するか (既定 false。手動は `npm run ga:bench`) */
+      enabled: boolean;
+      /** 実行時刻 (0-23、ローカル時刻) */
+      hour: number;
+      /** 1 晩に進める世代数 */
+      generationsPerNight: number;
+      /** バッチ専用 sidecar (GPU 版など)。null = 運用 sidecar (ocrSidecar) を使う */
+      sidecarUrl: string | null;
+      /** バッチ sidecar に期待する device。gpu 指定で sidecar が cpu ならバッチを走らせない */
+      device: "cpu" | "gpu";
+      /** fitness の評価秒数ペナルティ係数 (1 秒あたり)。0 で無効 */
+      costPerSecond: number;
+    };
   };
   /** 請求書の公開マジックリンク (spec/feature/invoice-public-magic-link.md) */
   invoiceShare: {
@@ -151,7 +166,10 @@ const DEFAULTS: AppConfig = {
     manage: true, host: "127.0.0.1", port: 17350,
     lang: "japan", python: null, venvPython: null, externalUrl: null,
   },
-  training: { gaRoot: "app_data/training/ga" },
+  training: {
+    gaRoot: "app_data/training/ga",
+    gaBench: { enabled: false, hour: 3, generationsPerNight: 1, sidecarUrl: null, device: "cpu", costPerSecond: 0.0005 },
+  },
   invoiceShare: {
     publicUrl: null,
     roots: ["data", "app_data/invoices"],
@@ -224,6 +242,14 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
     },
     training: {
       gaRoot: str(undefined, fromFile?.training?.gaRoot, DEFAULTS.training.gaRoot),
+      gaBench: {
+        enabled:             flag(env("QUAESTOR_GA_BENCH"),             fromFile?.training?.gaBench?.enabled,             DEFAULTS.training.gaBench.enabled),
+        hour:                hourOfDay(num(env("QUAESTOR_GA_BENCH_HOUR"), fromFile?.training?.gaBench?.hour,              DEFAULTS.training.gaBench.hour)),
+        generationsPerNight: positiveInteger(fromFile?.training?.gaBench?.generationsPerNight, DEFAULTS.training.gaBench.generationsPerNight),
+        sidecarUrl:          strOrNull(env("QUAESTOR_GA_BENCH_SIDECAR_URL"), fromFile?.training?.gaBench?.sidecarUrl),
+        device:              benchDevice(env("QUAESTOR_GA_BENCH_DEVICE"), fromFile?.training?.gaBench?.device),
+        costPerSecond:       nonNegativeNumber(fromFile?.training?.gaBench?.costPerSecond, DEFAULTS.training.gaBench.costPerSecond),
+      },
     },
     invoiceShare: {
       publicUrl: strOrNull(env("QUAESTOR_PUBLIC_URL"), fromFile?.invoiceShare?.publicUrl),
@@ -276,6 +302,11 @@ export function sidecarUrlOf(c: AppConfig): string {
   return c.ocrSidecar.externalUrl ?? `http://${c.ocrSidecar.host}:${c.ocrSidecar.port}`;
 }
 
+/** GA バッチが叩く sidecar URL (バッチ専用指定があればそれ、無ければ運用 sidecar) */
+export function gaBenchSidecarUrlOf(c: AppConfig): string {
+  return c.training.gaBench.sidecarUrl ?? sidecarUrlOf(c);
+}
+
 // ---------------------------------------------------------------------------
 // 内部ヘルパー
 // ---------------------------------------------------------------------------
@@ -289,7 +320,9 @@ type PartialConfig = {
   ocrClaudeCode?: Partial<AppConfig["ocrClaudeCode"]>;
   subsidyCrawl?: Partial<AppConfig["subsidyCrawl"]>;
   ocrSidecar?: Partial<AppConfig["ocrSidecar"]>;
-  training?: Partial<AppConfig["training"]>;
+  training?: Partial<Omit<AppConfig["training"], "gaBench">> & {
+    gaBench?: Partial<AppConfig["training"]["gaBench"]>;
+  };
   invoiceShare?: Partial<Omit<AppConfig["invoiceShare"], "email" | "timestampAuthority">> & {
     localTest?: boolean;
     email?: Partial<AppConfig["invoiceShare"]["email"]>;
@@ -344,6 +377,25 @@ function claudeModel(
 /** CLI model identifiers must remain a single shell-safe argument. */
 function validClaudeModel(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
+}
+
+/** GA バッチ sidecar の device。cpu / gpu 以外 (typo 等) は既定 cpu (gpu に黙って倒さない) */
+function benchDevice(envVal: string | undefined, fileVal: unknown): "cpu" | "gpu" {
+  const v = envVal ?? fileVal;
+  return v === "gpu" ? "gpu" : v === "cpu" ? "cpu" : DEFAULTS.training.gaBench.device;
+}
+
+/** 0-23 に丸める (範囲外は既定) */
+function hourOfDay(v: number): number {
+  return Number.isInteger(v) && v >= 0 && v <= 23 ? v : DEFAULTS.training.gaBench.hour;
+}
+
+function positiveInteger(value: unknown, def: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : def;
+}
+
+function nonNegativeNumber(value: unknown, def: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : def;
 }
 
 function num(envVal: string | undefined, fileVal: number | undefined | null, def: number): number {

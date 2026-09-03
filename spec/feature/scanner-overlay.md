@@ -191,36 +191,33 @@ B で正確 BB+text を即供給し点1/点2を達成 → 学習データ蓄積 
 
 ---
 
-## 7. OCR パラメータの遺伝的最適化 (OCR-GA、2026-06-11)
+## 7. OCR パラメータの遺伝的最適化 (OCR-GA) — 撮影時評価は廃止予定、ラベル別バッチへ (2026-09-03 改訂)
 
-LLM(Vision) 検出は遅い。その待機中に画面が暇なので、ローカル OCR (PaddleOCR sidecar) を
-パラメータ違いで反復し、LLM 真値(絶対正解)と照合して良いパラメータを残す = 遺伝的最適化。
+LLM(Vision) 検出待ちの間にブラウザが sidecar を回して GA を評価する設計 (2026-06-11) は、
+実運用で **一度も世代が進まなかった** (Castra 設計書 `spec/plan/2026-09-03-quaestor-scan-diversification-ga-evaluation.md` §1.3)。
+公開面 (Cloudflare Tunnel / HTTPS、スマホ) から `http://127.0.0.1:17350` に届かず、`/detect` は CPU で
+1 回 40 秒と LLM 待ち (10 秒前後) に収まらず、失敗は演出非依存の仕様どおり黙って飲み込まれた。
 
-### 汎用 GA エンジン (再利用可能)
-GA ロジックはブラックボックス・アーキテクチャでも使えるよう汎用化:
-- `src/services/genetic.ts` — ドメイン非依存。遺伝子スキーマ (number/choice/bool) 駆動で
-  `randomGenome / mutate / crossover / nextGeneration` + `GaStore<G>` (key 別集団を JSON 永続)。
-- `src/services/ocr-ga.ts` — 汎用 engine の OCR 特化。`OCR_GENE_SCHEMA`
-  (detThresh/boxThresh/unclipRatio/limitSideLen/useDilation/dropScore) + `createOcrGaStore`。
-- 永続: `app_data/training/ga/<key>.json` (`global` or 店舗別)。
+方針 (neco 判断 2026-09-03): **撮影のたびに評価しない。** LLM が OCR 時に付けるサンプルラベル
+(`sample_role` / `sample_tags`、D1) でコーパスを分け、学習 (評価 + 世代更新) は **ラベル別に夜間バッチ**
+で backend → sidecar で回す。正本は `spec/feature/ocr-ga-evaluation.md`。
 
-### フロー
-1. capture → analyze (LLM 待ち) の間、web `OcrEvolver` が
-   `GET /v1/ocr-ga/population` で現世代の個体を取得。
-2. 各個体で sidecar `/detect` (genome 付き) を回し候補を蓄積。`OCR EVOLVE GEN g n/N` busy 演出。
-3. LLM 真値到着 → 各候補を `fitnessVsTruth` で採点 → `POST /v1/ocr-ga/generation`。
-4. backend が エリート保存 + ルーレット選択 + 交叉 + 突然変異で次世代を作り永続 (= GA)。
-   良い遺伝子が残り、次レシートの初期集団になる。
+### 今の構成 (D2 で移行済)
+- 汎用 GA エンジン `src/services/genetic.ts` (再 seed ガード付き) と OCR 特化 `src/services/ocr-ga.ts` は据え置き。
+- **集団キーはラベル** (`global` / `tag:<形状タグ>`)。店舗別キー (payee 由来) は廃止し、API に来た
+  それ以外のキーは `global` に丸める。
+- fitness は backend `src/services/ocr-ga-fitness.ts` (正規化・隣接行結合・重み・1 行加点・コスト項)。
+- 評価は `src/services/ocr-ga-bench/` (コーパス / holdout 分割 / 評価器 / report / 夜間ジョブ)、
+  手動は `npm run ga:bench`。sidecar は `src/services/ocr-sidecar-client.ts` で backend から叩く。
+- `GET /v1/ocr-ga/best?tags=...` がタグ優先で勝ち遺伝子を返す。
+
+### 撮影時 (次 PR B-1 で置き換え)
+- web の `OcrEvolver` / `ocr-genome.ts` / `fitnessVsTruth` (撮影時評価) は **撤去予定**。それまでは残るが、
+  sidecar に届いても期待世代を指定して `global` を 1 回だけ更新する。
+- 置き換え後: backend の `POST /v1/receipts/:id/detect` がラベルの `bestGenome` で sidecar を 1 回叩き、
+  本物 BB を confirm と学習レコードに流し、運用評価レコード (`production-eval.jsonl`) を発行する。
+  `ocrSidecarUrl` の web 公開 (`GET /v1/config`) は止める。
 
 ### sidecar
-`ocr-sidecar/main.py` の `/detect` は `genome` (JSON) を受け、その det/rec パラメータの
-PaddleOCR インスタンス (キャッシュ) で実行する。
-
-### 勝ち遺伝子の live 適用
-LLM 真値到着で `OcrEvolver.finalize()` が最良候補を選び、その検出を `buildRegions` で
-confirm 用 region に変換。`EvolvedFieldLocator` が pipeline の locate で勝ち遺伝子の領域を
-返す (出るまで待機、無ければ Chained locator に fallback)。
-
-### 店舗別キー
-評価は撮影時点で店舗不明なので `global` プールで実施。世代の記録・永続は
-`finalize` 時に **payee 由来キー** + `global` の両方へ行い、店舗ごとに best/履歴を蓄積する。
+`ocr-sidecar/main.py` の `/detect` は従来どおり `genome` (JSON) を受ける。`--device cpu|gpu` は
+GA バッチ用の 2 本目にだけ使い、運用の常駐 sidecar は CPU のまま (`ocr-sidecar/README.md`)。

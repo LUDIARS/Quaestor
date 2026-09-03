@@ -83,17 +83,14 @@ export class OcrEvolver {
       fitness: fitnessVsTruth(c.lines, fields),
     }));
 
-    // 店舗別キー (payee 由来) で世代を記録・永続。グローバルにも記録して broad search を進める。
-    const storeKey = storeKeyOf(fields.payee);
-    for (const key of new Set([storeKey, POP_KEY])) {
-      try {
-        await fetch(`${GA_BASE}/generation`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ key, evaluated }),
-        });
-      } catch { /* ignore */ }
-    }
+    // B-1 で撮影時評価を撤去するまでの互換経路。ラベル移行後は global を 1 回だけ進める。
+    try {
+      await fetch(`${GA_BASE}/generation`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key: POP_KEY, expectedGeneration: this.generation, evaluated }),
+      });
+    } catch { /* sidecar / backend failure must not block the capture flow */ }
 
     let best: OcrCandidate | null = null;
     let bestFit = -1;
@@ -104,13 +101,6 @@ export class OcrEvolver {
     if (best) this.bestRegions = buildRegions((best as OcrCandidate).lines, fields);
     return best;
   }
-}
-
-/** payee → 安全な GA キー。空なら global */
-function storeKeyOf(payee: string | null): string {
-  if (!payee) return POP_KEY;
-  const k = payee.trim().replace(/[^A-Za-z0-9_\-぀-ヿ一-龯]/g, "_").slice(0, 48);
-  return k || POP_KEY;
 }
 
 /**
