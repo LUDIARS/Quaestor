@@ -16,8 +16,11 @@ const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
 
 class FakeOcrClient implements OcrClient {
+  calls = 0;
+
   constructor(private readonly result: ReceiptOcrResult) {}
   async extract(): Promise<ReceiptOcrResult> {
+    this.calls++;
     return this.result;
   }
 }
@@ -139,6 +142,20 @@ describe("runOcrFor (unit)", () => {
       receipts, storage, client: new FakeOcrClient(HIGH_CONFIDENCE_RESULT),
     });
     expect(r.status).toBe("failed");
+  });
+
+  it("does not rerun OCR after commit", async () => {
+    receipts.setOcrResult(receiptId, {
+      ocr_status: "done", date: "2025-04-15", payee: "確定済", total: 100,
+    });
+    receipts.commit(receiptId);
+    const client = new FakeOcrClient(HIGH_CONFIDENCE_RESULT);
+
+    const result = await runOcrFor(receiptId, { receipts, storage, client });
+
+    expect(result).toMatchObject({ ok: false, message: "receipt already committed" });
+    expect(client.calls).toBe(0);
+    expect(receipts.find(receiptId)).toMatchObject({ payee: "確定済", total: 100, ocr_status: "done" });
   });
 });
 

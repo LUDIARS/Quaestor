@@ -99,6 +99,27 @@ describe("Memoria spending log export", () => {
     expect(exported.records[0]?.expense.planned).toBeNull();
   });
 
+  it("does not export a statement receipt in addition to its transaction rows", () => {
+    const db = new Database(":memory:");
+    applyMigrations(db);
+    const rules = new ApportionmentRulesRepo(db);
+    db.prepare(
+      `INSERT INTO receipts
+       (id, captured_at, image_path, ocr_status, date, payee, total, doc_kind,
+        committed_at, created_at, updated_at)
+       VALUES ('statement-1', 100, NULL, 'done', '2026-07-21', 'カード明細', 700, 'statement',
+        101, 100, 101)`,
+    ).run();
+
+    const exported = buildMemoriaSpendingLog(db, rules, {
+      dateFrom: "2026-07-21",
+      dateTo: "2026-07-21",
+    });
+
+    expect(exported.records).toEqual([]);
+    expect(exported.daily_summaries).toEqual([]);
+  });
+
   it("requires a direct loopback request for the export API", async () => {
     const app = buildApp({
       db: new Database(":memory:"),

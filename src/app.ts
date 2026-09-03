@@ -48,6 +48,7 @@ import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { SmartImporter } from "./services/smart-import.js";
 import { ReceiptIntake } from "./services/receipt-intake.js";
+import { createKindDestinations } from "./services/receipt-kind-destinations.js";
 import { ClaudeSecurityMapper, type SecurityMapper } from "./services/security-mapper.js";
 import { ClaudePerkClient, type PerkClient } from "./services/perk-client.js";
 import { YahooFinanceStockClient, type StockClient } from "./services/stock-client.js";
@@ -278,11 +279,25 @@ export function buildApp(deps: AppDeps): Hono {
   householdCategories.seedMissing();
   householdRules.seedIfEmpty(householdCategories);
   const householdClassifier = new HouseholdClassifier(householdRules, householdCategories);
+  const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
+  const costRules = new CostRulesRepo(deps.db);
+  costRules.seedIfEmpty();
+  // 書類種別ごとの投入先 (invoice → 受領書類 / utility → cost_rules / statement → transactions)。
+  // 自動投入 (ReceiptIntake) と手動投入 (POST /v1/receipts/:id/commit) が同じ配線を使う。
+  const kindDestinations = createKindDestinations({
+    db: deps.db,
+    documents: inboundDocuments,
+    costRules,
+    imports,
+    txs,
+    storage,
+  });
   // OCR 完了 → 投入 → 突合 を人手なしで通す。 取引取込側からも同じ突合 sweep を呼ぶ。
   const receiptIntake = new ReceiptIntake({
     db: deps.db,
     receipts,
     reconciliations,
+    destinations: kindDestinations,
     enabled: deps.autoIntake ?? true,
     logger: deps.logger ? { warn: (f, m) => deps.logger?.warn(f as Record<string, unknown>, m as string | undefined) } : undefined,
   });
@@ -309,7 +324,6 @@ export function buildApp(deps: AppDeps): Hono {
   const holdingValuations = new HoldingValuationsRepo(deps.db);
   const holdingDividends = new HoldingDividendsRepo(deps.db);
   const dividendCandidates = new DividendCandidatesRepo(deps.db);
-  const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
   const trainingDataset = new TrainingDataset(deps.trainingRoot ?? "app_data/training/receipts", storage);
   // 差分の LLM 類推器。claude CLI が使えない場合は undefined (差分は保存するが類推はしない)
   const diffEvaluator: DiffEvaluator | undefined = detectCli() ? new OpusDiffEvaluator() : undefined;
@@ -522,7 +536,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/apportionment-advisor", apportionmentAdvisorRouter({ advisor: apportionmentAdvisor }));
-  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake, claudeCodeModel: deps.ocrClaudeCodeModel, detect: receiptDetect }));
+  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake, destinations: kindDestinations, claudeCodeModel: deps.ocrClaudeCodeModel, detect: receiptDetect }));
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
@@ -535,8 +549,6 @@ export function buildApp(deps: AppDeps): Hono {
     posting: new DepreciationPosting({ db: deps.db, entries: journalEntries, accounts, schedule: depreciationSchedule, classifier: householdClassifier }),
   }));
   app.route("/v1/activity", activityRouter({ db: deps.db }));
-  const costRules = new CostRulesRepo(deps.db);
-  costRules.seedIfEmpty();
   app.route("/v1/cost-structure", costStructureRouter({
     rules: costRules,
     service: new CostStructureService({ db: deps.db, rules: costRules, apportionment: rules }),
@@ -607,6 +619,7 @@ export function buildApp(deps: AppDeps): Hono {
     messages: mailMessages,
     documents: inboundDocuments,
     documentsRoot: mailConfig.documentsRoot,
+    receiptStorage: storage,
   }));
 
   return app;

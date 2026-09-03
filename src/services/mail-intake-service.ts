@@ -133,6 +133,10 @@ export class MailIntakeService {
   ): Promise<string | null> {
     const document = this.deps.documents.claimForCommit(id);
     if (!document) return null;
+    if (document.source !== "mail" || !document.message_id) {
+      this.deps.documents.update(id, "needs_review");
+      return null;
+    }
     try {
       const receiptId = this.createReceipt(
         document.message_id,

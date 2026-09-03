@@ -7,7 +7,7 @@
  *   receipt / handwritten / other : 持たない (null)
  *
  * LLM 出力は形が揺れるので、 ここで種別に合わせて正規化する。 抽出できなかった項目は null。
- * 投入先の配線 (invoice → 仕訳、 utility → 固定費) は次版で、 ここは形の正本だけ持つ。
+ * 投入先の配線は `receipt-kind-destinations.ts` に置き、 ここは形の正本だけを持つ。
  *
  * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
  */
@@ -33,7 +33,7 @@ export interface UtilityKindFields {
 export interface StatementRow {
   date: string | null;
   description: string;
-  /** 円 (整数)。 出金は正、 入金は負にはしない (符号は下流で解釈) */
+  /** 円 (整数)。 出金は正、 入金は負 (符号は下流で解釈) */
   amount: number | null;
 }
 

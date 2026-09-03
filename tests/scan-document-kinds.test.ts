@@ -27,12 +27,12 @@ function columnNames(db: Database.Database, table: string): string[] {
 }
 
 describe("schema v19: receipts の書類種別 / サンプルラベル列", () => {
-  it("新規 DB に 7 列と index が出来て user_version が 19 になる", () => {
+  it("新規 DB に 7 列と index が出来て user_version が 20 になる", () => {
     const db = new Database(":memory:");
     try {
       applyMigrations(db);
       expect(columnNames(db, "receipts")).toEqual(expect.arrayContaining(RECEIPT_COLUMNS_V19));
-      expect(db.pragma("user_version", { simple: true })).toBe(19);
+      expect(db.pragma("user_version", { simple: true })).toBe(20);
       const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='receipts'").all() as { name: string }[];
       expect(idx.map((i) => i.name)).toEqual(expect.arrayContaining(["idx_receipts_doc_kind", "idx_receipts_sample_role"]));
     } finally {
@@ -65,7 +65,7 @@ describe("schema v19: receipts の書類種別 / サンプルラベル列", () =
       expect(row.sample_role).toBeNull();
       expect(row.sample_source).toBeNull();
       expect(row.committed_at).toBe(2);
-      expect(db.pragma("user_version", { simple: true })).toBe(19);
+      expect(db.pragma("user_version", { simple: true })).toBe(20);
       // CHECK 制約が効く
       expect(() => db.prepare("UPDATE receipts SET doc_kind = 'menu' WHERE id = 'legacy'").run()).toThrow();
       expect(() => db.prepare("UPDATE receipts SET sample_role = 'great' WHERE id = 'legacy'").run()).toThrow();
@@ -135,8 +135,8 @@ describe("API: 書類種別 / サンプルラベル", () => {
     });
     expect(status).toBe(200);
     expect(json.labels).toEqual({ applied: true });
-    // 投入先が未配線の種別は自動投入されず、 理由に種別が乗る
-    expect(json.auto_commit).toEqual({ committed: false, reason: "kind_not_auto_committed:utility" });
+    // utility は投入先 (cost_rules → 水道光熱費ビュー) が配線されているので自動投入される
+    expect(json.auto_commit).toEqual({ committed: true, already: false });
 
     const row = receipts.find(id)!;
     expect(row.doc_kind).toBe("utility");
@@ -148,7 +148,7 @@ describe("API: 書類種別 / サンプルラベル", () => {
     expect(row.sample_reason).toBe("長尺で 2 段組");
     expect(row.sample_source).toBe("llm");
     expect(JSON.parse(row.content_tags!)).toEqual(["utility", "daily"]);
-    expect(row.committed_at).toBeNull();
+    expect(row.committed_at).not.toBeNull();
   });
 
   it("語彙外の kind は 400、 kind だけ (sample 無し) は種別のみ保存する", async () => {
@@ -181,35 +181,29 @@ describe("API: 書類種別 / サンプルラベル", () => {
     expect(receipts.find(id)!.committed_at).not.toBeNull();
   });
 
-  it("invoice / utility / statement / other は手動投入も 422 で弾き、 種別を直せば投入できる", async () => {
-    for (const kind of ["invoice", "utility", "statement", "other"] as const) {
-      const id = await createReceipt();
-      await patchJson(`/v1/receipts/${id}/ocr`, {
-        ocr_status: "done", date: "2026-04-15", payee: `P-${kind}`, total: 100 + seq, kind,
-      });
-      const res = await app.request(`/v1/receipts/${id}/commit`, { method: "POST" });
-      expect(res.status).toBe(422);
-      const j = await res.json() as { error: string; kind: string; message: string };
-      expect(j.error).toBe("kind_not_auto_committed");
-      expect(j.kind).toBe(kind);
-      expect(j.message).toContain("種別を直してから");
-    }
+  it("other だけ手動投入も 422 で弾き、 種別を直せば投入できる", async () => {
+    const blocked = await createReceipt();
+    await patchJson(`/v1/receipts/${blocked}/ocr`, {
+      ocr_status: "done", date: "2026-04-15", payee: "P-other", total: 130, kind: "other",
+    });
+    const res422 = await app.request(`/v1/receipts/${blocked}/commit`, { method: "POST" });
+    expect(res422.status).toBe(422);
+    const j = await res422.json() as { error: string; kind: string; message: string };
+    expect(j.error).toBe("kind_not_auto_committed");
+    expect(j.kind).toBe("other");
+    expect(j.message).toContain("種別を直してから");
 
     // 種別を receipt に直す → その場で投入できる
-    const id = await createReceipt();
-    await patchJson(`/v1/receipts/${id}/ocr`, {
-      ocr_status: "done", date: "2026-04-16", payee: "実はレシート", total: 777, kind: "other",
-    });
-    const fix = await patchJson(`/v1/receipts/${id}/labels`, { doc_kind: "receipt" });
+    const fix = await patchJson(`/v1/receipts/${blocked}/labels`, { doc_kind: "receipt" });
     expect(fix.status).toBe(200);
-    const res = await app.request(`/v1/receipts/${id}/commit`, { method: "POST" });
+    const res = await app.request(`/v1/receipts/${blocked}/commit`, { method: "POST" });
     expect(res.status).toBe(200);
   });
 
   it("PATCH /labels は manual で上書きし、 以後の LLM 再解析では上書きされない", async () => {
     const id = await createReceipt();
     await patchJson(`/v1/receipts/${id}/ocr`, {
-      ocr_status: "done", date: "2026-04-15", payee: "X", total: 100,
+      ocr_status: "done", date: "2026-04-15", payee: "X", total: null,
       kind: "invoice", kind_fields: { issuer: "X", invoice_no: "A-1" },
       sample: { role: "good_sample", tags: [], reason: "ok" },
     });
@@ -238,6 +232,27 @@ describe("API: 書類種別 / サンプルラベル", () => {
     expect(row.doc_kind).toBe("receipt");
     expect(row.sample_role).toBe("special_shape");
     expect(row.sample_source).toBe("manual");
+  });
+
+  it("投入後は配送先を孤児化させる doc_kind の変更を拒否する", async () => {
+    const id = await createReceipt();
+    await patchJson(`/v1/receipts/${id}/ocr`, {
+      ocr_status: "done", date: "2026-04-15", payee: "X", total: 100, kind: "receipt",
+    });
+    expect(receipts.find(id)!.committed_at).not.toBeNull();
+
+    const changed = await patchJson(`/v1/receipts/${id}/labels`, { doc_kind: "statement" });
+    expect(changed.status).toBe(409);
+    expect(changed.json).toEqual({ error: "committed_kind_immutable" });
+    expect(receipts.find(id)!.doc_kind).toBe("receipt");
+
+    const llmChanged = await patchJson(`/v1/receipts/${id}/ocr`, {
+      ocr_status: "done", date: "2026-04-15", payee: "X", total: 100,
+      kind: "statement", kind_fields: { rows: [{ date: "2026-04-15", description: "X", amount: 100 }] },
+    });
+    expect(llmChanged.status).toBe(409);
+    expect(llmChanged.json).toEqual({ error: "receipt_committed" });
+    expect(receipts.find(id)!.doc_kind).toBe("receipt");
   });
 
   it("PATCH /labels: 空 body は 400、 未知 id は 404、 語彙外は 400", async () => {

@@ -10,5 +10,8 @@ Gmail の受信メールを決定的に分類し、請求書 PDF の取り込み
 - SPEC-MAIL-INTAKE-002: 本文と添付本体を DB・ログ・Discord に出さない。
 - SPEC-MAIL-INTAKE-003: Gmail 認証情報または webhook 未設定は disabled/skip として成功と区別する。
 - SPEC-MAIL-INTAKE-004: 発行元・日付・金額が揃う PDF だけ receipts 化し既存投入・突合を通す。
+  受領書類 (`inbound_documents`) はメール添付 (`source='mail'`) とスキャンした請求書 (`source='scan'`、
+  `message_id` / `sha256` は NULL) を同じ台帳で持つ (schema v20)。 メール取込の処理はメール由来の行だけを作り、
+  `message_id` が NULL であり得ることを前提にする (spec/feature/scan-document-kinds.md SPEC-SCAN-KIND-005)。
 - SPEC-MAIL-INTAKE-005: ルールは先頭一致で、未一致は ignore とする。
 - SPEC-MAIL-INTAKE-006: invoice/cloud_notice は結果にかかわらず message_id ごとに一通通知する。

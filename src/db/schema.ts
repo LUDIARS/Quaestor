@@ -340,15 +340,22 @@ const STATEMENTS: string[] = [
     kind TEXT NOT NULL CHECK (kind IN ('invoice','cloud_notice','ignore')),
     rule_index INTEGER, outcome TEXT NOT NULL, error TEXT, processed_at INTEGER NOT NULL
   )`,
+  // 受領書類。 メール添付 PDF (source='mail'、 message_id あり) と スキャンした請求書
+  // (source='scan'、 message_id / sha256 は NULL) の両方を持つ (v20)。
   `CREATE TABLE IF NOT EXISTS inbound_documents (
-    id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES mail_messages(message_id) ON DELETE CASCADE,
-    filename TEXT NOT NULL, mime_type TEXT NOT NULL, file_path TEXT NOT NULL, sha256 TEXT NOT NULL,
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'mail' CHECK (source IN ('mail','scan')),
+    message_id TEXT REFERENCES mail_messages(message_id) ON DELETE CASCADE,
+    filename TEXT NOT NULL, mime_type TEXT NOT NULL, file_path TEXT NOT NULL, sha256 TEXT,
     size INTEGER NOT NULL, extracted TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','committed','needs_review','ignored')),
-    receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+    receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+    CHECK ((source = 'mail' AND message_id IS NOT NULL AND sha256 IS NOT NULL)
+      OR (source = 'scan' AND message_id IS NULL AND sha256 IS NULL))
   )`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_sha ON inbound_documents(sha256)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_sha ON inbound_documents(sha256) WHERE sha256 IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_inbound_status ON inbound_documents(status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_receipt ON inbound_documents(receipt_id) WHERE receipt_id IS NOT NULL`,
 
   // ── 投資 / 優待アドバイザ (spec/feature/invest-advisor.md) ──
 
@@ -859,7 +866,49 @@ export function applyMigrations(db: Database.Database): void {
   ensureColumn(db, "receipts", "content_tags", "TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_doc_kind ON receipts(doc_kind)");
   db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_sample_role ON receipts(sample_role)");
-  db.pragma("user_version = 19");
+  // v20: 書類種別ごとの投入先配線 (spec/feature/scan-document-kinds.md SPEC-SCAN-KIND-005)。
+  //      スキャンした請求書を受領書類に載せるため inbound_documents をメール専用から広げる。
+  rebuildInboundDocumentsForScan(db);
+  db.pragma("user_version = 20");
+}
+
+/**
+ * v20: inbound_documents をメール添付専用 (message_id NOT NULL + FK、 sha256 NOT NULL UNIQUE) から、
+ * スキャン由来の書類も持てる形へ作り替える。 SQLite は NOT NULL を後から外せないので table を作り直す。
+ * 既存行は source='mail' で移す。 既に source 列があれば何もしない (冪等)。
+ */
+function rebuildInboundDocumentsForScan(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(inbound_documents)").all() as { name: string }[];
+  if (cols.length === 0 || cols.some((c) => c.name === "source")) return;
+  // FK 参照のある table を差し替えるので、 rebuild の間だけ外部キーを止める
+  // (PRAGMA foreign_keys は transaction 内では無視されるため、 transaction の外で切り替える)。
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    db.transaction(() => {
+      db.exec(`CREATE TABLE inbound_documents_v20 (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'mail' CHECK (source IN ('mail','scan')),
+        message_id TEXT REFERENCES mail_messages(message_id) ON DELETE CASCADE,
+        filename TEXT NOT NULL, mime_type TEXT NOT NULL, file_path TEXT NOT NULL, sha256 TEXT,
+        size INTEGER NOT NULL, extracted TEXT,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','committed','needs_review','ignored')),
+        receipt_id TEXT REFERENCES receipts(id) ON DELETE SET NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        CHECK ((source = 'mail' AND message_id IS NOT NULL AND sha256 IS NOT NULL)
+          OR (source = 'scan' AND message_id IS NULL AND sha256 IS NULL))
+      )`);
+      db.exec(`INSERT INTO inbound_documents_v20
+        (id, source, message_id, filename, mime_type, file_path, sha256, size, extracted, status, receipt_id, created_at, updated_at)
+        SELECT id, 'mail', message_id, filename, mime_type, file_path, sha256, size, extracted, status, receipt_id, created_at, updated_at
+        FROM inbound_documents`);
+      db.exec("DROP TABLE inbound_documents");
+      db.exec("ALTER TABLE inbound_documents_v20 RENAME TO inbound_documents");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_sha ON inbound_documents(sha256) WHERE sha256 IS NOT NULL");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_inbound_status ON inbound_documents(status)");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_inbound_receipt ON inbound_documents(receipt_id) WHERE receipt_id IS NOT NULL");
+    })();
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

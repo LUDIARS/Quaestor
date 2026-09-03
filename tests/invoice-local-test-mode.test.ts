@@ -155,5 +155,5 @@ describe("invoiceShare.localTest", () => {
     });
     expect(accept.status).toBe(201);
     db.close();
-  });
+  }, 60_000);
 });

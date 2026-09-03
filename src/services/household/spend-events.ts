@@ -4,6 +4,7 @@
  *  - transactions (is_transfer=0, amount_out>0) を 1 イベントにし、 reconciliations で突合済の
  *    レシートがあればその GPS / 品目を添える (金額は取引側が正)
  *  - 未突合の投入済レシート (committed_at) は現金払い等として別イベントにする
+ *  - 明細 (doc_kind='statement') のレシートは行そのものが transactions に入るので数えない
  *
  * 二重計上回避は behavior-analysis.ts と同じ規則 (突合済レシートは取引側で数える)。
  *
@@ -93,6 +94,7 @@ export function collectSpendEvents(db: Database.Database, range: { from: string;
     .prepare(
       `SELECT id, date, payee, total, geo, items FROM receipts
        WHERE committed_at IS NOT NULL AND date IS NOT NULL AND total IS NOT NULL AND total > 0
+         AND doc_kind != 'statement'
          AND id NOT IN (SELECT receipt_id FROM reconciliations)
          AND date >= ? AND date <= ?
        ORDER BY date ASC, captured_at ASC`,

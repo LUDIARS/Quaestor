@@ -116,6 +116,7 @@ export function buildMemoriaSpendingLog(
     `SELECT r.*
      FROM receipts r
      WHERE r.committed_at IS NOT NULL
+       AND r.doc_kind != 'statement'
        AND r.total IS NOT NULL
        AND r.total > 0
        AND r.date IS NOT NULL

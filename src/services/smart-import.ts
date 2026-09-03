@@ -7,8 +7,8 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { createHash } from "node:crypto";
 import type { ImportedTransaction, SourceKind } from "../shared/types.js";
+import { statementRowSourceId } from "./statement-rows.js";
 
 export interface SmartImportOptions {
   apiKey?: string;
@@ -150,7 +150,7 @@ function parseToolUse(res: Anthropic.Message, accountOverride?: string): SmartIm
       continue;
     }
 
-    const sourceId = stableId(account, r);
+    const sourceId = statementRowSourceId(account, r);
     rows.push({
       date: r.date,
       amount_out: amountOut,
@@ -172,10 +172,4 @@ function parseToolUse(res: Anthropic.Message, accountOverride?: string): SmartIm
     rows,
     warnings,
   };
-}
-
-function stableId(account: string, r: { date: string; description: string; amount_out?: number | null; amount_in?: number | null }): string {
-  const h = createHash("sha1");
-  h.update([account, r.date, r.description, r.amount_out ?? "", r.amount_in ?? ""].join("\x1f"));
-  return `smart:${h.digest("hex").slice(0, 16)}`;
 }

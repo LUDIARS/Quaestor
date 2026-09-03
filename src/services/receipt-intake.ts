@@ -18,12 +18,18 @@ import type Database from "better-sqlite3";
 import type { ReceiptsRepo } from "../db/receipts-repo.js";
 import type { ReconciliationsRepo } from "../db/reconciliations-repo.js";
 import { commitReceipt, commitReasonCode, type CommitOutcome } from "./receipt-commit.js";
+import type { KindDestinations } from "./receipt-kind-destinations.js";
 import { autoReconcile, type AutoReconcileResult } from "./auto-reconcile.js";
 
 export interface ReceiptIntakeDeps {
   db: Database.Database;
   receipts: ReceiptsRepo;
   reconciliations: ReconciliationsRepo;
+  /**
+   * 書類種別ごとの投入先 (invoice → 受領書類、 utility → cost_rules、 statement → transactions)。
+   * 未設定なら receipt / handwritten だけが投入できる。
+   */
+  destinations?: KindDestinations;
   /** false で自動投入・自動突合を止める (手動運用へ戻す)。 既定 true */
   enabled?: boolean;
   logger?: { info?: (...a: unknown[]) => void; warn?: (...a: unknown[]) => void };
@@ -57,7 +63,10 @@ export class ReceiptIntake {
 
     try {
       // 自動投入は trigger="auto": handwritten 等は要確認に残す (spec SPEC-SCAN-KIND-001)
-      const commit = commitReceipt(this.deps.receipts, receiptId, { trigger: "auto" });
+      const commit = commitReceipt(this.deps.receipts, receiptId, {
+        trigger: "auto",
+        destinations: this.deps.destinations,
+      });
       if (!commit.ok) {
         this.deps.logger?.info?.({ id: receiptId, reason: commitReasonCode(commit) }, "receipt auto-commit skipped");
         return { attempted: true, commit };

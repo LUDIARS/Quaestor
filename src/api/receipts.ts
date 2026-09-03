@@ -14,6 +14,7 @@ import type { DiffEvaluator } from "../services/detection-diff-evaluator.js";
 import type { ReceiptDetectService } from "../services/receipt-detect/detect-service.js";
 import type { ReceiptIntake } from "../services/receipt-intake.js";
 import { commitReceipt, commitReasonCode, kindBlockMessage } from "../services/receipt-commit.js";
+import type { KindDestinations } from "../services/receipt-kind-destinations.js";
 import { applyLlmLabels, applyManualLabels, normalizeLlmLabels, MAX_SAMPLE_REASON } from "../services/receipt-labels.js";
 import { DOC_KINDS, SAMPLE_ROLES } from "../shared/document-kinds.js";
 
@@ -114,6 +115,8 @@ export interface ReceiptsApiDeps {
   diffEvaluator?: DiffEvaluator;
   /** OCR 完了時の自動投入 + 自動突合。 未設定なら従来どおり手動投入のみ */
   intake?: ReceiptIntake;
+  /** 書類種別ごとの投入先 (services/receipt-kind-destinations.ts)。 未設定なら receipt / handwritten のみ投入可 */
+  destinations?: KindDestinations;
   /** claude CLI OCR の `--model`。 未設定なら CLI 既定 (上限切れに巻き込まれ得る) */
   claudeCodeModel?: string | null;
   /** 撮影時の backend detect (勝ち遺伝子で sidecar を 1 回)。 未設定なら /detect は 503 */
@@ -252,6 +255,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const id = c.req.param("id");
     const r = deps.repo.find(id);
     if (!r) return c.json({ error: "not_found" }, 404);
+    if (r.committed_at != null) return c.json({ error: "receipt_committed" }, 409);
     const body = await c.req.json().catch(() => null);
     const parsed = OcrResultSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
@@ -290,7 +294,12 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const parsed = LabelsPatchSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     const outcome = applyManualLabels(deps.repo, id, parsed.data);
-    if (!outcome.applied) return c.json({ error: outcome.reason }, outcome.reason === "not_found" ? 404 : 400);
+    if (!outcome.applied) {
+      const status = outcome.reason === "not_found" ? 404
+        : outcome.reason === "committed_kind_immutable" ? 409
+        : 400;
+      return c.json({ error: outcome.reason }, status);
+    }
     return c.json({ ok: true, receipt: deps.repo.find(id) });
   });
 
@@ -353,12 +362,12 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
    * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
    */
   // POST /v1/receipts/:id/commit — 「投入」: 種別ゲート + データ完備チェック + (日付-場所-金額) 重複判定 → 確定
-  //  422 kind_not_auto_committed : 種別の投入先が未配線 (invoice / utility / statement / other)。 種別を直してから
-  //  422 incomplete              : date / payee / total のいずれか欠落 (OCR 未完 or 要編集)
-  //  409 duplicate               : 既に投入済の中に同じ (日付-場所-金額) がある
+  //  422 kind_not_auto_committed : 投入先の無い種別 (other)。 種別を直してから投入する
+  //  422 incomplete              : その種別の投入に要る項目が欠落 (OCR 未完 or 要編集)
+  //  409 duplicate               : 既に投入済の中に同じ重複キーがある (種別ごとのキー)
   app.post("/:id/commit", (c) => {
     const id = c.req.param("id");
-    const outcome = commitReceipt(deps.repo, id, { trigger: "manual" });
+    const outcome = commitReceipt(deps.repo, id, { trigger: "manual", destinations: deps.destinations });
 
     if (!outcome.ok && outcome.reason === "not_found") return c.json({ error: "not_found" }, 404);
     if (!outcome.ok && (outcome.reason === "kind_not_auto_committed" || outcome.reason === "needs_review")) {
@@ -372,7 +381,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
       return c.json({
         error: "incomplete",
         missing: outcome.missing,
-        message: "日付・場所・金額が揃っていません",
+        message: `投入に必要な項目が揃っていません: ${outcome.missing.join(" / ")}`,
       }, 422);
     }
     if (!outcome.ok) {
@@ -380,7 +389,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
       return c.json({
         error: "duplicate",
         existing_id: outcome.existingId,
-        message: `同じ (日付-場所-金額) が投入済: ${r.date} / ${r.payee} / ¥${r.total}`,
+        message: `同じ書類が投入済: ${r.date} / ${r.payee} / ¥${r.total}`,
       }, 409);
     }
 
@@ -388,7 +397,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const reconciled = outcome.already ? 0 : (deps.intake?.afterCommit(id)?.matched.length ?? 0);
     return outcome.already
       ? c.json({ ok: true, already: true, receipt: outcome.receipt })
-      : c.json({ ok: true, receipt: outcome.receipt, auto_reconciled: reconciled });
+      : c.json({ ok: true, receipt: outcome.receipt, auto_reconciled: reconciled, delivery: outcome.delivery ?? null });
   });
 
   // DELETE /v1/receipts/:id
@@ -407,6 +416,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
       return c.json({ ok: true, throttled: true, message: "2 秒内に既に起動済 — skip" }, 200);
     }
     const result = await runOcrFor(id, { receipts: deps.repo, storage: deps.storage, client: deps.ocr });
+    lastOcrTriggerAt.set(id, Date.now());
     if (!result.ok) return c.json({ ok: false, status: result.status, message: result.message }, 400);
     return c.json({ ok: true, status: result.status, receipt: deps.repo.find(id) });
   });

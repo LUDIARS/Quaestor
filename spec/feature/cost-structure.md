@@ -22,3 +22,16 @@
 
 - utility を持つルールに当たったイベントを 月 × 種別 (electric / gas / water) で合計し、 anchor 月を末尾とする 12 ヶ月の推移と、 前年同月との差を返す。
 - 固定費 / 変動費ビューは window (week / month / quarter / half / year) の合計・店別 (件数、 金額、 事業分、 月次系列)・前期間比を返す。
+
+## SPEC-COST-STRUCTURE-005 — 検針票由来の供給者ルール
+
+- スキャンして `utility` (検針票・公共料金) と分類された書類を投入するとき、 その供給者を `cost_rules` に入力する
+  (`src/services/cost-structure/utility-supplier-rules.ts`)。 統計から推測する固定費候補 (SPEC-COST-STRUCTURE-003)
+  と違い、 紙に書かれた確定値なので priority 200 (seed の 10〜50 より後、 提案の 300 より前) で入れる。
+- 種別 (electric / gas / water) は供給者名を先に見て、 決まらなければ使用量の単位で決める。 単位で決めるのは
+  kWh (electric) だけにする (m3 / ㎥ は ガス と 水道 の両方で使われる)。 どちらでも決まらなければルールを作らず、
+  レシートの投入だけ行う (要確認には残さない)。
+- pattern は 供給者名 と レシートの payee の完全一致 (両方が同じなら 1 つ) で、 note は `utility-scan:<日付>`。
+  既存ルールで既に utility が付く供給者ならルールを増やさない。 同じ pattern の無効ルールがあれば再有効化する。
+- 投入されたレシートは支出イベント (SPEC-COST-STRUCTURE-002) として水道光熱費ビューに載る。
+  投入の起点は `src/services/receipt-kind-destinations.ts` (spec/feature/scan-document-kinds.md SPEC-SCAN-KIND-005)。

@@ -67,7 +67,7 @@ export function autoReconcile(
     ? opts.receiptIds
         .map((id) => deps.receipts.find(id))
         .filter((r): r is ReceiptRow => r != null)
-        .filter((r) => r.committed_at != null)
+        .filter((r) => r.committed_at != null && r.doc_kind !== "statement")
         .filter((r) => deps.reconciliations.byReceipt(r.id).length === 0)
     : unreconciledCommittedReceipts(deps.db);
 
@@ -109,12 +109,16 @@ export function autoReconcile(
   return { threshold, matched, skipped };
 }
 
-/** 投入済かつ、 まだどの取引にも紐付いていないレシート。 */
+/**
+ * 投入済かつ、 まだどの取引にも紐付いていないレシート。
+ * 明細 (doc_kind='statement') は 1 件の買い物ではなく取引の一覧なので母集団から外す
+ * (明細の行自体が transactions に入っている)。
+ */
 function unreconciledCommittedReceipts(db: Database.Database): ReceiptRow[] {
   return db
     .prepare(
       `SELECT r.* FROM receipts r
-       WHERE r.committed_at IS NOT NULL
+       WHERE r.committed_at IS NOT NULL AND r.doc_kind != 'statement'
          AND NOT EXISTS (SELECT 1 FROM reconciliations rc WHERE rc.receipt_id = r.id)
        ORDER BY r.date DESC
        LIMIT ?`,

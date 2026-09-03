@@ -21,6 +21,11 @@ import { AnthropicOcrClient } from "./services/ocr-client.js";
 import { OcrWorker } from "./services/ocr-worker.js";
 import { ReceiptIntake } from "./services/receipt-intake.js";
 import { ReconciliationsRepo } from "./db/reconciliations-repo.js";
+import { CostRulesRepo } from "./db/cost-rules-repo.js";
+import { ImportsRepo } from "./db/imports-repo.js";
+import { InboundDocumentsRepo } from "./db/inbound-documents-repo.js";
+import { TransactionsRepo } from "./db/transactions-repo.js";
+import { createKindDestinations } from "./services/receipt-kind-destinations.js";
 import { OcrSidecarSupervisor } from "./services/ocr-sidecar-supervisor.js";
 import { HttpOcrSidecarClient } from "./services/ocr-sidecar-client.js";
 import { GaBenchNightlyJob } from "./services/ocr-ga-bench/nightly-job.js";
@@ -122,15 +127,27 @@ if (process.env.ANTHROPIC_API_KEY && config.ocrWorker.enabled) {
     applyMigrations(db); // buildApp が既にやってるが念のため
     const client = new AnthropicOcrClient();
     const workerReceipts = new ReceiptsRepo(db);
+    const workerStorage = new ReceiptStorage(RECEIPTS_ROOT);
+    const workerCostRules = new CostRulesRepo(db);
+    workerCostRules.seedIfEmpty();
+    const workerDestinations = createKindDestinations({
+      db,
+      documents: new InboundDocumentsRepo(db),
+      costRules: workerCostRules,
+      imports: new ImportsRepo(db),
+      txs: new TransactionsRepo(db),
+      storage: workerStorage,
+    });
     ocrWorker = new OcrWorker({
       receipts: workerReceipts,
-      storage: new ReceiptStorage(RECEIPTS_ROOT),
+      storage: workerStorage,
       client,
       // worker 経由の OCR も API 経由と同じく、 完備していれば投入 → 突合まで進める
       intake: new ReceiptIntake({
         db,
         receipts: workerReceipts,
         reconciliations: new ReconciliationsRepo(db),
+        destinations: workerDestinations,
         logger: log,
       }),
       intervalMs: config.ocrWorker.intervalMs,

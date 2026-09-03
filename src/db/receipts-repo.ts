@@ -278,6 +278,20 @@ export class ReceiptsRepo {
     return rows.find((r) => r.id !== excludeId && normalizePayee(r.payee) === target);
   }
 
+  /**
+   * 投入済で同じ種別の receipt を新しい順に返す。 種別ごとの重複キー
+   * (`receipt-duplicate-keys.ts`) は JS 側で組み立てるので、 突合は呼び元が行う
+   * (receipt / handwritten は index の効く findCommittedDuplicate を使う)。
+   */
+  listCommittedByKind(kind: DocKind): ReceiptRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM receipts WHERE committed_at IS NOT NULL AND doc_kind = ?
+         ORDER BY committed_at DESC`,
+      )
+      .all(kind) as ReceiptRow[];
+  }
+
   /** receipt を投入済にする (committed_at をセット)。 既に投入済なら false。 */
   commit(id: string): boolean {
     const now = nowSec();

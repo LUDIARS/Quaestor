@@ -2,9 +2,10 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { Hono } from "hono";
 import { z } from "zod";
-import type { InboundDocumentsRepo } from "../db/inbound-documents-repo.js";
+import type { InboundDocumentRow, InboundDocumentsRepo } from "../db/inbound-documents-repo.js";
 import type { MailMessagesRepo } from "../db/mail-messages-repo.js";
 import type { MailIntakeService } from "../services/mail-intake-service.js";
+import type { ReceiptStorage } from "../services/receipt-storage.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
 import { normalizeDate } from "../shared/text.js";
 
@@ -27,6 +28,7 @@ export interface MailIntakeApiDeps {
   messages: MailMessagesRepo;
   documents: InboundDocumentsRepo;
   documentsRoot: string;
+  receiptStorage: ReceiptStorage;
 }
 
 /**
@@ -68,12 +70,12 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
   app.get("/documents/:id/file", async (c) => {
     const document = deps.documents.find(c.req.param("id"));
     if (!document) return c.json({ error: "not found" }, 404);
-    const path = resolveStoredDocumentPath(deps.documentsRoot, document.file_path);
+    const path = resolveInboundDocumentPath(deps.documentsRoot, deps.receiptStorage, document);
     if (!path) return c.json({ error: "not found" }, 404);
 
     try {
       const data = await readFile(path);
-      c.header("Content-Type", "application/pdf");
+      c.header("Content-Type", safeDocumentMimeType(document.mime_type));
       c.header(
         "Content-Disposition",
         `attachment; filename="invoice.pdf"; filename*=UTF-8''${encodeHeaderFilename(document.filename)}`,
@@ -113,6 +115,20 @@ export function resolveStoredDocumentPath(root: string, storedPath: string): str
   return isAbsolute(pathFromRoot) ? null : candidate;
 }
 
+/** mail 添付は inbound root、 scan 請求書は receipt storage を正本として解決する。 */
+export function resolveInboundDocumentPath(
+  documentsRoot: string,
+  receiptStorage: Pick<ReceiptStorage, "resolve">,
+  document: Pick<InboundDocumentRow, "source" | "file_path">,
+): string | null {
+  if (document.source === "mail") return resolveStoredDocumentPath(documentsRoot, document.file_path);
+  try {
+    return receiptStorage.resolve(document.file_path);
+  } catch {
+    return null; // ReceiptStorage が root 外の path と空 path を拒否する
+  }
+}
+
 function encodeHeaderFilename(filename: string): string {
   const safeFilename = filename
     .replace(/[\u0000-\u001f\u007f]/g, "")
@@ -121,6 +137,18 @@ function encodeHeaderFilename(filename: string): string {
   return encodeURIComponent(safeFilename).replace(/['()*]/g, (character) => (
     `%${character.charCodeAt(0).toString(16).toUpperCase()}`
   ));
+}
+
+function safeDocumentMimeType(mimeType: string): string {
+  switch (mimeType) {
+    case "application/pdf":
+    case "image/jpeg":
+    case "image/png":
+    case "image/webp":
+      return mimeType;
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function isTrustedBrowserContext(fetchSite: string | undefined): boolean {

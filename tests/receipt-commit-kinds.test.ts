@@ -4,7 +4,7 @@ import { applyMigrations } from "../src/db/schema.js";
 import { ReceiptsRepo, type ReceiptRow } from "../src/db/receipts-repo.js";
 import { commitReceipt, commitReasonCode, kindBlockMessage } from "../src/services/receipt-commit.js";
 import {
-  receiptDuplicateKey, invoiceDuplicateKey, utilityDuplicateKey, duplicateKeyFor,
+  receiptDuplicateKey, invoiceDuplicateKey, utilityDuplicateKey, kindDuplicateKey,
 } from "../src/services/receipt-duplicate-keys.js";
 import { normalizeLlmLabels, applyLlmLabels, applyManualLabels } from "../src/services/receipt-labels.js";
 import { buildPrompt } from "../src/services/claude-code-ocr.js";
@@ -64,16 +64,22 @@ describe("receipt-commit: 書類種別による投入ゲート", () => {
     expect(commitReceipt(repo, dup)).toMatchObject({ ok: false, reason: "duplicate", existingId: first });
   });
 
-  it("invoice / utility / statement / other は auto / manual とも kind_not_auto_committed:<kind>", () => {
-    for (const kind of ["invoice", "utility", "statement", "other"] as const) {
+  it("other は auto / manual とも kind_not_auto_committed:other (投入先が無い)", () => {
+    const id = seed("other");
+    for (const trigger of ["auto", "manual"] as const) {
+      const out = commitReceipt(repo, id, { trigger });
+      expect(out).toMatchObject({ ok: false, reason: "kind_not_auto_committed", kind: "other" });
+      expect(commitReasonCode(out)).toBe("kind_not_auto_committed:other");
+    }
+    expect(repo.find(id)!.committed_at).toBeNull();
+    expect(kindBlockMessage("other")).toContain(DOC_KIND_INFO.other.label);
+  });
+
+  it("投入先を渡さなければ invoice / utility / statement も投入しない (既定は receipts のみ)", () => {
+    for (const kind of ["invoice", "utility", "statement"] as const) {
       const id = seed(kind);
-      for (const trigger of ["auto", "manual"] as const) {
-        const out = commitReceipt(repo, id, { trigger });
-        expect(out).toMatchObject({ ok: false, reason: "kind_not_auto_committed", kind });
-        expect(commitReasonCode(out)).toBe(`kind_not_auto_committed:${kind}`);
-      }
+      expect(commitReceipt(repo, id)).toMatchObject({ ok: false, reason: "kind_not_auto_committed", kind });
       expect(repo.find(id)!.committed_at).toBeNull();
-      expect(kindBlockMessage(kind)).toContain(DOC_KIND_INFO[kind].label);
     }
   });
 
@@ -101,6 +107,8 @@ describe("receipt-duplicate-keys: 種別ごとの重複キー", () => {
   it("invoice: issuer + invoice_no、 番号が無ければ null", () => {
     const inv = { ...base, doc_kind: "invoice" as const, kind_fields: JSON.stringify({ issuer: " acme ", invoice_no: "INV-7" }) };
     expect(invoiceDuplicateKey(inv)).toBe("ACME|INV-7");
+    expect(invoiceDuplicateKey({ ...inv, kind_fields: JSON.stringify({ issuer: "ＡＣＭＥ", invoice_no: "ｉｎｖ－７" }) }))
+      .toBe("ACME|INV-7");
     expect(invoiceDuplicateKey({ ...inv, kind_fields: JSON.stringify({ issuer: "ACME" }) })).toBeNull();
     expect(invoiceDuplicateKey(base)).toBeNull(); // 種別違い
   });
@@ -114,11 +122,11 @@ describe("receipt-duplicate-keys: 種別ごとの重複キー", () => {
     expect(utilityDuplicateKey({ ...u, kind_fields: JSON.stringify({ supplier: "東京電力", period_from: "2026-07-15" }) })).toBeNull();
   });
 
-  it("duplicateKeyFor は種別で振り分け、 statement / other は null", () => {
-    expect(duplicateKeyFor(base)).toBe(receiptDuplicateKey(base));
-    expect(duplicateKeyFor({ ...base, doc_kind: "handwritten" })).toBe(receiptDuplicateKey(base));
-    expect(duplicateKeyFor({ ...base, doc_kind: "statement" })).toBeNull();
-    expect(duplicateKeyFor({ ...base, doc_kind: "other" })).toBeNull();
+  it("kindDuplicateKey は種別で振り分け、 statement / other は null", () => {
+    expect(kindDuplicateKey(base)).toBe(receiptDuplicateKey(base));
+    expect(kindDuplicateKey({ ...base, doc_kind: "handwritten" })).toBe(receiptDuplicateKey(base));
+    expect(kindDuplicateKey({ ...base, doc_kind: "statement" })).toBeNull();
+    expect(kindDuplicateKey({ ...base, doc_kind: "other" })).toBeNull();
   });
 });
 

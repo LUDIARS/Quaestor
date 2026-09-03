@@ -98,6 +98,18 @@ describe("analyzeBehavior", () => {
     expect(r.find((e) => e.payee_sample.includes("個人商店"))?.sources).toContain("receipt");
   });
 
+  it("does not count a committed statement receipt as a purchase", () => {
+    const id = seedCommittedReceipt("2025-04-20", "カード明細", 8_000);
+    receipts.setLabels(id, {
+      doc_kind: "statement",
+      kind_fields: { rows: [] },
+      sample_source: "llm",
+    });
+
+    expect(analyzeBehavior(db)).toHaveLength(0);
+    expect(dataCoverage(db).months).toEqual([]);
+  });
+
   it("respects date range and minVisits filters", () => {
     seedTx("2025-03-01", "店A", 100);
     seedTx("2025-04-01", "店B", 200);

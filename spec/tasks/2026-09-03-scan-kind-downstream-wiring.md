@@ -43,3 +43,16 @@ D1 (Revisor local PR #1258、 `feat/scan-doc-kind-sample-labels`) で書類種�
 - `src/api/receipts.ts`
 - `spec/feature/scan-document-kinds.md`、 `spec/feature/cost-structure.md`
 - `tests/`
+
+## 実装結果 (2026-09-03)
+
+- 投入先の対応表を `src/services/receipt-kind-destinations.ts` に置き、 `receipt-commit.ts` は
+  「種別方針 → 完備 → 重複 → 配送 + 投入 (1 トランザクション)」 の判断だけを持つ。 API 側の分岐は増やしていない。
+- invoice → `src/services/scan-invoice-intake.ts` (メール取込と同じ `PdfExtraction` / `inbound_documents`、 schema v20)。
+- utility → `src/services/cost-structure/utility-supplier-rules.ts` (供給者を `cost_rules` へ、 水道光熱費ビューに反映)。
+- statement → `src/services/scan-statement-intake.ts` + `src/services/statement-rows.ts`
+  (source_id の算出を `smart-import.ts` と共通化)。 明細レシートは支出イベント・行動分析・
+  Memoria 支出ログ / 自動突合から外す。
+- 仕様は `spec/feature/scan-document-kinds.md` SPEC-SCAN-KIND-001 の表と SPEC-SCAN-KIND-005、
+  `spec/feature/cost-structure.md` SPEC-COST-STRUCTURE-005、 `spec/feature/mail-intake.md` SPEC-MAIL-INTAKE-004 に反映。
+- 残: 明細取込ページのスクショ入力の撤去 (A-3)、 web への配送結果表示 (受領書類 / 固定費 / 取込件数)。

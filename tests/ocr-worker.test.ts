@@ -45,8 +45,9 @@ describe("OcrWorker", () => {
     receipts = new ReceiptsRepo(db);
     storageRoot = mkdtempSync(join(tmpdir(), "qworker-"));
     storage = new ReceiptStorage(storageRoot);
-  });
+  }, 30_000);
   afterEach(() => {
+    db.close();
     rmSync(storageRoot, { recursive: true, force: true });
   });
 

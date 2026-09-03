@@ -100,7 +100,8 @@ export function dataCoverage(db: Database.Database, source?: SourceKind | Source
     const rows = db
       .prepare(
         `SELECT DISTINCT substr(date, 1, 7) AS m FROM receipts
-         WHERE committed_at IS NOT NULL AND date IS NOT NULL AND total IS NOT NULL`,
+         WHERE committed_at IS NOT NULL AND doc_kind != 'statement'
+           AND date IS NOT NULL AND total IS NOT NULL`,
       )
       .all() as { m: string }[];
     for (const r of rows) if (/^\d{4}-\d{2}$/.test(r.m)) monthSet.add(r.m);
@@ -170,6 +171,7 @@ export function analyzeBehavior(db: Database.Database, filter: BehaviorFilter = 
   if (shouldIncludeReceipts(sources)) {
     const where = [
       "committed_at IS NOT NULL",
+      "doc_kind != 'statement'",
       "payee IS NOT NULL",
       "total IS NOT NULL",
       "id NOT IN (SELECT receipt_id FROM reconciliations)",

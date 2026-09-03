@@ -33,12 +33,21 @@ export const CONTENT_TAGS = [
 ] as const;
 
 /**
- * 投入ゲートでの扱い。
- *  - receipt_rules: 現行どおり (日付-場所-金額 完備 + 重複無し) で自動投入
- *  - manual_only:   自動投入せず要確認に残す。 手動投入は receipt_rules で通す
- *  - not_wired:     投入先が未配線。 自動・手動とも投入しない (種別を直してから投入)
+ * 投入ゲートでの扱い。 種別 = 投入先 = 完備条件が 1:1 になるよう、 投入先ごとに 1 値を持つ。
+ *  - receipt_rules:    日付-場所-金額 完備 + 非重複で receipts へ投入 (現行)
+ *  - manual_only:      自動投入せず要確認に残す。 手動投入は receipt_rules で通す
+ *  - invoice_intake:   受領書類 (inbound_documents) へ登録してから receipts へ投入
+ *  - utility_cost:     供給者を cost_rules へ入力してから receipts へ投入 (水道光熱費ビューに載る)
+ *  - statement_import: 明細行を transactions へ取り込む (receipts の金額としては数えない)
+ *  - not_wired:        投入先が無い。 自動・手動とも投入しない (種別を直してから投入)
  */
-export type CommitPolicy = "receipt_rules" | "manual_only" | "not_wired";
+export type CommitPolicy =
+  | "receipt_rules"
+  | "manual_only"
+  | "invoice_intake"
+  | "utility_cost"
+  | "statement_import"
+  | "not_wired";
 
 export interface DocKindInfo {
   kind: DocKind;
@@ -63,22 +72,22 @@ export const DOC_KIND_INFO: Record<DocKind, DocKindInfo> = {
     kind: "invoice",
     label: "請求書",
     description: "請求書 (発行者・請求番号・支払期限・請求額。「請求書」「御請求」「振込先」など)",
-    destination: "請求書として保留 (仕訳への配線は次版)",
-    commitPolicy: "not_wired",
+    destination: "受領書類として登録 + レシートとして投入",
+    commitPolicy: "invoice_intake",
   },
   utility: {
     kind: "utility",
     label: "検針票",
     description: "検針票・公共料金 (電気 / ガス / 水道 / 通信の供給者 + 使用期間 + 使用量 + 金額)",
-    destination: "水道光熱費として保留 (固定費・変動費への反映は次版)",
-    commitPolicy: "not_wired",
+    destination: "水道光熱費に反映 (供給者を固定費ルールへ) + レシートとして投入",
+    commitPolicy: "utility_cost",
   },
   statement: {
     kind: "statement",
     label: "明細",
     description: "クレカ / 銀行の明細 (日付・摘要・金額の行が複数並ぶ表。 画面キャプチャを含む)",
-    destination: "取引明細として保留 (明細取込への合流は次版)",
-    commitPolicy: "not_wired",
+    destination: "明細行を取引として取込 → クレカ明細と同じ扱い",
+    commitPolicy: "statement_import",
   },
   handwritten: {
     kind: "handwritten",

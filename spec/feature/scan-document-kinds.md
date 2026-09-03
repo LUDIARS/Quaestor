@@ -19,18 +19,24 @@ LLM 呼出で、 その画像が OCR 学習の **サンプルとして適切か 
   statement = rows[] (date / description / amount)。 receipt / handwritten / other は持たない。
 - 投入の可否は `src/services/receipt-commit.ts` に集約したまま、 種別で方針を切り替える:
 
-  | doc_kind | 自動投入 (OCR 完了時) | 手動投入 (POST /commit) | 理由コード |
-  | --- | --- | --- | --- |
-  | receipt | 現行どおり (日付-場所-金額 完備 + 非重複) | 同左 | `incomplete` / `duplicate` |
-  | handwritten | しない (要確認に残す) | receipt と同じ条件で可 | `needs_review` |
-  | invoice / utility / statement / other | しない | しない (種別を直してから投入) | `kind_not_auto_committed:<kind>` |
+  | doc_kind | 投入先 | 完備条件 | 重複キー | 自動投入 (OCR 完了時) | 手動投入 (POST /commit) |
+  | --- | --- | --- | --- | --- | --- |
+  | receipt | receipts → 突合 → 家計分析 | date / payee / total | 日付-場所-金額 | する | する |
+  | invoice | `inbound_documents` (受領書類) + receipts | date / total / issuer | issuer + invoice_no | する | する |
+  | utility | `cost_rules` (水道光熱費ビュー) + receipts | date / total / supplier | supplier + 使用期間 | する | する |
+  | statement | `imports` + `transactions` (明細取込と同じ) | 取り込める行が 1 行以上 | 行の source_id 集合 | する | する |
+  | handwritten | receipts (要確認に残す) | date / payee / total | 日付-場所-金額 | しない (`needs_review`) | する |
+  | other | 無し | — | — | しない (`kind_not_auto_committed:other`) | しない |
 
-  invoice / utility / statement の投入先 (仕訳 / 固定費 / 明細取込) への配線は次版 (設計書 A-1 / A-3)。
-- 種別ごとの重複キーは `src/services/receipt-duplicate-keys.ts` に置く (receipt / handwritten = 日付-場所-金額、
-  invoice = issuer + invoice_no、 utility = supplier + 使用期間)。 投入ゲートが使うのは receipt 系だけ。
+  完備しない場合は `incomplete` (欠けた項目名を返す)、 重複は `duplicate`。 要確認に残るのは
+  `other` と完備不足・重複だけで、 「種別が未配線だから残る」 レシートは無い。
+- 語彙側の `DOC_KIND_INFO[kind].commitPolicy` が投入先の切替点で、 実装 (投入先の対応表) と
+  web の説明文 (`destination`) は同じ定数から引く。
+- 種別ごとの重複キーは `src/services/receipt-duplicate-keys.ts` に置き、 投入ゲートが `duplicateKeyFor` で
+  使う。 invoice / utility は種別固有キーが作れなければ 日付-場所-金額 に落とす。
 - web: スキャン演出の CONFIRMED スタンプと SCAN COMPLETE サマリーに **種別バッジ** (レシート / 請求書 /
   検針票 / 明細 / 手書き / その他) を出す。 撮影一覧 (ShotCard) とレシート一覧 (Receipts) にも種別を出す。
-  投入先が未配線の種別は投入ボタンを押せない。 「撮影対象と自動仕訳」 パネルは静的文でなく
+  投入先の無い種別 (`other`) は投入ボタンを押せない。 「撮影対象と自動仕訳」 パネルは静的文でなく
   **種別ごとの投入先** の一覧 (語彙から生成) にする。
 
 ## SPEC-SCAN-KIND-002 — LLM サンプルラベル
@@ -72,6 +78,34 @@ LLM 呼出で、 その画像が OCR 学習の **サンプルとして適切か 
 - `--limit N` / `--dry-run` (LLM を呼ばず対象を列挙) / `--db <path>`。 DB が無ければ作らず失敗する。
 - runner は DI (テストはモック)。 本番 DB に対する実行は運用者が行う。
 
+## SPEC-SCAN-KIND-005 — 種別ごとの投入先配線
+
+投入先は種別ごとに 1 つだけ持ち (`src/services/receipt-kind-destinations.ts`)、 すべて既存の受け皿へ合流させる。
+投入の可否 (種別方針 → 完備 → 重複 → 投入) は `src/services/receipt-commit.ts` に集約したままで、 API 側に
+分岐を散らさない。 配送と `committed_at` の書き込みは 1 トランザクションにまとめる。
+投入後に種別や OCR 会計項目だけを変えると配送済みの副作用を取り消せないため、 `doc_kind` と OCR 会計項目は
+投入後は変更不可とする (サンプル役割・タグなど、 会計に影響しないラベル訂正は可)。
+
+- **invoice** → `inbound_documents` (メール取込と同じ受領書類)。 `src/services/scan-invoice-intake.ts` が
+  `kind_fields` + receipt 行を メール取込と同じ `PdfExtraction` (issuer / date / total / due_date / invoice_no /
+  confidence) に起こし、 `source='scan'`・`message_id=NULL`・`receipt_id` 付きの行を `status='committed'` で登録する。
+  発行者は `kind_fields.issuer`、 無ければ OCR の payee。 同じ receipt から二度登録しない。
+- **utility** → `cost_rules`。 `src/services/cost-structure/utility-supplier-rules.ts` が供給者名 (と使用量の単位)
+  から電気 / ガス / 水道を判定し、 供給者と payee の両方に当たる固定費ルール (priority 200、 note `utility-scan:<日付>`)
+  を作る。 既存ルールで既に utility が付く供給者ならルールを増やさない。 種別を判定できなければルールは作らず、
+  レシートの投入だけ行う。 これにより投入済レシートが支出イベントとして水道光熱費ビュー (月 × 種別) に載る。
+- **statement** → `imports` + `transactions`。 `src/services/scan-statement-intake.ts` が `kind_fields.rows[]` を
+  `ImportedTransaction[]` に変換して取り込む。 金額は 正 = 出金 / 負 = 入金。 source_id の算出は明細取込
+  (`src/services/smart-import.ts`) と共通 (`src/services/statement-rows.ts`) なので、 同じ明細をスキャンと
+  明細取込の両方から入れても transactions の UNIQUE で 1 件に収束する。 明細レシート自身は金額を二重に数えない
+  よう、 家計の支出イベント・行動分析・Memoria 支出ログと自動突合の母集団から外す
+  (`src/services/household/spend-events.ts`、 `src/services/behavior-analysis.ts`、
+  `src/services/memoria-spending-log.ts`、 `src/services/auto-reconcile.ts`)。
+- **receipt / handwritten** → receipts (副作用なし)。 **other** → 投入先なし。
+- schema v20: `inbound_documents` をメール添付専用から広げる。 `source` (`mail` / `scan`) を足し、
+  `message_id` と `sha256` を NULL 可にする (`sha256` の UNIQUE index は NOT NULL の行だけに掛ける)。
+  既存行は `source='mail'` で移す。
+
 ## 実装の置き場所
 
 | 条項 | 実装 | テスト |
@@ -79,6 +113,11 @@ LLM 呼出で、 その画像が OCR 学習の **サンプルとして適切か 
 | 語彙 (6 種 / ラベル / タグ) | `src/shared/document-kinds.ts`、 `src/shared/receipt-kind-fields.ts` | `tests/receipt-commit-kinds.test.ts` |
 | schema v19 / 読み書き | `src/db/schema.ts`、 `src/db/receipts-repo.ts` | `tests/scan-document-kinds.test.ts` |
 | SPEC-SCAN-KIND-001 投入ゲート・重複キー | `src/services/receipt-commit.ts`、 `src/services/receipt-duplicate-keys.ts`、 `src/services/receipt-intake.ts` | `tests/receipt-commit-kinds.test.ts` |
+| SPEC-SCAN-KIND-005 投入先の対応表 | `src/services/receipt-kind-destinations.ts`、 `src/app.ts`、 `src/server.ts` | `tests/scan-kind-destinations.test.ts` |
+| SPEC-SCAN-KIND-005 invoice → 受領書類 | `src/services/scan-invoice-intake.ts`、 `src/db/inbound-documents-repo.ts`、 `src/db/schema.ts` (v20) | `tests/scan-kind-destinations.test.ts` |
+| SPEC-SCAN-KIND-005 utility → cost_rules | `src/services/cost-structure/utility-supplier-rules.ts` | `tests/scan-kind-destinations.test.ts` |
+| SPEC-SCAN-KIND-005 statement → transactions | `src/services/scan-statement-intake.ts`、 `src/services/statement-rows.ts`、 `src/services/smart-import.ts` | `tests/scan-kind-destinations.test.ts` |
+| SPEC-SCAN-KIND-005 二重計上回避 | `src/services/household/spend-events.ts`、 `src/services/behavior-analysis.ts`、 `src/services/memoria-spending-log.ts`、 `src/services/auto-reconcile.ts` | `tests/scan-kind-destinations.test.ts`、 `tests/behavior-analysis.test.ts`、 `tests/memoria-spending-log.test.ts` |
 | SPEC-SCAN-KIND-001/002 OCR prompt | `src/services/ocr-classification-prompt.ts`、 `src/services/claude-code-ocr.ts`、 `src/services/ocr-client.ts`、 `src/services/ocr-runner.ts` | `tests/receipt-commit-kinds.test.ts`、 `tests/ocr.test.ts` |
 | SPEC-SCAN-KIND-002/003 ラベル適用・API | `src/services/receipt-labels.ts`、 `src/api/receipts.ts` | `tests/scan-document-kinds.test.ts` |
 | SPEC-SCAN-KIND-004 後付け CLI | `src/services/sample-labeler.ts`、 `src/cli/sample-label.ts`、 `src/services/claude-cli.ts` (`--model` / `--allowedTools`) | `tests/sample-labeler.test.ts` |

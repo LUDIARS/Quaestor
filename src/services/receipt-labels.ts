@@ -43,7 +43,7 @@ export interface ManualLabelPatch {
 
 export type ApplyLabelsOutcome =
   | { applied: true; source: "llm" | "manual" }
-  | { applied: false; reason: "not_found" | "manual_override" | "empty" | "special_shape_requires_tag" };
+  | { applied: false; reason: "not_found" | "manual_override" | "empty" | "special_shape_requires_tag" | "committed_kind_immutable" };
 
 /**
  * LLM 出力 (unknown JSON) を LlmLabels に正規化する。 kind が語彙外なら null (= 保存しない)。
@@ -83,6 +83,9 @@ export function applyLlmLabels(repo: ReceiptsRepo, id: string, labels: LlmLabels
   const row = repo.find(id);
   if (!row) return { applied: false, reason: "not_found" };
   if (row.sample_source === "manual") return { applied: false, reason: "manual_override" };
+  if (row.committed_at != null && labels.kind !== row.doc_kind) {
+    return { applied: false, reason: "committed_kind_immutable" };
+  }
 
   const input: UpdateLabelsInput = {
     doc_kind: labels.kind,
@@ -103,6 +106,9 @@ export function applyLlmLabels(repo: ReceiptsRepo, id: string, labels: LlmLabels
 export function applyManualLabels(repo: ReceiptsRepo, id: string, patch: ManualLabelPatch): ApplyLabelsOutcome {
   const row = repo.find(id);
   if (!row) return { applied: false, reason: "not_found" };
+  if (row.committed_at != null && patch.doc_kind !== undefined && patch.doc_kind !== row.doc_kind) {
+    return { applied: false, reason: "committed_kind_immutable" };
+  }
 
   if (patch.sample_role !== undefined || patch.sample_tags !== undefined) {
     const effectiveRole = patch.sample_role !== undefined ? patch.sample_role : row.sample_role;

@@ -34,6 +34,9 @@ export interface OcrRunnerDeps {
 export async function runOcrFor(receiptId: string, deps: OcrRunnerDeps): Promise<OcrRunResult> {
   const r = deps.receipts.find(receiptId);
   if (!r) return { ok: false, status: "failed", message: "receipt not found" };
+  if (r.committed_at != null) {
+    return { ok: false, status: "failed", message: "receipt already committed" };
+  }
   if (!r.image_path) return markFailed(deps.receipts, receiptId, "no image_path");
 
   const buf = deps.storage.load(r.image_path);
