@@ -26,6 +26,7 @@
 | 設定 | エクスポート / 設定 |
 
 - **スマホ (幅 < 768px) のトップ** は `MobileHome`: ☰ ボタン (ドロワーを開く)、 よく使うページ (上位 6 件)、 アクティビティログ (直近 30 件)。 PC のトップは従来の Dashboard のまま。 判定は `matchMedia("(max-width: 767px)")`。
+- **スマホの年選択** は、データが存在する今年から過去 2 年をタブで表示し、それ以前の年と「全期間」をプルダウンにまとめる。PC の年タブは従来のままにする。
 - **よく使うページ** はブラウザ側で数える (`localStorage` `quaestor.page-visits.v1`: key → {count, last})。 ページ遷移ごとに加算し、 count 降順 → last 降順。 履歴が無いときは既定 (スキャン / レシート / 家計分析 / 簿記 / 取引 / 突合)。 端末ごとの個人的な便宜なので DB には持たない。
 - **アクティビティログ** は既存テーブルの時刻列から組み立てる (新テーブル無し): 明細取込 (imports + 件数) / レシート撮影・投入 (receipts) / 突合 (reconciliations) / 請求書 (invoices) / 手動仕訳・仕訳取込 (journal_entries、 取込は created_at 秒で束ねる) / 固定資産 (fixed_assets) / 按分ルール (apportionment_rules)。 `GET /v1/activity?limit=` で時刻降順。 ローカル UI に必要な金額・店名・取引先名は表示する一方、取込元ファイル名は返さず、応答は `Cache-Control: no-store` とする。
 
@@ -39,6 +40,7 @@
 | `web/src/lib/page-visits.ts` | 訪問回数の記録と上位取得 (localStorage) |
 | `web/src/lib/useMediaQuery.ts` | matchMedia フック |
 | `web/src/components/Nav.tsx` | Concordia 風のサイドバー + ドロワー (page state 版) |
+| `web/src/components/YearTabs.tsx` | スマホ用の省スペースな年タブ + 過去年プルダウン |
 | `web/src/pages/MobileHome.tsx` | スマホのトップ (メニューボタン / よく使うページ / アクティビティログ) |
 | `web/src/App.tsx` | header + Nav + main のレイアウト。 スマホでトップなら MobileHome、 それ以外は従来ページ |
 
