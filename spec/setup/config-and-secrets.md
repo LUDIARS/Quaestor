@@ -37,9 +37,13 @@ Quaestor を動かすための設定の置き場所と渡し方。**env を手�
 | `invoiceShare.timestampAuthority.url` | `https://freetsa.org/tsr` | 合意証跡の SHA-256 を打刻する RFC 3161 タイムスタンプ局 (TSA) の URL | `QUAESTOR_TSA_URL` |
 | `invoiceShare.timestampAuthority.enabled` | `true` | `false` で外部タイムスタンプを付けない (合意行の `timestamp_status` は `skipped`) | `QUAESTOR_TSA_ENABLED` |
 
-web (ブラウザ) は `import.meta.env` を使わない。非シークレット設定は
-`GET /v1/config` (app.ts) → `web/src/lib/runtime-config.ts` で受け取る。配備バージョンは
-`GET /health` の `version` で取得する。
+web (ブラウザ) は `import.meta.env` を使わない。配備バージョンは `GET /health` の `version`、
+許可ホストは `GET/PUT /v1/config/web` (api/config.ts) で受け取る。
+`GET /v1/config` (公開設定) と `web/src/lib/runtime-config.ts` は
+2026-09-03 に廃止した — 唯一の公開項目だった `ocrSidecarUrl` は、ブラウザから
+`http://127.0.0.1:17350` が公開面 (HTTPS / スマホ) に届かず経路ごと backend へ移したため
+(`spec/feature/ocr-ga-evaluation.md` SPEC-OCR-GA-EVAL-006)。web へ出す非シークレット設定が
+再び要るときは同じ形で復活させる。
 
 ## 2. シークレット — 暗号化ストア (`app_data/secrets.enc.json`)
 

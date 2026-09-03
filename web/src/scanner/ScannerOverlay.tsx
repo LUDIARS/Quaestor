@@ -169,14 +169,6 @@ interface Props {
    * (余韻スロースキャン完走後の confirm 側で 1 回だけ出す)。
    */
   expectConfirm?: boolean;
-  /** OCR-GA 評価の進捗 (analyze 中の待機を埋める busy 演出)。null で非表示 */
-  evolution?: { generation: number; attempt: number; total: number } | null;
-  /**
-   * 本物 OCR の中間マーカー (最新 attempt の検出位置 + 認識テキスト)。
-   * 届いていれば再スキャンの probe をこれに昇格する。null/空なら合成 probe を使う
-   * — 再スキャン演出自体はエンジンの生死に関係なく回る。
-   */
-  liveProbes?: DetectedRegion[] | null;
   /**
    * CONFIRMED スタンプの下とサマリー見出しに添える分類バッジ (書類種別 / サンプル区分)。
    * 消費側が表示文字列に落として渡す。 無ければ従来どおり。
@@ -194,8 +186,6 @@ export function ScannerOverlay({
   onDismiss,
   onExitStart,
   expectConfirm = false,
-  evolution,
-  liveProbes,
   badges,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -255,7 +245,8 @@ export function ScannerOverlay({
 
   // ---- 精度替え再スキャン (analyze 中、自走ループ) ----
   // RESCAN_PERIOD_MS ごとに pass を進め、スキャンライン + probe マーカーを置き直す。
-  // 外部エンジンの進捗には依存しない (届いた本物 lines は liveProbes で昇格するだけ)。
+  // 完全に自走する: 撮影時の検出は backend へ移り (1 回 40 秒)、analyze 中に本物の
+  // 検出行は届かないので probe は常に合成 (嘘の認識テキストは出さない)。
   const [rescanPass, setRescanPass] = useState(0);
   useEffect(() => {
     if (!(animated && phase === "analyze")) { setRescanPass(0); return; }
@@ -269,9 +260,8 @@ export function ScannerOverlay({
 
   const probeRegions = useMemo(() => {
     if (rescanPass === 0) return [];
-    if (liveProbes && liveProbes.length > 0) return liveProbes;
     return synthesizeProbes(rescanPass, naturalWidth, naturalHeight, RESCAN_SWEEP_MS);
-  }, [rescanPass, liveProbes, naturalWidth, naturalHeight]);
+  }, [rescanPass, naturalWidth, naturalHeight]);
 
   const showProbeScan = rescanPass > 0 && phase === "analyze";
   // probe 表示中は偽 YOLO ノイズ箱を引っ込めて混雑を抑える
@@ -541,17 +531,12 @@ export function ScannerOverlay({
         );
       })}
 
-      {/* 再スキャンのメタ表示: PASS / 精度 (演出値) / GA 実進捗 (届いていれば) */}
+      {/* 再スキャンのメタ表示: PASS / 精度 (どちらも演出値) */}
       {showProbeScan && (
         <div className="sc-evolve">
           <span className="sc-evolve-tag">RE-SCAN</span>
           <span className="sc-evolve-gen">PASS {String(rescanPass).padStart(2, "0")}</span>
           <span className="sc-evolve-prog">PRECISION {precisionLabel}</span>
-          {evolution && evolution.total > 0 && (
-            <span className="sc-evolve-gen">
-              GEN {evolution.generation} · {evolution.attempt}/{evolution.total}
-            </span>
-          )}
         </div>
       )}
 

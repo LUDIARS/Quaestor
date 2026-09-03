@@ -6,6 +6,7 @@ import {
   captureFrame,
   uploadReceipt,
   kickOcr,
+  kickDetect,
   commitReceipt,
   tryGetGeo,
   saveRegions,
@@ -17,12 +18,9 @@ import { scanBadgesFor } from "./scan-badges.js";
 import { DOC_KIND_INFO } from "../../../src/shared/document-kinds.js";
 import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
-import { FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
-import { PaddleFieldLocator, ChainedFieldLocator } from "../scanner/paddle-locator.js";
-import { OcrEvolver, EvolvedFieldLocator, type EvolutionProgress } from "../scanner/ocr-evolver.js";
-import { probesFromLines } from "../scanner/probe-regions.js";
-import { RESCAN_SWEEP_MS } from "../scanner/use-scan-pipeline.js";
-import type { DetectedRegion, FieldLocatorEngine, ScanBadge } from "../scanner/types.js";
+import { ChainedFieldLocator, FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
+import { BackendDetectFieldLocator } from "../scanner/backend-detect-locator.js";
+import type { FieldLocatorEngine, ScanBadge } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
 function loadAnimated(): boolean {
@@ -60,12 +58,12 @@ function isComplete(s: Shot): boolean {
 }
 
 /**
- * 段階フォールバック locator (シングルトン、ステートレス):
- *   PaddleOCR sidecar (本物 BB+text) → Tesseract (ブラウザ word BB) → Fallback (比率推定)
- * sidecar 未起動でも Tesseract が本物 BB を返すので点1/点2 は機能する。
+ * ブラウザ内の段階フォールバック locator (シングルトン、ステートレス):
+ *   Tesseract (ブラウザ word BB) → Fallback (比率推定)
+ * 本命の PaddleOCR は backend の `POST /v1/receipts/:id/detect` 経由で、
+ * receipt ごとに ScanAnimation が先頭へ挿す (BackendDetectFieldLocator)。
  */
 const defaultFieldLocator: FieldLocatorEngine = new ChainedFieldLocator([
-  new PaddleFieldLocator(),
   new TesseractFieldLocator("jpn+eng"),
   new FallbackFieldLocator(),
 ]);
@@ -137,6 +135,13 @@ export function ManualShutter() {
     }
   }, [videoRef, animated]);
 
+  /**
+   * OCR 真値が揃った撮影に 1 回だけ detect をキックする ref。
+   * 演出 (スキャンアニメ) を出さない設定でも運用評価レコードが発行されるよう、
+   * 演出ではなく poll 側から呼ぶ。backend が 1 receipt = 1 本に畳む。
+   */
+  const detectKickedRef = useRef(new Set<string>());
+
   // OCR 結果を 3 秒毎に poll
   useEffect(() => {
     const pending = shots.some((s) => !s.committed);
@@ -152,6 +157,14 @@ export function ManualShutter() {
           } catch { return null; }
         }),
       );
+      for (const u of updates) {
+        if (!u) continue;
+        const ready = u.r.ocr_status === "done" || u.r.ocr_status === "manual";
+        if (ready && !detectKickedRef.current.has(u.id)) {
+          detectKickedRef.current.add(u.id);
+          kickDetect(u.id);
+        }
+      }
       setShots((prev) =>
         prev.map((s) => {
           const u = updates.find((x) => x?.id === s.id);
@@ -345,13 +358,13 @@ function ScanAnimation({
   onDismiss: () => void;
   onExitStart?: () => void;
 }) {
-  // OCR-GA: 待機中に評価する evolver (ref 先行宣言、effect で生成)
-  const evolverRef = useRef<OcrEvolver | null>(null);
-
-  // confirm の検出には勝ち遺伝子の結果を live 適用。出るまでは fallback locator。
+  // confirm の検出は backend detect (勝ち遺伝子で 1 回) を先頭に置き、
+  // 間に合わなければブラウザ側の fallback (Tesseract → 比率推定) に落ちる。
   const liveLocator = useMemo(
-    () => (fieldLocator ? new EvolvedFieldLocator(() => evolverRef.current, fieldLocator) : undefined),
-    [fieldLocator],
+    () => (fieldLocator
+      ? new ChainedFieldLocator([new BackendDetectFieldLocator(shot.id), fieldLocator])
+      : undefined),
+    [fieldLocator, shot.id],
   );
 
   const { phase, regions } = useScanPipeline({
@@ -383,7 +396,8 @@ function ScanAnimation({
   const savedRef = useRef(false);
   useEffect(() => {
     if (phase !== "confirm" || savedRef.current) return;
-    const reals = regions.filter((r) => r.source === "real");
+    // backend detect 由来 (persisted) は backend が保存済なので送り返さない (二重記録を作らない)
+    const reals = regions.filter((r) => r.source === "real" && !r.persisted);
     if (reals.length === 0) return;
     savedRef.current = true;
     const engine = reals.some((r) => r.polygon) ? "paddle" : "tesseract";
@@ -402,41 +416,6 @@ function ScanAnimation({
     });
   }, [phase, regions, shot.id, shot.naturalWidth, shot.naturalHeight]);
 
-  // ---- OCR-GA: LLM 検出待ち (analyze) の間、パラメータ個体を sidecar で評価 ----
-  // 再スキャン演出自体は ScannerOverlay が自走する。ここは本物の検出行が
-  // 取れた attempt だけ liveProbes に昇格して流し込む (sidecar 死でも演出は回る)。
-  const evoStartedRef = useRef(false);
-  const evoFinalizedRef = useRef(false);
-  const [evo, setEvo] = useState<EvolutionProgress | null>(null);
-  const [liveProbes, setLiveProbes] = useState<DetectedRegion[] | null>(null);
-
-  useEffect(() => {
-    if (phase !== "analyze" || evoStartedRef.current) return;
-    evoStartedRef.current = true;
-    const ev = new OcrEvolver();
-    evolverRef.current = ev;
-    void (async () => {
-      await ev.loadPopulation();
-      await ev.evaluateAll(shot.imageUrl, (p) => {
-        setEvo(p);
-        if (p.lines.length > 0) {
-          setLiveProbes(probesFromLines(p.lines, shot.naturalHeight, RESCAN_SWEEP_MS));
-        }
-      });
-    })();
-  }, [phase, shot.imageUrl, shot.naturalHeight]);
-
-  // LLM 真値が揃ったら採点 → backend で世代を進化・永続 (1 回だけ)
-  useEffect(() => {
-    if (evoFinalizedRef.current || !evolverRef.current) return;
-    const done = shot.ocr_status === "done" || shot.ocr_status === "manual";
-    if (!done) return;
-    evoFinalizedRef.current = true;
-    void evolverRef.current.finalize({
-      date: shot.date, payee: shot.payee, total: shot.total, items: shot.items,
-    });
-  }, [shot.ocr_status, shot.date, shot.payee, shot.total, shot.items]);
-
   return (
     <div style={{ position: "absolute", inset: 0, borderRadius: 8, overflow: "hidden" }}>
       <ScannerOverlay
@@ -449,8 +428,6 @@ function ScanAnimation({
         onDismiss={onDismiss}
         onExitStart={onExitStart}
         expectConfirm={!!fieldLocator}
-        evolution={phase === "analyze" ? evo : null}
-        liveProbes={phase === "analyze" ? liveProbes : null}
         badges={badges}
       />
     </div>

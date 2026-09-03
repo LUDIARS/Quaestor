@@ -3,6 +3,7 @@
  *
  * FallbackFieldLocator  — heuristic 近似 (デフォルト、ゼロ依存)
  * TesseractFieldLocator — Tesseract.js word-bbox (高精度、要言語モデル DL)
+ * ChainedFieldLocator   — 段階フォールバックの合成 (backend detect → Tesseract → 比率推定)
  *
  * 差し替えは FieldLocatorEngine インターフェース経由。
  */
@@ -78,6 +79,37 @@ export class TesseractFieldLocator implements FieldLocatorEngine {
     } finally {
       await worker.terminate();
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ChainedFieldLocator — 段階フォールバック
+// ---------------------------------------------------------------------------
+
+/**
+ * 複数の locator を順に試し、最初に空でない結果を返す。
+ * 各段が失敗 / 空でも次段へ進むので、locate は必ず何かを返して confirm に前進する
+ * (演出は外部エンジンの生死に依存しない)。
+ */
+export class ChainedFieldLocator implements FieldLocatorEngine {
+  constructor(private readonly chain: FieldLocatorEngine[]) {}
+
+  async locate(
+    imageUrl: string,
+    nw: number,
+    nh: number,
+    fields: OcrFields,
+    mode: "receipt" | "food",
+  ): Promise<DetectedRegion[]> {
+    for (const engine of this.chain) {
+      try {
+        const out = await engine.locate(imageUrl, nw, nh, fields, mode);
+        if (out.length > 0) return out;
+      } catch {
+        /* 次段へ */
+      }
+    }
+    return [];
   }
 }
 

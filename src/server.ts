@@ -71,7 +71,7 @@ if (injectedSecrets.length > 0) {
 
 const DB_PATH = resolve(config.storage.dbPath);
 const RECEIPTS_ROOT = resolve(config.storage.receiptsRoot);
-const appCleanups: Array<() => void> = [];
+const appCleanups: Array<() => void | Promise<void>> = [];
 
 mkdirSync(dirname(DB_PATH), { recursive: true });
 const db = new Database(DB_PATH);
@@ -92,7 +92,8 @@ const app = buildApp({
   db,
   receiptsRoot: RECEIPTS_ROOT,
   gaRoot: config.training.gaRoot,
-  publicConfig: { ocrSidecarUrl: sidecarUrlOf(config) },
+  // sidecar は backend からだけ叩く (web へは公開しない)
+  ocrSidecarUrl: sidecarUrlOf(config),
   mailIntake: config.mailIntake,
   ocrClaudeCodeModel: config.ocrClaudeCode.model,
   invoiceShare: localTest
@@ -105,6 +106,7 @@ const app = buildApp({
   evidenceTimestamp: "auto",
   logger: {
     warn: (fields, message) => log.warn(fields, message),
+    info: (fields, message) => log.info(fields, message),
   },
   invoiceShareAccessLogger: {
     info: (fields, message) => invoiceShareLog.info(fields, message),
@@ -202,7 +204,7 @@ if (config.subsidyCrawl.enabled) {
 let notificationWorker: NotificationWorker | null = null;
 
 /** @implements SPEC-RUNTIME-VERSION-001 (spec/feature/runtime-version.md) */
-serve({ fetch: app.fetch, hostname: config.server.host, port: config.server.port }, (info) => {
+const httpServer = serve({ fetch: app.fetch, hostname: config.server.host, port: config.server.port }, (info) => {
   log.info(
     {
       host: config.server.host,
@@ -230,16 +232,22 @@ serve({ fetch: app.fetch, hostname: config.server.host, port: config.server.port
   }
 });
 
-const shutdown = (signal: string) => {
+let shuttingDown = false;
+const shutdown = async (signal: string): Promise<void> => {
+  if (shuttingDown) return;
+  shuttingDown = true;
   log.info({ signal }, "shutting down");
-  for (const cleanup of appCleanups.splice(0)) cleanup();
+  // 新規 HTTP と定期ジョブを先に止め、進行中の receipt detect / baseline 永続化を
+  // sidecar と DB を閉じる前に drain する。
+  httpServer.close();
   ocrWorker?.stop();
-  ocrSidecar?.stop();
   gaBenchJob?.stop();
   notificationWorker?.stop();
   subsidyCrawlWorker?.stop();
+  await Promise.allSettled(appCleanups.splice(0).map(async (cleanup) => cleanup()));
+  ocrSidecar?.stop();
   db.close();
   process.exit(0);
 };
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });

@@ -105,6 +105,21 @@ export async function kickOcr(id: string): Promise<void> {
   }
 }
 
+/**
+ * POST /v1/receipts/:id/detect — 勝ち遺伝子で 1 回だけ検出し、運用評価レコードを発行させる
+ * (spec/feature/ocr-ga-evaluation.md SPEC-OCR-GA-EVAL-006)。
+ *
+ * OCR (真値) が揃ってから 1 撮影につき 1 回キックする。backend 側は 1 receipt = 1 本に畳み、
+ * 評価済なら sidecar を叩き直さないので、演出側の locator が重ねて呼んでも二重にならない。
+ * 応答 (CPU で 40 秒) は待たない — 演出は従来の fallback で進む。
+ *
+ * @implements SPEC-OCR-GA-EVAL-006 (spec/feature/ocr-ga-evaluation.md)
+ */
+export function kickDetect(id: string): void {
+  void fetch(`/v1/receipts/${id}/detect`, { method: "POST" })
+    .catch(() => { /* 検出の失敗は演出にも投入にも影響させない */ });
+}
+
 export type CommitResult =
   | { ok: true; already?: boolean; receipt: UploadedReceipt["receipt"] }
   | { ok: false; status: number; error: string; missing?: string[]; existing_id?: string; message?: string };

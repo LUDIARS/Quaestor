@@ -35,6 +35,12 @@ export interface DetectedRegion {
   recognizedText?: string;
   /** 回転レシート用の 4 点ポリゴン (PaddleOCR が返す)。naturalWidth/Height 座標系。任意。 */
   polygon?: Array<[number, number]>;
+  /**
+   * backend が既に学習データセットへ保存済の領域。
+   * true の領域を `POST /v1/receipts/:id/regions` へ送り返すと二重記録になるので、
+   * 消費側は送信対象から外す (撮影時 detect は backend が保存まで済ませる)。
+   */
+  persisted?: boolean;
 }
 
 /**

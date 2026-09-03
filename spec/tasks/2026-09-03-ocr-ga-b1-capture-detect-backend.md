@@ -23,28 +23,51 @@ backend に移した `computeOcrFitness` に一本化する。
 
 ## 完了条件
 
-- [ ] `POST /v1/receipts/:id/detect` を追加: LLM が返したタグ (D1 `sample_tags`) で
+- [x] `POST /v1/receipts/:id/detect` を追加: LLM が返したタグ (D1 `sample_tags`) で
       `resolveBestGenome` (`GET /v1/ocr-ga/best` と同じ解決) の遺伝子を選び、`HttpOcrSidecarClient` で
       sidecar `/detect` を 1 回叩き、本物 BB (source=real, recognizedText, polygon) を返す。
-- [ ] 検出結果を LLM 真値 (+ 人の修正) で `computeOcrFitness` により採点し、運用評価レコード
+- [x] 検出結果を LLM 真値 (+ 人の修正) で `computeOcrFitness` により採点し、運用評価レコード
       `{ receiptId, label, tags, generation, genome, fitness, fieldHits, baselineFitness, elapsedMs, ts }` を
       `app_data/training/ga/production-eval.jsonl` と `receipts.metadata` に書く。baseline (既定遺伝子) は
       同期で間に合わなければ後追いでよい。
-- [ ] 検出は演出と切り離して非同期に行う。間に合わなければ演出は従来の fallback (Tesseract → 比率推定) で進め、
+- [x] 検出は演出と切り離して非同期に行う。間に合わなければ演出は従来の fallback (Tesseract → 比率推定) で進め、
       レコードは後から発行する (演出はエンジンの生死に依存しない、`scanner-overlay.md` §1 の大原則を守る)。
-- [ ] web: `OcrEvolver` / `EvolvedFieldLocator` / `ocr-genome.ts` / `fitnessVsTruth` を撤去し、`PaddleFieldLocator`
+- [x] web: `OcrEvolver` / `EvolvedFieldLocator` / `ocr-genome.ts` / `fitnessVsTruth` を撤去し、`PaddleFieldLocator`
       は backend の `/v1/receipts/:id/detect` を呼ぶ形に変える。`GET /v1/config` の `ocrSidecarUrl` 公開と
       `web/src/lib/runtime-config.ts` の `ocrSidecarUrl()` を止める。
-- [ ] `POST /v1/ocr-ga/generation` (撮影時の世代更新) は呼び出し元が無くなるので削除する
+- [x] `POST /v1/ocr-ga/generation` (撮影時の世代更新) は呼び出し元が無くなるので削除する
       (残す場合は理由を spec に書く)。
-- [ ] 学習レコード (`POST /v1/receipts/:id/regions`、`training-dataset.ts`) に backend 検出の本物 BB が
+- [x] 学習レコード (`POST /v1/receipts/:id/regions`、`training-dataset.ts`) に backend 検出の本物 BB が
       流れること。運用評価レコードの直近 20 件平均が baseline を下回り続けたら `bestGenome` を
       default に戻す判定は **自動化せず**、値をログに出すだけにする (閾値は仮置き、B-5 のカードで見る)。
-- [ ] spec: `spec/feature/ocr-ga-evaluation.md` に SPEC-OCR-GA-EVAL-006 (撮影時の運用評価) を追記し、
+- [x] spec: `spec/feature/ocr-ga-evaluation.md` に SPEC-OCR-GA-EVAL-006 (撮影時の運用評価) を追記し、
       `scanner-overlay.md` §7 の「次 PR B-1 で置き換え」を実装済みに改訂。
-- [ ] `npx tsc --noEmit` 0 エラー、`npx vitest run` 全緑、web の `npm --prefix web run build` 通過。
+- [x] `npx tsc --noEmit` 0 エラー、`npx vitest run` 全緑、web の `npm --prefix web run build` 通過。
       追加テスト: detect API (sidecar モック、タグ→遺伝子解決、fallback)、運用評価レコードの書式、
       web の locator が backend 経路を呼ぶこと。
+
+## 実装メモ (2026-09-03)
+
+- API: `POST /v1/receipts/:id/detect` (`src/api/receipts.ts`)。実体は
+  `src/services/receipt-detect/` (`detect-service.ts` / `field-regions.ts` /
+  `production-eval-log.ts` / `types.ts`)。仕様は
+  `spec/feature/ocr-ga-evaluation.md` の SPEC-OCR-GA-EVAL-006。
+- 行 ↔ 真値のマッチングは fitness (`src/services/ocr-ga-fitness.ts`) の正規化を再利用する
+  (`payeeKey` / `itemKey` / 日付・金額トークンを export)。採点と検出で当たり判定がずれない。
+- 本物 BB → 学習データの経路は `src/services/detection-record.ts` に集約し、
+  `POST /v1/receipts/:id/regions` と detect の両方が同じ関数を通る。detect 由来の領域は
+  backend が保存済なので web は `persisted` を立てて再送しない。
+- baseline (既定遺伝子での再採点) は勝ち遺伝子が既定と同じなら同期、違えば `null` で発行して
+  後追いで同じ行を差し替える (`ProductionEvalLog.setBaseline`)。`ocrDetectBaseline: false` で無効化可。
+- web: `BackendDetectFieldLocator` (`web/src/scanner/backend-detect-locator.ts`) が backend を呼ぶ。
+  自前 timeout 3.5 秒で打ち切って Tesseract → 比率推定へ譲る (backend 側の検出と採点は最後まで走る)。
+  `ChainedFieldLocator` は `web/src/scanner/field-locator.ts` へ移した。
+- 撤去: `web/src/scanner/ocr-evolver.ts` / `ocr-genome.ts` / `paddle-locator.ts` /
+  `web/src/lib/runtime-config.ts` / `GET /v1/config` の `ocrSidecarUrl` / `POST /v1/ocr-ga/generation` /
+  ScannerOverlay の `evolution` `liveProbes` prop と `probesFromLines`
+  (撮影時に本物の検出行が届く経路が無くなったため、analyze の probe は合成のみ)。
+- テスト: `tests/receipt-detect.test.ts` (detect API・運用評価レコード・baseline 後追い・
+  buildFieldRegions)、`tests/backend-detect-locator.test.ts` (web が backend 経路を呼ぶこと)。
 
 ## スコープ (編集可ディレクトリ)
 

@@ -12,6 +12,7 @@
  */
 
 import { mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, readdirSync, copyFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { resolve, join } from "node:path";
 import type { ReceiptStorage } from "./receipt-storage.js";
 
@@ -32,6 +33,8 @@ export interface TrainingRegion {
 }
 
 export interface TrainingRecord {
+  /** 同じ receipt に複数 engine が書く場合も評価結果を取り違えない immutable id */
+  attemptId: string;
   receiptId: string;
   /** ReceiptStorage 上の相対 path (画像参照) */
   imageRef: string | null;
@@ -46,6 +49,15 @@ export interface TrainingRecord {
   diff?: unknown;
   /** 差分がある時に Opus が類推した検出挙動指標 (DiffInference)。任意 */
   evaluation?: unknown;
+}
+
+export type TrainingRecordInput = Omit<TrainingRecord, "attemptId"> & { attemptId?: string };
+
+export interface TrainingRecordRef {
+  attemptId: string;
+  receiptId: string;
+  engine: string;
+  ts: number;
 }
 
 /** YOLO class id 割当 (フィールド種別 → class)。item-* は items に寄せる */
@@ -70,32 +82,43 @@ export class TrainingDataset {
   }
 
   /** confirm フェーズの本物 BB を追記 + 個別スナップショット更新。 */
-  append(record: TrainingRecord): void {
-    if (record.regions.length === 0) return;
+  append(input: TrainingRecordInput): TrainingRecordRef | null {
+    if (input.regions.length === 0) return null;
+    const record: TrainingRecord = { ...input, attemptId: input.attemptId ?? randomUUID() };
     appendFileSync(this.jsonl, JSON.stringify(record) + "\n", "utf8");
     writeFileSync(
       join(this.recordsDir, `${record.receiptId}.json`),
       JSON.stringify(record, null, 2),
       "utf8",
     );
+    return {
+      attemptId: record.attemptId,
+      receiptId: record.receiptId,
+      engine: record.engine,
+      ts: record.ts,
+    };
   }
 
   /**
    * 既存レコードに差分評価 (+任意で Opus 類推) を後付けする。
    * record json を上書き + evals.jsonl に追記。レコードが無ければ何もしない。
    */
-  attachEval(receiptId: string, diff: unknown, evaluation?: unknown): void {
-    const path = join(this.recordsDir, `${receiptId}.json`);
-    if (!existsSync(path)) return;
+  attachEval(ref: TrainingRecordRef, diff: unknown, evaluation?: unknown): boolean {
+    const path = join(this.recordsDir, `${ref.receiptId}.json`);
+    if (!existsSync(path)) return false;
     const rec = JSON.parse(readFileSync(path, "utf8")) as TrainingRecord;
-    rec.diff = diff;
-    if (evaluation !== undefined) rec.evaluation = evaluation;
-    writeFileSync(path, JSON.stringify(rec, null, 2), "utf8");
+    const isCurrentAttempt = rec.attemptId === ref.attemptId;
+    if (isCurrentAttempt) {
+      rec.diff = diff;
+      if (evaluation !== undefined) rec.evaluation = evaluation;
+      writeFileSync(path, JSON.stringify(rec, null, 2), "utf8");
+    }
     appendFileSync(
       join(this.root, "evals.jsonl"),
-      JSON.stringify({ receiptId, ts: rec.ts, engine: rec.engine, diff, evaluation }) + "\n",
+      JSON.stringify({ ...ref, diff, evaluation, currentSnapshot: isCurrentAttempt }) + "\n",
       "utf8",
     );
+    return isCurrentAttempt;
   }
 
   /** 蓄積済レコード件数 (records/*.json の数)。 */

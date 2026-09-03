@@ -40,6 +40,9 @@ import { ReceiptStorage } from "./services/receipt-storage.js";
 import { TrainingDataset } from "./services/training-dataset.js";
 import { OpusDiffEvaluator, type DiffEvaluator } from "./services/detection-diff-evaluator.js";
 import { createOcrGaStore } from "./services/ocr-ga.js";
+import { HttpOcrSidecarClient, type OcrSidecarClient } from "./services/ocr-sidecar-client.js";
+import { ProductionEvalLog } from "./services/receipt-detect/production-eval-log.js";
+import { ReceiptDetectService } from "./services/receipt-detect/detect-service.js";
 import { ocrGaRouter } from "./api/ocr-ga.js";
 import type { OcrClient } from "./services/ocr-client.js";
 import { AnthropicOcrClient } from "./services/ocr-client.js";
@@ -139,6 +142,8 @@ import {
 
 export interface AppLogger {
   warn(fields: Record<string, unknown>, message?: string): void;
+  /** 運用評価レコードのように「失敗ではないが観測したい」値を出す先。未実装なら黙って捨てる */
+  info?(fields: Record<string, unknown>, message?: string): void;
 }
 
 export interface AppDeps {
@@ -171,15 +176,27 @@ export interface AppDeps {
   apportionmentLlm?: ApportionmentLlm | "auto" | "disabled";
   /** 配分アドバイスのキャッシュファイル。 既定 'app_data/allocation-advice.json' */
   allocationAdvicePath?: string;
-  /** OCR-GA 永続ルート。 既定 'app_data/training/ga' */
+  /** OCR-GA 永続ルート (集団 / evolution.jsonl / production-eval.jsonl)。 既定 'app_data/training/ga' */
   gaRoot?: string;
+  /** 検出 BB 学習データセットのルート。 既定 'app_data/training/receipts' */
+  trainingRoot?: string;
   /**
    * claude CLI OCR の `--model`。 省略すると CLI 既定のモデルに乗るため、
    * そのモデルの利用上限切れで OCR が画像を見る前に落ちる。
    */
   ocrClaudeCodeModel?: string | null;
-  /** web へ公開する非シークレット設定 (/v1/config)。 省略時は既定値 */
-  publicConfig?: { ocrSidecarUrl: string };
+  /**
+   * backend → OCR sidecar (PaddleOCR) の base URL。 撮影時 detect が使う。
+   * web には公開しない (ブラウザから 127.0.0.1 は公開面から到達不能なため、経路ごと廃止した)。
+   */
+  ocrSidecarUrl?: string;
+  /** sidecar client の DI。 省略時は ocrSidecarUrl の HTTP client。 テストはモックを渡す */
+  ocrSidecar?: OcrSidecarClient;
+  /**
+   * 撮影時 detect の baseline (既定遺伝子での再採点) を後追いで採るか。 既定 true。
+   * sidecar の検出が 1 撮影あたり 2 回走るので、負荷を避けたい環境では false にできる。
+   */
+  ocrDetectBaseline?: boolean;
   /**
    * 請求書の公開マジックリンク設定 (app-config.ts の invoiceShare)。
    * publicUrl 未設定ならリンク発行は 503 で失敗する (loopback へ fallback しない)。
@@ -234,8 +251,8 @@ export interface AppDeps {
   mailIntake?: MailIntakeConfig;
   /** テスト・埋め込み用途のメール取得元。実運用では GmailSource を自動構築する。 */
   mailSource?: MailSource;
-  /** buildApp が所有する timer 等を、プロセス終了時に解放するための登録先。 */
-  registerCleanup?: (cleanup: () => void) => void;
+  /** buildApp が所有する timer / background I/O 等を、プロセス終了時に解放するための登録先。 */
+  registerCleanup?: (cleanup: () => void | Promise<void>) => void;
 }
 
 /**
@@ -293,11 +310,27 @@ export function buildApp(deps: AppDeps): Hono {
   const holdingDividends = new HoldingDividendsRepo(deps.db);
   const dividendCandidates = new DividendCandidatesRepo(deps.db);
   const storage = new ReceiptStorage(deps.receiptsRoot ?? "app_data/receipts");
-  const trainingDataset = new TrainingDataset("app_data/training/receipts", storage);
+  const trainingDataset = new TrainingDataset(deps.trainingRoot ?? "app_data/training/receipts", storage);
   // 差分の LLM 類推器。claude CLI が使えない場合は undefined (差分は保存するが類推はしない)
   const diffEvaluator: DiffEvaluator | undefined = detectCli() ? new OpusDiffEvaluator() : undefined;
-  // OCR パラメータの遺伝的最適化 (PaddleOCR 進化、待機中に web が評価して進化)
-  const ocrGa = createOcrGaStore(deps.gaRoot ?? "app_data/training/ga");
+  // OCR パラメータの遺伝的最適化。世代を進めるのは夜間バッチだけで、撮影時は best を引くだけ
+  const gaRoot = deps.gaRoot ?? "app_data/training/ga";
+  const ocrGa = createOcrGaStore(gaRoot);
+  // 撮影時 detect: 勝ち遺伝子で sidecar を 1 回叩き、本物 BB と運用評価レコードを出す
+  const receiptDetect = new ReceiptDetectService({
+    receipts,
+    storage,
+    ga: ocrGa,
+    sidecar: deps.ocrSidecar ?? new HttpOcrSidecarClient({
+      baseUrl: deps.ocrSidecarUrl ?? "http://127.0.0.1:17350",
+    }),
+    evalLog: new ProductionEvalLog(gaRoot),
+    dataset: trainingDataset,
+    diffEvaluator,
+    baselineBackfill: deps.ocrDetectBaseline,
+    logger: deps.logger,
+  });
+  deps.registerCleanup?.(() => receiptDetect.close());
 
   // 初回起動時の seed (account_codes が先、 apportionment_rules は account_codes に FK 依存)
   accounts.seedIfEmpty();
@@ -484,17 +517,12 @@ export function buildApp(deps: AppDeps): Hono {
     portfolio_enabled: { stock: !!stockClient, dividends: !!dividendClient },
   }));
 
-  // web へ公開する非シークレット設定 (env 非依存化: web は import.meta.env を見ない)
-  app.get("/v1/config", (c) => c.json({
-    ocrSidecarUrl: deps.publicConfig?.ocrSidecarUrl ?? "http://127.0.0.1:17350",
-  }));
-
   app.route("/v1/transactions", transactionsRouter({ txs, db: deps.db }));
   app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles, intake: receiptIntake }));
   app.route("/v1/account-codes", accountCodesRouter({ repo: accounts }));
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/apportionment-advisor", apportionmentAdvisorRouter({ advisor: apportionmentAdvisor }));
-  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake, claudeCodeModel: deps.ocrClaudeCodeModel }));
+  app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake, claudeCodeModel: deps.ocrClaudeCodeModel, detect: receiptDetect }));
   app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));

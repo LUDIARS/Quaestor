@@ -198,6 +198,34 @@ export class ReceiptsRepo {
   }
 
   /**
+   * metadata (JSON) に部分マージする。 撮影時 detect の運用評価レコードのように、
+   * 既存の撮影 context (source / kind / image_hash) を消さずに 1 キーだけ足したい書き込みに使う。
+   * 値 undefined のキーは無視、null は「そのキーを消す」。
+   */
+  mergeMetadata(id: string, patch: Record<string, unknown>): boolean {
+    const row = this.find(id);
+    if (!row) return false;
+    let current: Record<string, unknown> = {};
+    if (row.metadata) {
+      try {
+        const parsed = JSON.parse(row.metadata) as unknown;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch { /* 壊れた metadata は捨てて作り直す (観測用の付随情報) */ }
+    }
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === undefined) continue;
+      if (v === null) delete current[k];
+      else current[k] = v;
+    }
+    const r = this.db
+      .prepare(`UPDATE receipts SET metadata = ?, updated_at = ? WHERE id = ?`)
+      .run(JSON.stringify(current), nowSec(), id);
+    return r.changes > 0;
+  }
+
+  /**
    * 種別・サンプルラベルを部分更新する。 誰が付けたか (sample_source) は毎回上書きする。
    * 「LLM を人手で上書きしてよいか」 の判断は services/receipt-labels.ts が持つ (ここは書くだけ)。
    */

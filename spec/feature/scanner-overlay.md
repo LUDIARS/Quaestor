@@ -37,16 +37,13 @@ locate はタイムアウトで必ず confirm へ前進する (詰まって固�
 ライン通過に同期して probe マーカー (`kind="probe"`, 最大 24) を置き直す。
 LLM 解析が終わるまで何度でもくり返す。
 
-- マーカーの出所 (`probe-regions.ts`):
-  - **本物**: OCR-GA attempt の検出行が届けば `probesFromLines()` — 認識テキスト付き
-    (`sc-probe-text`)。LLM 確定前でも読めた情報は出す。
-  - **合成**: 届かなければ `synthesizeProbes(pass)` — pass を seed にレシート行風の
-    マーカーを決定論的に合成。テキストは出さない (嘘の認識結果は出さない)。
-- メタ表示 (`sc-evolve` バッジ): `RE-SCAN PASS nn · PRECISION x.xx` (演出値) +
-  GA 実進捗 (`GEN g · n/N`、届いていれば)。
+- マーカーの出所 (`probe-regions.ts`): `synthesizeProbes(pass)` — pass を seed にレシート行風の
+  マーカーを決定論的に合成する。テキストは出さない (嘘の認識結果は出さない)。
+  撮影時の検出は backend へ移り 1 回 40 秒かかるので、analyze 中に本物の検出行は届かない
+  (2026-09-03 改訂。旧: OCR-GA attempt の検出行を `probesFromLines()` で昇格していた)。
+- メタ表示 (`sc-evolve` バッジ): `RE-SCAN PASS nn · PRECISION x.xx` (どちらも演出値)。
 - probe 表示中は偽 YOLO ノイズ箱を抑制。probe は演出専用で学習データに乗らない。
-- データ経路: `OcrEvolver.evaluateAll` の `EvolutionProgress.lines` →
-  `ManualShutter` が `probesFromLines()` で変換 → overlay `liveProbes` prop。
+- 演出ループは完全に自走する — 外部エンジンの進捗を受け取る口 (`evolution` / `liveProbes`) は無い。
 
 detect/analyze の比率 BB は **演出** であり学習に使わない。
 **学習に使う「検知した文字の BB」は confirm フェーズの `source=real` 領域**。
@@ -103,6 +100,8 @@ interface DetectedRegion {
   recognizedText?: string;
   /** 回転レシート用の 4 点ポリゴン (PaddleOCR が返す)。任意 */
   polygon?: Array<[number, number]>;
+  /** backend detect が既に学習データへ保存済。true の領域は /regions へ送り返さない */
+  persisted?: boolean;
 }
 ```
 
@@ -110,13 +109,19 @@ interface DetectedRegion {
 
 confirm 時、web は本物 BB を backend に POST → JSONL データセットに追記する。
 
-- 1 レコード = `{ receiptId, imageRef, naturalWidth, naturalHeight, engine, regions: [{ bbox, polygon?, text, label }], ts }`
-- 保存先: `app_data/training/receipts/<receiptId>.json` + 追記ログ `app_data/training/regions.jsonl`
+- 1 レコード = `{ attemptId, receiptId, imageRef, naturalWidth, naturalHeight, engine, regions: [{ bbox, polygon?, text, label }], ts }`
+- 保存先: `app_data/training/receipts/records/<receiptId>.json` + 追記ログ
+  `app_data/training/receipts/regions.jsonl`
 - **YOLO 形式エクスポート**: `exportYolo()` が画像コピー + `<class> <cx> <cy> <w> <h>` (正規化) のラベル txt を出力 → C で直接学習に使える。
 
 エンドポイント: `POST /v1/receipts/:id/regions`
 - body: `{ engine, naturalWidth, naturalHeight, regions: DetectedRegion[] }`
 - `source=real` の領域のみ保存。heuristic/noise は破棄。
+- 保存 → 差分算出 → (差分時) Opus 類推の一連は `src/services/detection-record.ts` に集約し、
+  撮影時 detect (`POST /v1/receipts/:id/detect`) と同じ関数を通す。detect 由来の BB は backend が
+  既に保存しているので、web は `persisted` を立てて送り返さない (二重記録を作らない)。
+- 学習 snapshot は検出 attempt ごとの immutable id を持つ。Opus 類推が遅れて完了しても、同じ receipt に
+  後から保存された別 engine / attempt の snapshot へ差分評価を付け替えない。
 
 ---
 
@@ -132,22 +137,29 @@ confirm 時、web は本物 BB を backend に POST → JSONL データセット
   - `POST /detect` 画像 (multipart/base64) → `{ lines: [{ polygon, bbox, text, score }] }`
   - detection(DBNet系) + recognition 一体で **正確な polygon + text** を返す。
   - ローカル・オフライン・無料。明細表は PP-Structure で拡張可。
-- `web/src/scanner/paddle-locator.ts` — `PaddleFieldLocator implements FieldLocatorEngine`
-  - sidecar を叩いて line BB+text 取得 → OCR fields とマッチングして label 付与
-  - 各領域に `source:"real"` + `recognizedText` を付ける
-  - **sidecar 未到達時はフォールバック**: `TesseractFieldLocator` → `FallbackFieldLocator`
+- `web/src/scanner/backend-detect-locator.ts` — `BackendDetectFieldLocator implements FieldLocatorEngine`
+  - backend の `POST /v1/receipts/:id/detect` を呼ぶ (**sidecar はブラウザから叩かない**)。
+    遺伝子解決・sidecar 呼び出し・採点・学習レコード保存は backend の責務
+    (`spec/feature/ocr-ga-evaluation.md` SPEC-OCR-GA-EVAL-006)。
+  - backend が返す領域に表示ラベル / 色 / 値を付け、`source:"real"` + `recognizedText` +
+    `persisted:true` にする。
+  - 自前の短い timeout (`BACKEND_DETECT_TIMEOUT_MS` = 3.5s) で打ち切り、同じ locate の中で
+    次段へ譲る (backend の 1 回は 40 秒、`LOCATE_TIMEOUT_MS` は 6 秒)。打ち切っても backend 側の
+    検出と採点は最後まで走る。
 - 起動: `ocr-sidecar/README.md` 参照 (`uvicorn main:app`、既定 port 17350)
-- URL は `quaestor.config.json` の `ocrSidecar` が正本 (env は override のみ)。
-  web は `GET /v1/config` → `runtime-config.ts` で受け取る (`spec/setup/config-and-secrets.md`)
+- URL は `quaestor.config.json` の `ocrSidecar` が正本 (env は override のみ) で、**backend だけが持つ**。
+  `GET /v1/config` の `ocrSidecarUrl` 公開と `web/src/lib/runtime-config.ts` は廃止した
+  (公開面 / HTTPS からブラウザが `127.0.0.1` に届かないため、経路ごと無くす)。
 
 ### フォールバック段
 ```
-PaddleFieldLocator (sidecar)  ←本命、正確 BB
-  ↓ 失敗
-TesseractFieldLocator (ブラウザ、word BB)  ←sidecar 無くても本物 BB
+BackendDetectFieldLocator (backend → sidecar)  ←本命、正確 BB。3.5 秒で打ち切り
+  ↓ 空 / 失敗 / 時間切れ
+TesseractFieldLocator (ブラウザ、word BB)  ←sidecar が間に合わなくても本物 BB
   ↓ 失敗
 FallbackFieldLocator (比率推定、BB なし)  ←最終手段、演出のみ
 ```
+合成は `ChainedFieldLocator` (`web/src/scanner/field-locator.ts`)。
 
 ### C (将来): 自前 YOLO 検出器
 - B が蓄積した JSONL/YOLO データセットでレシート領域/フィールド検出器を学習。
@@ -211,12 +223,17 @@ LLM(Vision) 検出待ちの間にブラウザが sidecar を回して GA を評�
   手動は `npm run ga:bench`。sidecar は `src/services/ocr-sidecar-client.ts` で backend から叩く。
 - `GET /v1/ocr-ga/best?tags=...` がタグ優先で勝ち遺伝子を返す。
 
-### 撮影時 (次 PR B-1 で置き換え)
-- web の `OcrEvolver` / `ocr-genome.ts` / `fitnessVsTruth` (撮影時評価) は **撤去予定**。それまでは残るが、
-  sidecar に届いても期待世代を指定して `global` を 1 回だけ更新する。
+### 撮影時 (B-1 で置き換え済、2026-09-03)
+- web の `OcrEvolver` / `EvolvedFieldLocator` / `ocr-genome.ts` / `fitnessVsTruth` は **撤去した**。
+  撮影時に集団を進めていた `POST /v1/ocr-ga/generation` も呼び出し元ごと削除した
+  (世代を進めるのは夜間バッチだけ)。
 - 置き換え後: backend の `POST /v1/receipts/:id/detect` がラベルの `bestGenome` で sidecar を 1 回叩き、
-  本物 BB を confirm と学習レコードに流し、運用評価レコード (`production-eval.jsonl`) を発行する。
-  `ocrSidecarUrl` の web 公開 (`GET /v1/config`) は止める。
+  本物 BB を confirm と学習レコードに流し、運用評価レコード (`production-eval.jsonl` +
+  `receipts.metadata`) を 1 件発行する。正本は `spec/feature/ocr-ga-evaluation.md`
+  SPEC-OCR-GA-EVAL-006。
+- `ocrSidecarUrl` の web 公開 (`GET /v1/config`) と `web/src/lib/runtime-config.ts` は廃止した。
+- 検出は演出と非同期。1 回 40 秒なので confirm には基本間に合わず、演出は従来の fallback
+  (Tesseract → 比率推定) で進み、評価レコードは後から発行される (§1 の大原則は不変)。
 
 ### sidecar
 `ocr-sidecar/main.py` の `/detect` は従来どおり `genome` (JSON) を受ける。`--device cpu|gpu` は

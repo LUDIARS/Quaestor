@@ -2,8 +2,8 @@
  * OCR-GA の fitness (backend 版)。
  *
  * sidecar (PaddleOCR) が返した行テキスト群が LLM 真値 (date / payee / total / items) を
- * どれだけ復元できているかを 0..1 で採点する純関数。web/src/scanner/ocr-evolver.ts の
- * fitnessVsTruth を backend に移し、真値側と行側の正規化を揃え、隣接行結合・フィールド重み・
+ * どれだけ復元できているかを 0..1 で採点する純関数。旧 web 側の撮影時評価を backend に移し、
+ * 真値側と行側の正規化を揃え、隣接行結合・フィールド重み・
  * 1 行加点・評価コスト項を加えたもの。
  *
  *  - 日付: 年/月/日/曜日/時刻/区切りを落として YYYYMMDD 同士で比べる (和暦も西暦化)
@@ -309,11 +309,12 @@ function ymd(y: number, m: number, d: number): string | null {
  * 店名キー: NFKC (半角カナ→全角、全角英数→半角、㈱→(株) 等) → normalizePayee (大文字化) → 空白除去。
  * 紙面の「ｶｽﾐ」と LLM の「カスミ」を同じにする。
  */
-function payeeKey(s: string): string {
+export function payeeKey(s: string): string {
   return normalizePayee(s.normalize("NFKC")).replace(/\s+/g, "");
 }
 
-function itemKey(s: string): string {
+/** items キー: NFKC → 小文字化 → 記号除去。撮影時 detect の行マッチングでも使う */
+export function itemKey(s: string): string {
   return s.normalize("NFKC").toLowerCase().replace(/[¥￥,\s\-/、。・]/g, "");
 }
 

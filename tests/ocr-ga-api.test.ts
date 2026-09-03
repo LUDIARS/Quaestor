@@ -51,12 +51,14 @@ describe("resolveBestGenome のフォールバック順 (tag → global → defa
   });
 });
 
-describe("GET/POST /v1/ocr-ga", () => {
+describe("GET /v1/ocr-ga (世代更新 API は B-1 で撤去済)", () => {
   let root: string;
+  let gaRoot: string;
   let app: ReturnType<typeof buildApp>;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "qgaapi-"));
-    app = buildApp({ db: new Database(":memory:"), gaRoot: join(root, "ga") });
+    gaRoot = join(root, "ga");
+    app = buildApp({ db: new Database(":memory:"), gaRoot });
   });
   afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
@@ -68,34 +70,19 @@ describe("GET/POST /v1/ocr-ga", () => {
     expect(j.genome).toEqual(defaultOcrGenome());
   });
 
-  it("POST /generation の payee 由来キーは global に丸め、店舗別ファイルを作らない", async () => {
+  it("GET /population の payee 由来キーは global に丸め、店舗別ファイルを作らない", async () => {
     const pop = await (await app.request("/v1/ocr-ga/population?key=サイゼリヤ")).json() as { key: string; genomes: unknown[] };
     expect(pop.key).toBe("global");
-    const res = await app.request("/v1/ocr-ga/generation", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ key: "サイゼリヤ", evaluated: [{ genome: defaultOcrGenome(), fitness: 0.7 }] }),
-    });
-    expect(res.status).toBe(200);
-    const j = await res.json() as { key: string; generation: number };
-    expect(j.key).toBe("global");
-    expect(j.generation).toBe(1);
-    expect(readdirSync(join(root, "ga")).filter((f) => f.endsWith(".json"))).toEqual(["global.json"]);
-
-    const best = await (await app.request("/v1/ocr-ga/best")).json() as { source: string; fitness: number; key: string };
-    expect(best.source).toBe("global");
-    expect(best.fitness).toBe(0.7);
+    expect(pop.genomes.length).toBe(8);
+    expect(readdirSync(gaRoot).filter((f) => f.endsWith(".json"))).toEqual(["global.json"]);
   });
 
   it("tag:<x> は別集団、GET /best?tags= はタグ優先で引く", async () => {
-    const post = (key: string, fitness: number) => app.request("/v1/ocr-ga/generation", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ key, evaluated: [{ genome: { ...defaultOcrGenome(), detThresh: 0.25 }, fitness }] }),
-    });
-    expect((await post("global", 0.5)).status).toBe(200);
-    expect((await post("tag:long", 0.45)).status).toBe(200);
-    expect(existsSync(join(root, "ga", "tag_long.json"))).toBe(true);
+    const store = createOcrGaStore(gaRoot);
+    const genome = { ...defaultOcrGenome(), detThresh: 0.25 };
+    store.recordGeneration("global", [{ genome, fitness: 0.5 }]);
+    store.recordGeneration("tag:long", [{ genome, fitness: 0.45 }]);
+    expect(existsSync(join(gaRoot, "tag_long.json"))).toBe(true);
 
     const tagged = await (await app.request("/v1/ocr-ga/best?tags=long")).json() as { key: string; source: string; fitness: number };
     expect(tagged).toMatchObject({ key: "tag:long", source: "tag", fitness: 0.45 });
@@ -103,24 +90,12 @@ describe("GET/POST /v1/ocr-ga", () => {
     expect(other).toMatchObject({ key: "global", source: "global" });
   });
 
-  it("POST /generation の不正 body は 400", async () => {
+  it("撮影時の世代更新 (POST /generation) は無くなった — 世代を進めるのは夜間バッチだけ", async () => {
     const res = await app.request("/v1/ocr-ga/generation", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ evaluated: [{ genome: {}, fitness: 2 }] }),
+      body: JSON.stringify({ key: "global", evaluated: [{ genome: defaultOcrGenome(), fitness: 0.7 }] }),
     });
-    expect(res.status).toBe(400);
-  });
-
-  it("POST /generation は期待世代が古ければ 409 で拒否する", async () => {
-    const body = { key: "global", expectedGeneration: 0, evaluated: [{ genome: defaultOcrGenome(), fitness: 0.7 }] };
-    expect((await app.request("/v1/ocr-ga/generation", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    })).status).toBe(200);
-    const stale = await app.request("/v1/ocr-ga/generation", {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
-    });
-    expect(stale.status).toBe(409);
-    expect(await stale.json()).toMatchObject({ generation: 1 });
+    expect(res.status).toBe(404);
   });
 });

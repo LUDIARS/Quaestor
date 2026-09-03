@@ -9,8 +9,9 @@ import type { OcrClient } from "../services/ocr-client.js";
 import { runOcrFor } from "../services/ocr-runner.js";
 import { ClaudeCodeOcr, detectClaudeCli, projectRoot } from "../services/claude-code-ocr.js";
 import type { TrainingDataset } from "../services/training-dataset.js";
-import { computeDetectionDiff } from "../services/detection-eval.js";
+import { recordDetection } from "../services/detection-record.js";
 import type { DiffEvaluator } from "../services/detection-diff-evaluator.js";
+import type { ReceiptDetectService } from "../services/receipt-detect/detect-service.js";
 import type { ReceiptIntake } from "../services/receipt-intake.js";
 import { commitReceipt, commitReasonCode, kindBlockMessage } from "../services/receipt-commit.js";
 import { applyLlmLabels, applyManualLabels, normalizeLlmLabels, MAX_SAMPLE_REASON } from "../services/receipt-labels.js";
@@ -115,6 +116,8 @@ export interface ReceiptsApiDeps {
   intake?: ReceiptIntake;
   /** claude CLI OCR の `--model`。 未設定なら CLI 既定 (上限切れに巻き込まれ得る) */
   claudeCodeModel?: string | null;
+  /** 撮影時の backend detect (勝ち遺伝子で sidecar を 1 回)。 未設定なら /detect は 503 */
+  detect?: ReceiptDetectService;
 }
 
 /** confirm フェーズの本物 BB 永続化リクエスト */
@@ -293,6 +296,8 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
 
   // POST /v1/receipts/:id/regions — confirm フェーズの本物 BB を学習データに保存
   //  source=real の領域のみ採用。heuristic/noise は破棄 (spec §3)。
+  //  backend detect (POST /:id/detect) 由来の BB は detect 側で既に保存済なので、
+  //  web は persisted な領域を送ってこない (二重記録を作らない)。
   app.post("/:id/regions", async (c) => {
     const id = c.req.param("id");
     const r = deps.repo.find(id);
@@ -303,11 +308,7 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
 
     const real = parsed.data.regions.filter((rg) => (rg.source ?? "heuristic") === "real");
-    if (!deps.dataset || real.length === 0) {
-      return c.json({ ok: true, saved: 0 });
-    }
-
-    deps.dataset.append({
+    const outcome = recordDetection(deps, {
       receiptId: id,
       imageRef: r.image_path ?? null,
       naturalWidth: parsed.data.naturalWidth,
@@ -320,27 +321,31 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
         polygon: rg.polygon,
         confidence: rg.confidence,
       })),
-      ts: Math.floor(Date.now() / 1000),
+      truth: { date: r.date, payee: r.payee, total: r.total, items: r.items },
     });
 
-    // 差分評価: LLM(Vision) 抽出フィールドを絶対正解として検出テキストと突合 (毎回・安価)
-    const diff = computeDetectionDiff(
-      real.map((rg) => ({ label: rg.label, text: rg.recognizedText })),
-      { date: r.date, payee: r.payee, total: r.total, items: r.items },
-    );
+    return c.json({ ok: true, saved: outcome.saved, hasDiff: outcome.hasDiff });
+  });
 
-    // 差分がある時だけ Opus が検出挙動を類推 (fire-and-forget、応答はブロックしない)
-    if (diff.hasDiff && deps.diffEvaluator) {
-      const evaluator = deps.diffEvaluator;
-      const dataset = deps.dataset;
-      void evaluator.evaluate(diff, parsed.data.engine)
-        .then((inf) => dataset.attachEval(id, diff, inf ?? undefined))
-        .catch(() => dataset.attachEval(id, diff));
-    } else {
-      deps.dataset.attachEval(id, diff);
+  /**
+   * POST /v1/receipts/:id/detect — 勝ち遺伝子で sidecar を 1 回だけ叩き、本物 BB と
+   * 運用評価レコードを出す (spec/feature/ocr-ga-evaluation.md SPEC-OCR-GA-EVAL-006)。
+   *
+   *  - sidecar 不達 / タイムアウト / OCR 未完は **200 で source 無しの空結果**。理由はログに出す
+   *    (呼び出し側の演出は従来の fallback に落ちる)。
+   *  - 同一 receipt への並行呼び出しは service 側で 1 本に畳む。
+   *  - `?force=1` で評価済 receipt を測り直す (既定はキャッシュを返し 40 秒を使い直さない)。
+   *
+   * @implements SPEC-OCR-GA-EVAL-006 (spec/feature/ocr-ga-evaluation.md)
+   */
+  app.post("/:id/detect", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.repo.find(id)) return c.json({ error: "not_found" }, 404);
+    if (!deps.detect) {
+      return c.json({ error: "detect_disabled", message: "OCR sidecar 検出が無効です" }, 503);
     }
-
-    return c.json({ ok: true, saved: real.length, hasDiff: diff.hasDiff });
+    const outcome = await deps.detect.detect(id, { force: c.req.query("force") === "1" });
+    return c.json(outcome);
   });
 
   /**

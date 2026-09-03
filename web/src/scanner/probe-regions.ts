@@ -1,46 +1,20 @@
 /**
  * 精度替え再スキャン演出 (analyze 中) の probe マーカー生成。
  *
- * 方針: 演出はエンジン (sidecar / GA / Tesseract) の生死に依存しない。
- *  - 本物の OCR 検出行が届いていればそれを使う (認識テキスト付き = 中間情報の開示)
- *  - 無ければ pass 番号を seed にレシート風の行マーカーを合成する (演出専用)
+ * 方針: 演出はエンジン (sidecar / Tesseract) の生死に依存しない。撮影時の検出は backend へ
+ * 移り (1 回 40 秒)、analyze 中に本物の検出行は届かないので、pass 番号を seed にレシート風の
+ * 行マーカーを合成する (演出専用。嘘の認識テキストは出さない)。
  *
  * delay は y 座標 → スキャンライン (sweepMs) の通過時刻。マーカーは
  * ラインが通過したタイミングで現れる。
  */
 
 import type { DetectedRegion } from "./types.js";
-import type { OcrLine } from "./ocr-genome.js";
-
-/** 1 回の再スキャンで置くマーカー数の上限 (置きすぎると画面が潰れる) */
-const PROBE_LIMIT = 24;
 
 const PROBE_COLOR = "#fbbf24";
 
-/** 本物の OCR 検出行 → probe マーカー (認識テキスト付き) */
-export function probesFromLines(
-  lines: OcrLine[],
-  naturalHeight: number,
-  sweepMs: number,
-): DetectedRegion[] {
-  if (naturalHeight <= 0) return [];
-  return lines.slice(0, PROBE_LIMIT).map((l, i) => {
-    const [x, y, w, h] = l.bbox;
-    return {
-      id:         `probe-${i}`,
-      label:      l.text,
-      x, y, width: w, height: h,
-      confidence: l.score,
-      color:      PROBE_COLOR,
-      kind:       "probe" as const,
-      recognizedText: l.text,
-      delay:      sweepDelay(y, naturalHeight, sweepMs),
-    };
-  });
-}
-
 /**
- * 検出行が無いときの演出用 probe。
+ * 演出用 probe。
  * pass を seed にした擬似乱数で「レシートの行」風に左寄せの横長マーカーを
  * 上から下に並べる。pass が変わると配置も変わる = 精度を変えて再スキャンした見た目。
  * テキストは持たない (嘘の認識結果は出さない)。

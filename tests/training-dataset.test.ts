@@ -49,6 +49,27 @@ describe("TrainingDataset", () => {
     expect(ds.count()).toBe(0);
   });
 
+  it("遅れて完了した評価は別 engine の新しい snapshot を上書きしない", () => {
+    const ds = new TrainingDataset(join(root, "ds"));
+    const tesseract = ds.append({ ...sampleRecord(), engine: "tesseract", ts: 100 })!;
+    const paddle = ds.append({ ...sampleRecord(), engine: "paddle", ts: 101 })!;
+
+    expect(ds.attachEval(tesseract, { source: "old" }, { note: "slow" })).toBe(false);
+    const current = JSON.parse(
+      readFileSync(join(root, "ds", "records", "r1.json"), "utf8"),
+    ) as { attemptId: string; engine: string; diff?: unknown; evaluation?: unknown };
+    expect(current).toMatchObject({ attemptId: paddle.attemptId, engine: "paddle" });
+    expect(current.diff).toBeUndefined();
+    expect(current.evaluation).toBeUndefined();
+
+    const evals = readFileSync(join(root, "ds", "evals.jsonl"), "utf8").trim().split("\n");
+    expect(JSON.parse(evals[0]!)).toMatchObject({
+      attemptId: tesseract.attemptId,
+      engine: "tesseract",
+      currentSnapshot: false,
+    });
+  });
+
   it("exportYolo が正規化ラベル txt を出力し item-* は items クラスに寄せる", () => {
     const ds = new TrainingDataset(join(root, "ds"));
     ds.append(sampleRecord("r1"));
