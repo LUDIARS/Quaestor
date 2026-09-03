@@ -49,3 +49,35 @@
   font-size: 0.75rem;
   opacity: 0.7;
 }
+
+/* 種別ごとの投入先一覧 */
+.scan-guide-kinds {
+  list-style: none;
+  padding-left: 0;
+}
+.scan-guide-kinds li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.5rem;
+  row-gap: 0.1rem;
+  align-items: baseline;
+  margin: 0.35rem 0;
+}
+.scan-guide-kind {
+  --sg-clr: #00ffc8;
+  padding: 0 0.45rem;
+  border: 1px solid var(--sg-clr);
+  border-radius: 999px;
+  color: var(--sg-clr);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.scan-guide-desc {
+  font-size: 0.8rem;
+}
+.scan-guide-dest {
+  grid-column: 2;
+  font-size: 0.75rem;
+  color: #ffd76a;
+}

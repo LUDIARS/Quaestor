@@ -2,6 +2,8 @@
  * Claude Code CLI (`claude -p`) を spawn してレシート画像を解析する OCR backend。
  *
  * @implements SPEC-RECEIPT-OCR-CLI-001 (spec/feature/receipt-ocr-claude-cli.md)
+ * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
+ * @implements SPEC-SCAN-KIND-002 (spec/feature/scan-document-kinds.md)
  *
  * Anthropic SDK 経由 (AnthropicOcrClient) と並ぶ別経路。 こちらは:
  *  - 機械的 API key 不要 (claude CLI 自身の auth を使う)
@@ -14,6 +16,7 @@
 import { spawn } from "node:child_process";
 import { resolve, dirname, join } from "node:path";
 import { mkdirSync, createWriteStream, readFileSync, existsSync } from "node:fs";
+import { classificationPromptSection } from "./ocr-classification-prompt.js";
 
 export interface ClaudeCodeOcrOptions {
   backendBaseUrl: string;
@@ -172,7 +175,8 @@ function safeModelName(value: string | null | undefined): string | null {
     : null;
 }
 
-function buildPrompt(receiptId: string, base: string): string {
+/** テスト・後付け CLI から prompt 文面を検証できるよう公開する (spawn はしない)。 */
+export function buildPrompt(receiptId: string, base: string): string {
   return `# Quaestor レシート画像 OCR タスク
 
 あなたは Quaestor (個人会計サービス) のレシート OCR ヘルパーとして起動された。
@@ -198,6 +202,8 @@ ${receiptId}
    - \`items\`: [{name, price, qty?}] の配列。 自信が無い行は除外
    - \`confidence\`: "high" / "medium" / "low" — ぼやけ・切れ等で不確実なら低く
 
+${classificationPromptSection()}
+
 4. **PATCH 送信**: 結果を Quaestor backend に書き戻す
    \`\`\`bash
    curl -s -X PATCH ${base}/v1/receipts/${receiptId}/ocr \\
@@ -209,18 +215,23 @@ ${receiptId}
      "payee": "店名",
      "total": 1820,
      "items": [{"name":"商品A","price":460,"qty":1}],
+     "kind": "receipt",
+     "kind_fields": null,
+     "sample": {"role": "good_sample", "tags": [], "reason": "全体が写り判読できる"},
+     "content_tags": ["food"],
      "ocr_raw": "{...抽出 JSON 全部...}"
    }
    JSON
    \`\`\`
    - confidence="low" の場合は \`"ocr_status": "manual"\` (人間レビュー待ち)
    - PATCH 失敗 (HTTP error) なら \`"ocr_status": "failed"\` で再送
+   - kind / kind_fields / sample / content_tags は **必ず同じ PATCH に含める** (2 回に分けない)
 
-5. 終了。 1-2 文で結果サマリを出力 (例: "サイゼリヤ 中目黒店 ¥1820 / done で PATCH 済")
+5. 終了。 1-2 文で結果サマリを出力 (例: "サイゼリヤ 中目黒店 ¥1820 / receipt / done で PATCH 済")
 
 ## 注意
 
-- 画像が **レシート以外** (背景・名刺・広告) なら status="manual"、 payee=null で書き戻す
+- 画像が **書類以外** (背景・名刺・広告) なら status="manual"、 payee=null、 kind="other" で書き戻す
 - 数字は半角、 カンマ・通貨記号除いて整数化
 - false positive より miss を優先 — 自信無いフィールドは null
 - 作業中に他のファイルを編集したり別タスクに脱線しないこと

@@ -11,6 +11,10 @@ import {
   saveRegions,
 } from "./captureUpload.js";
 import { ReceiptEditor, type EditableReceipt } from "../components/ReceiptEditor.js";
+import { DocKindLabels } from "./DocKindLabels.js";
+import { withDefaultLabels, type LabeledReceipt } from "./receiptLabelsApi.js";
+import { scanBadgesFor } from "./scan-badges.js";
+import { DOC_KIND_INFO } from "../../../src/shared/document-kinds.js";
 import { ScannerOverlay } from "../scanner/ScannerOverlay.js";
 import { useScanPipeline } from "../scanner/use-scan-pipeline.js";
 import { FallbackFieldLocator, TesseractFieldLocator } from "../scanner/field-locator.js";
@@ -18,7 +22,7 @@ import { PaddleFieldLocator, ChainedFieldLocator } from "../scanner/paddle-locat
 import { OcrEvolver, EvolvedFieldLocator, type EvolutionProgress } from "../scanner/ocr-evolver.js";
 import { probesFromLines } from "../scanner/probe-regions.js";
 import { RESCAN_SWEEP_MS } from "../scanner/use-scan-pipeline.js";
-import type { DetectedRegion, FieldLocatorEngine } from "../scanner/types.js";
+import type { DetectedRegion, FieldLocatorEngine, ScanBadge } from "../scanner/types.js";
 
 const ANIM_KEY = "quaestor.scan.animated";
 function loadAnimated(): boolean {
@@ -28,8 +32,8 @@ function saveAnimated(v: boolean) {
   try { localStorage.setItem(ANIM_KEY, v ? "1" : "0"); } catch { /* ignore */ }
 }
 
-interface Shot {
-  id: string;
+/** 撮影 1 枚。 種別・サンプルラベル列 (LabeledReceipt) は poll で追随し、 上書き UI で更新する。 */
+interface Shot extends LabeledReceipt {
   capturedAt: number;
   imageUrl: string;
   naturalWidth: number;
@@ -42,6 +46,14 @@ interface Shot {
   committed: boolean;
   note?: string;
 }
+
+/** GET /v1/receipts/:id が返す列のうち Shot が追随するもの */
+type PolledReceipt = Partial<LabeledReceipt> & {
+  ocr_status: string;
+  date: string | null; payee: string | null;
+  total: number | null; items: string | null;
+  committed_at: number | null;
+};
 
 function isComplete(s: Shot): boolean {
   return !!s.date && !!s.payee && s.payee.trim() !== "" && s.total != null;
@@ -99,7 +111,8 @@ export function ManualShutter() {
         if (prev.some((s) => s.id === r.id)) return prev;
         return [
           {
-            id: r.id,
+            // 撮影直後は未分類 (doc_kind='receipt' 既定、 sample は NULL)。 OCR 完了で poll が埋める
+            ...withDefaultLabels({ id: r.id }),
             capturedAt: Math.floor(Date.now() / 1000),
             imageUrl: `/v1/receipts/${r.id}/image`,
             naturalWidth:  frame.w,
@@ -134,14 +147,7 @@ export function ManualShutter() {
       const updates = await Promise.all(
         targets.map(async (s) => {
           try {
-            const j = (await (await fetch(`/v1/receipts/${s.id}`)).json()) as {
-              receipt?: {
-                ocr_status: string;
-                date: string | null; payee: string | null;
-                total: number | null; items: string | null;
-                committed_at: number | null;
-              };
-            };
+            const j = (await (await fetch(`/v1/receipts/${s.id}`)).json()) as { receipt?: PolledReceipt };
             return j.receipt ? { id: s.id, r: j.receipt } : null;
           } catch { return null; }
         }),
@@ -150,12 +156,19 @@ export function ManualShutter() {
         prev.map((s) => {
           const u = updates.find((x) => x?.id === s.id);
           if (!u) return s;
+          const labels = withDefaultLabels({ id: s.id, ...u.r });
           return {
             ...s,
             ocr_status: u.r.ocr_status,
             date: u.r.date, payee: u.r.payee,
             total: u.r.total, items: u.r.items,
             committed: u.r.committed_at != null,
+            doc_kind: labels.doc_kind,
+            sample_role: labels.sample_role,
+            sample_tags: labels.sample_tags,
+            sample_reason: labels.sample_reason,
+            sample_source: labels.sample_source,
+            content_tags: labels.content_tags,
           };
         }),
       );
@@ -176,6 +189,11 @@ export function ManualShutter() {
   }
 
   const committedCount = shots.filter((s) => s.committed).length;
+
+  /** 種別・サンプルラベルの上書き (PATCH /labels) を一覧へ反映する。 */
+  function onLabelsChanged(u: LabeledReceipt) {
+    setShots((prev) => prev.map((s) => (s.id === u.id ? { ...s, ...u } : s)));
+  }
 
   return (
     <div>
@@ -230,6 +248,7 @@ export function ManualShutter() {
             shot={activeShot}
             animated={animated}
             fieldLocator={defaultFieldLocator}
+            badges={scanBadgesFor(activeShot)}
             onExitStart={() => setExitingScan(true)}
             onDismiss={() => { setActiveScanId(null); setExitingScan(false); }}
           />
@@ -296,6 +315,7 @@ export function ManualShutter() {
                 onCommit={() => void commit(s)}
                 onSaved={() => setEditingId(null)}
                 onReplay={() => { setExitingScan(false); setActiveScanId(s.id); }}
+                onLabelsChanged={onLabelsChanged}
               />
             ))}
           </div>
@@ -313,12 +333,15 @@ function ScanAnimation({
   shot,
   animated,
   fieldLocator,
+  badges,
   onDismiss,
   onExitStart,
 }: {
   shot: Shot;
   animated: boolean;
   fieldLocator?: FieldLocatorEngine;
+  /** CONFIRMED / サマリーに添える種別・サンプル区分バッジ */
+  badges?: ScanBadge[];
   onDismiss: () => void;
   onExitStart?: () => void;
 }) {
@@ -428,6 +451,7 @@ function ScanAnimation({
         expectConfirm={!!fieldLocator}
         evolution={phase === "analyze" ? evo : null}
         liveProbes={phase === "analyze" ? liveProbes : null}
+        badges={badges}
       />
     </div>
   );
@@ -444,6 +468,7 @@ function ShotCard({
   onCommit,
   onSaved,
   onReplay,
+  onLabelsChanged,
 }: {
   shot: Shot;
   editing: boolean;
@@ -451,9 +476,17 @@ function ShotCard({
   onCommit: () => void;
   onSaved: () => void;
   onReplay: () => void;
+  onLabelsChanged: (r: LabeledReceipt) => void;
 }) {
   const complete    = isComplete(shot);
-  const borderColor = shot.committed ? "var(--c-ok)" : complete ? "var(--c-accent)" : "var(--c-border)";
+  // 投入先が未配線の種別 (請求書 / 検針票 / 明細 / その他) は投入ボタンを出さない (種別を直してから)
+  const kindInfo    = DOC_KIND_INFO[shot.doc_kind];
+  const kindAllows  = kindInfo.commitPolicy !== "not_wired";
+  const canCommit   = complete && kindAllows;
+  const commitTitle = !kindAllows
+    ? `${kindInfo.label} は ${kindInfo.destination}`
+    : complete ? "投入" : "日付・場所・金額が揃うと投入できます";
+  const borderColor = shot.committed ? "var(--c-ok)" : canCommit ? "var(--c-accent)" : "var(--c-border)";
 
   return (
     <div
@@ -500,6 +533,8 @@ function ShotCard({
           {" ｜ "}
           <Field label="金額" value={shot.total != null ? `¥${shot.total.toLocaleString()}` : null} />
         </div>
+        {/* 種別 / サンプルラベル / タグ — バッジをタップして 1 タップで直す */}
+        <DocKindLabels receipt={shot} onChanged={onLabelsChanged} />
         {shot.note && (
           <div className="error" style={{ marginTop: 2, fontSize: "0.75rem" }}>{shot.note}</div>
         )}
@@ -516,8 +551,8 @@ function ShotCard({
               className="fd-btn"
               style={{ padding: "0.15rem 0.6rem", fontSize: "0.75rem" }}
               onClick={onCommit}
-              disabled={!complete}
-              title={complete ? "投入" : "日付・場所・金額が揃うと投入できます"}
+              disabled={!canCommit}
+              title={commitTitle}
             >
               投入
             </button>

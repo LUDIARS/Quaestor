@@ -17,7 +17,7 @@
 import type Database from "better-sqlite3";
 import type { ReceiptsRepo } from "../db/receipts-repo.js";
 import type { ReconciliationsRepo } from "../db/reconciliations-repo.js";
-import { commitReceipt, type CommitOutcome } from "./receipt-commit.js";
+import { commitReceipt, commitReasonCode, type CommitOutcome } from "./receipt-commit.js";
 import { autoReconcile, type AutoReconcileResult } from "./auto-reconcile.js";
 
 export interface ReceiptIntakeDeps {
@@ -56,9 +56,10 @@ export class ReceiptIntake {
     if (!r || !COMMITTABLE_STATUSES.has(r.ocr_status)) return { attempted: false };
 
     try {
-      const commit = commitReceipt(this.deps.receipts, receiptId);
+      // 自動投入は trigger="auto": handwritten 等は要確認に残す (spec SPEC-SCAN-KIND-001)
+      const commit = commitReceipt(this.deps.receipts, receiptId, { trigger: "auto" });
       if (!commit.ok) {
-        this.deps.logger?.info?.({ id: receiptId, reason: commit.reason }, "receipt auto-commit skipped");
+        this.deps.logger?.info?.({ id: receiptId, reason: commitReasonCode(commit) }, "receipt auto-commit skipped");
         return { attempted: true, commit };
       }
       const reconcile = this.reconcile([receiptId]);

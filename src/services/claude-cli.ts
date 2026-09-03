@@ -12,6 +12,29 @@ export interface ClaudeCliOptions {
   cliPath?: string;       // 既定 "claude"
   bashPath?: string;      // env CLAUDE_CODE_GIT_BASH_PATH と同じ
   timeoutMs?: number;     // 既定 120_000
+  /**
+   * `--model`。 未指定 / null で CLI 既定に委ねる (対話側で使い切ったモデルの上限に巻き込まれ得る、
+   * spec/feature/receipt-ocr-claude-cli.md)。 shell 経由で渡すため英数字・`.`・`_`・`-` 以外は無視する。
+   */
+  model?: string | null;
+  /**
+   * `--allowedTools`。 `-p` (非対話) ではツール権限の確認ができないため、 画像を Read で視認させる
+   * ような用途は最小限のツールだけ許可する (例 ["Read"])。
+   */
+  allowedTools?: string[];
+  /** Cost telemetry に記録する prompt。 ローカル絶対パス等を含む場合は安全な要約を渡す。 */
+  costPrompt?: string;
+}
+
+const SAFE_ARG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** shell 経由の spawn で引数がコマンドに化けないよう、 安全な形の値だけ通す。 */
+export function claudeCliArgs(opts: ClaudeCliOptions): string[] {
+  const args = ["-p", "--output-format", "json"];
+  if (typeof opts.model === "string" && SAFE_ARG.test(opts.model)) args.push("--model", opts.model);
+  const tools = (opts.allowedTools ?? []).filter((t) => SAFE_ARG.test(t));
+  if (tools.length > 0) args.push("--allowedTools", tools.join(","));
+  return args;
 }
 
 /**
@@ -81,11 +104,12 @@ export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promis
   return new Promise((resolveOut, reject) => {
     const startedAt = Date.now();
     const cliPath = opts.cliPath ?? "claude";
+    const costPrompt = opts.costPrompt ?? prompt;
     const env = { ...process.env };
     const bashPath = opts.bashPath ?? process.env.CLAUDE_CODE_GIT_BASH_PATH;
     if (bashPath) env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
 
-    const child = spawn(cliPath, ["-p", "--output-format", "json"], {
+    const child = spawn(cliPath, claudeCliArgs(opts), {
       env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: true,
@@ -106,7 +130,7 @@ export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promis
           provider: "claude",
           command: `${cliPath} -p --output-format json`,
           cwd: process.cwd(),
-          prompt,
+          prompt: costPrompt,
           status: "error",
           exit_code: -1,
           duration_ms: Date.now() - startedAt,
@@ -125,7 +149,7 @@ export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promis
           provider: "claude",
           command: `${cliPath} -p --output-format json`,
           cwd: process.cwd(),
-          prompt,
+          prompt: costPrompt,
           status: ok ? "ok" : "error",
           exit_code: code,
           duration_ms: Date.now() - startedAt,
@@ -145,7 +169,7 @@ export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promis
           provider: "claude",
           command: `${cliPath} -p --output-format json`,
           cwd: process.cwd(),
-          prompt,
+          prompt: costPrompt,
           status: "timeout",
           exit_code: -1,
           duration_ms: Date.now() - startedAt,

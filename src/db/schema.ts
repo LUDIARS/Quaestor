@@ -87,7 +87,17 @@ const STATEMENTS: string[] = [
     ocr_raw      TEXT,                                                    -- LLM の生 response
     metadata     TEXT,                                                    -- JSON: source_frame, capture meta etc
     created_at   INTEGER NOT NULL,
-    updated_at   INTEGER NOT NULL
+    updated_at   INTEGER NOT NULL,
+    -- v19: 書類種別と LLM サンプルラベル (spec/feature/scan-document-kinds.md)。
+    --      既存 DB には applyMigrations の ensureColumn で同じ定義を足す。
+    doc_kind      TEXT NOT NULL DEFAULT 'receipt'
+                  CHECK (doc_kind IN ('receipt','invoice','utility','statement','handwritten','other')),
+    kind_fields   TEXT,                                                   -- JSON: 種別固有 (invoice/utility/statement)
+    sample_role   TEXT CHECK (sample_role IS NULL OR sample_role IN ('good_sample','special_shape','none')),
+    sample_tags   TEXT,                                                   -- JSON 配列: long/folded/faded/...
+    sample_reason TEXT,
+    sample_source TEXT CHECK (sample_source IS NULL OR sample_source IN ('llm','manual')),
+    content_tags  TEXT                                                    -- JSON 配列: medical/transport/food/...
   )`,
 
   `CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(date)`,
@@ -829,7 +839,27 @@ export function applyMigrations(db: Database.Database): void {
   ensureColumn(db, "journal_entries", "asset_id", "INTEGER REFERENCES fixed_assets(id) ON DELETE CASCADE");
   db.exec("CREATE INDEX IF NOT EXISTS idx_journal_asset ON journal_entries(fiscal_year, asset_id)");
   // v18: cost_rules — STATEMENTS で作成済
-  db.pragma("user_version = 18");
+  // v19: 書類種別 + LLM サンプルラベル (spec/feature/scan-document-kinds.md)。
+  //      既存行は doc_kind='receipt'、 sample_* は NULL (= 未ラベル、 後付け CLI の対象)。
+  ensureColumn(
+    db, "receipts", "doc_kind",
+    "TEXT NOT NULL DEFAULT 'receipt' CHECK (doc_kind IN ('receipt','invoice','utility','statement','handwritten','other'))",
+  );
+  ensureColumn(db, "receipts", "kind_fields", "TEXT");
+  ensureColumn(
+    db, "receipts", "sample_role",
+    "TEXT CHECK (sample_role IS NULL OR sample_role IN ('good_sample','special_shape','none'))",
+  );
+  ensureColumn(db, "receipts", "sample_tags", "TEXT");
+  ensureColumn(db, "receipts", "sample_reason", "TEXT");
+  ensureColumn(
+    db, "receipts", "sample_source",
+    "TEXT CHECK (sample_source IS NULL OR sample_source IN ('llm','manual'))",
+  );
+  ensureColumn(db, "receipts", "content_tags", "TEXT");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_doc_kind ON receipts(doc_kind)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_receipts_sample_role ON receipts(sample_role)");
+  db.pragma("user_version = 19");
 }
 
 const INVOICE_SHARE_REQUIRED_COLUMNS = [

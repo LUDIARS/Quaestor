@@ -6,12 +6,16 @@
  * - confidence='low' は 'manual' に倒して人間レビュー待ち
  *
  * API hook (POST /v1/receipts/:id/ocr/run) と将来の poll worker 双方からこの関数を呼ぶ。
+ *
+ * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
+ * @implements SPEC-SCAN-KIND-002 (spec/feature/scan-document-kinds.md)
  */
 
 import type { ReceiptsRepo } from "../db/receipts-repo.js";
 import type { ReceiptStorage } from "./receipt-storage.js";
 import type { OcrClient } from "./ocr-client.js";
 import type { ReceiptIntake } from "./receipt-intake.js";
+import { applyLlmLabels } from "./receipt-labels.js";
 
 export interface OcrRunResult {
   ok: boolean;
@@ -53,6 +57,9 @@ export async function runOcrFor(receiptId: string, deps: OcrRunnerDeps): Promise
       items: result.items,
       ocr_raw: result.raw,
     });
+    // Classification must be persisted before intake evaluates doc_kind.
+    // Optional keeps compatibility with injected clients implementing the old result shape.
+    if (result.labels) applyLlmLabels(deps.receipts, receiptId, result.labels);
     deps.intake?.afterOcr(receiptId);
     return { ok: true, status };
   } catch (e: unknown) {

@@ -7,7 +7,7 @@
  */
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { isAbsolute, relative, resolve, join, sep } from "node:path";
 
 export interface SaveResult {
   /** root からの相対 path (DB に保存する) */
@@ -18,7 +18,10 @@ export interface SaveResult {
 }
 
 export class ReceiptStorage {
-  constructor(private readonly root: string) {
+  private readonly root: string;
+
+  constructor(root: string) {
+    this.root = resolve(root);
     mkdirSync(this.root, { recursive: true });
   }
 
@@ -43,12 +46,22 @@ export class ReceiptStorage {
 
   /** relativePath から Buffer を読む。 ファイル無しなら null */
   load(relativePath: string): Buffer | null {
-    const abs = resolve(this.root, relativePath);
+    let abs: string;
+    try {
+      abs = this.resolve(relativePath);
+    } catch {
+      return null;
+    }
     if (!existsSync(abs)) return null;
     return readFileSync(abs);
   }
 
   resolve(relativePath: string): string {
-    return resolve(this.root, relativePath);
+    const absolutePath = resolve(this.root, relativePath);
+    const pathFromRoot = relative(this.root, absolutePath);
+    if (pathFromRoot === ".." || pathFromRoot.startsWith(`..${sep}`) || isAbsolute(pathFromRoot)) {
+      throw new Error("receipt image path escapes storage root");
+    }
+    return absolutePath;
   }
 }

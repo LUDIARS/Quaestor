@@ -1,0 +1,102 @@
+/* =====================================================================
+   DocKindLabels — 書類種別 / サンプルラベル / タグ の表示と 1 タップ上書き
+   ===================================================================== */
+
+.dkl {
+  margin-top: 4px;
+  font-size: 0.75rem;
+}
+
+.dkl-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.dkl-badge {
+  --dkl-clr: var(--c-accent);
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--dkl-clr);
+  border-radius: 999px;
+  color: var(--dkl-clr);
+  background: color-mix(in srgb, var(--dkl-clr) 12%, transparent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.dkl-badge:hover {
+  background: color-mix(in srgb, var(--dkl-clr) 24%, transparent);
+}
+
+.dkl-tag {
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  background: var(--c-muted);
+  color: var(--c-subtle);
+  font-size: 0.7rem;
+}
+.dkl-tag--content {
+  border: 1px dashed var(--c-border);
+  background: transparent;
+}
+
+.dkl-src {
+  color: var(--c-subtle);
+  font-size: 0.75rem;
+}
+
+.dkl-reason {
+  color: var(--c-subtle);
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.dkl-editor {
+  margin-top: 4px;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-surface);
+  display: grid;
+  gap: 0.3rem;
+}
+.dkl-editor[aria-busy="true"] { opacity: 0.7; }
+
+.dkl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.dkl-chips-label {
+  flex: 0 0 3.2em;
+  color: var(--c-subtle);
+  font-size: 0.7rem;
+}
+
+.dkl-chip {
+  --dkl-clr: var(--c-accent);
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.dkl-chip:hover { border-color: var(--dkl-clr); }
+.dkl-chip.is-active {
+  border-color: var(--dkl-clr);
+  color: var(--dkl-clr);
+  background: color-mix(in srgb, var(--dkl-clr) 14%, transparent);
+  font-weight: 600;
+}
+.dkl-chip:disabled { cursor: progress; }
+
+.dkl-err { font-size: 0.72rem; }

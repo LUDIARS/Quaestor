@@ -1,14 +1,18 @@
 import { useState } from "react";
 import "./ScanGuide.css";
+import { DOC_KINDS, DOC_KIND_INFO } from "../../../src/shared/document-kinds.js";
+import { DOC_KIND_COLORS } from "./scan-badges.js";
 
 /**
  * カメラ右上に乗せる 「撮影対象と自動仕訳」 ボタンと、 押したときの説明パネル。
- * カメラをファーストビューに置いたまま、 何を撮れるか / 撮った後に何が起きるかを
+ * カメラをファーストビューに置いたまま、 何を撮れるか / 撮った後どこへ流れるかを
  * その場で読めるようにする。 パネルはカメラステージ全面のオーバーレイ。
  *
+ * 内容は書類種別 (6 種) ごとの投入先の一覧で、 語彙 (shared/document-kinds) から組み立てる。
+ * 実装と説明がずれないよう、 静的な文章は持たない。
+ *
+ * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
  * @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md)
- * @implements SPEC-RECEIPT-AUTO-INTAKE-002 (spec/feature/receipt-auto-intake.md)
- * @implements SPEC-HOUSEHOLD-ANALYSIS-001 (spec/feature/household-bookkeeping.md)
  */
 export function ScanGuide() {
   const [open, setOpen] = useState(false);
@@ -33,21 +37,27 @@ export function ScanGuide() {
           aria-label="撮影対象と自動仕訳"
           onClick={() => setOpen(false)}
         >
-          <h3>撮影対象</h3>
-          <ul>
-            <li>レシート・領収書 (店頭でもらう紙)</li>
-            <li>請求書・明細書 (電気・ガス・水道・通信など)</li>
-            <li>手書きの領収書やメモでも、 <strong>日付・場所・金額</strong> が読めれば投入できる</li>
+          <h3>撮影対象と投入先</h3>
+          <ul className="scan-guide-kinds">
+            {DOC_KINDS.map((k) => {
+              const info = DOC_KIND_INFO[k];
+              return (
+                <li key={k}>
+                  <span
+                    className="scan-guide-kind"
+                    style={{ "--sg-clr": DOC_KIND_COLORS[k] } as React.CSSProperties}
+                  >
+                    {info.label}
+                  </span>
+                  <span className="scan-guide-desc">{info.description}</span>
+                  <span className="scan-guide-dest">→ {info.destination}</span>
+                </li>
+              );
+            })}
           </ul>
-          <h3>自動仕訳</h3>
-          <ul>
-            <li>撮影 → OCR → 日付・場所・金額が揃えば <strong>自動で投入</strong></li>
-            <li>投入後、 クレカ明細と自動で突合 (レシートと明細のどちらが先でも可)</li>
-            <li>突合した分は取引側で数え、 未突合は現金払いとして家計分析に載る</li>
-            <li>家計分析では、 按分シートで作ったルールに沿って家計分と業務分に分ける</li>
-            <li>揃わない / 重複 (同じ日付・場所・金額) のものだけ、 撮影一覧から手で直す</li>
-          </ul>
-          <p className="scan-guide-hint">パネルをタップすると閉じます。</p>
+          <p className="scan-guide-hint">
+            種別は撮影後に自動判定され、 撮影一覧のバッジをタップして直せます。 パネルをタップすると閉じます。
+          </p>
         </div>
       )}
     </>

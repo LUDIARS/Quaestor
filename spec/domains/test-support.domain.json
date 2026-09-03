@@ -9,6 +9,9 @@
     },
     {
       "pathPattern": "(^|/)scripts/(?:.*/)?[^/]+$"
+    },
+    {
+      "pathPattern": "(^|/)src/cli/(?:.*/)?[^/]+$"
     }
   ]
 }

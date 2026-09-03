@@ -9,6 +9,8 @@ import { runOcrFor } from "../src/services/ocr-runner.js";
 import { applyMigrations } from "../src/db/schema.js";
 import { ReceiptsRepo } from "../src/db/receipts-repo.js";
 import { ReceiptStorage } from "../src/services/receipt-storage.js";
+import { ReceiptIntake } from "../src/services/receipt-intake.js";
+import { ReconciliationsRepo } from "../src/db/reconciliations-repo.js";
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=";
@@ -47,6 +49,16 @@ const LOW_CONFIDENCE_RESULT: ReceiptOcrResult = {
   items: [],
   raw: '{}',
   confidence: "low",
+};
+
+const CLASSIFIED_INVOICE_RESULT: ReceiptOcrResult = {
+  ...HIGH_CONFIDENCE_RESULT,
+  labels: {
+    kind: "invoice",
+    kind_fields: { issuer: "テスト請求元", due_date: "2025-04-30", invoice_no: "INV-1" },
+    sample: { role: "good_sample", tags: [], reason: "全体が判読できる" },
+    content_tags: ["business"],
+  },
 };
 
 describe("runOcrFor (unit)", () => {
@@ -89,6 +101,27 @@ describe("runOcrFor (unit)", () => {
     });
     expect(r.status).toBe("manual");
     expect(receipts.find(receiptId)!.ocr_status).toBe("manual");
+  });
+
+  it("SDK の分類を intake より先に保存し、 invoice を receipt として自動投入しない", async () => {
+    const intake = new ReceiptIntake({
+      db,
+      receipts,
+      reconciliations: new ReconciliationsRepo(db),
+    });
+    const r = await runOcrFor(receiptId, {
+      receipts,
+      storage,
+      client: new FakeOcrClient(CLASSIFIED_INVOICE_RESULT),
+      intake,
+    });
+
+    expect(r).toMatchObject({ ok: true, status: "done" });
+    const row = receipts.find(receiptId)!;
+    expect(row.doc_kind).toBe("invoice");
+    expect(row.sample_role).toBe("good_sample");
+    expect(row.sample_source).toBe("llm");
+    expect(row.committed_at).toBeNull();
   });
 
   it("client throw → status='failed' + ocr_raw に error 記録", async () => {

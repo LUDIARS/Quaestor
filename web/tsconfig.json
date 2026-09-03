@@ -16,6 +16,6 @@
     "resolveJsonModule": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "../src/detection/receipt-detector.ts"],
+  "include": ["src", "../src/detection/receipt-detector.ts", "../src/shared/document-kinds.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

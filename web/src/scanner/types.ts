@@ -37,6 +37,16 @@ export interface DetectedRegion {
   polygon?: Array<[number, number]>;
 }
 
+/**
+ * CONFIRMED スタンプ / サマリーに添える分類バッジ (Quaestor: 書類種別・サンプル区分)。
+ * scanner/ は分類の語彙を知らない — 消費側が表示文字列と色に落として渡す。
+ */
+export interface ScanBadge {
+  id: string;
+  text: string;
+  color?: string;
+}
+
 /** 検知エンジン抽象インターフェース。実装を差し替えるための境界。 */
 export interface DetectionEngine {
   /** imageData から検知領域を返す。結果はすでに naturalWidth/Height 座標系。 */

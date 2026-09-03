@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { ReceiptEditor } from "../components/ReceiptEditor.js";
 import { MonthTabs, currentYear, currentMonth, monthRange } from "../components/MonthTabs.js";
 import { ReceiptQueue } from "../components/ReceiptQueue.js";
+import { DocKindLabels } from "../scan/DocKindLabels.js";
+import type { LabeledReceipt } from "../scan/receiptLabelsApi.js";
 
-interface ReceiptRow {
-  id: string;
+interface ReceiptRow extends LabeledReceipt {
   captured_at: number;
   image_path: string | null;
   ocr_status: string;
@@ -73,6 +74,11 @@ export function Receipts() {
     }
   }
 
+  /** 種別・サンプルラベルの上書き (PATCH /labels) を一覧へ反映する。 */
+  function onLabelsChanged(u: LabeledReceipt) {
+    setRows((prev) => prev.map((r) => (r.id === u.id ? { ...r, ...u } : r)));
+  }
+
   if (loading) return <p>loading…</p>;
   return (
     <div>
@@ -113,6 +119,8 @@ export function Receipts() {
             >
               {editing === r.id ? "閉じる" : "編集"}
             </button>
+            {/* 種別 / サンプルラベル / タグ — バッジをタップして 1 タップで直す */}
+            <DocKindLabels receipt={r} onChanged={onLabelsChanged} />
             {editing === r.id && (
               <ReceiptEditor
                 receipt={r}

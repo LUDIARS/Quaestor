@@ -12,7 +12,9 @@ import type { TrainingDataset } from "../services/training-dataset.js";
 import { computeDetectionDiff } from "../services/detection-eval.js";
 import type { DiffEvaluator } from "../services/detection-diff-evaluator.js";
 import type { ReceiptIntake } from "../services/receipt-intake.js";
-import { commitReceipt } from "../services/receipt-commit.js";
+import { commitReceipt, commitReasonCode, kindBlockMessage } from "../services/receipt-commit.js";
+import { applyLlmLabels, applyManualLabels, normalizeLlmLabels, MAX_SAMPLE_REASON } from "../services/receipt-labels.js";
+import { DOC_KINDS, SAMPLE_ROLES } from "../shared/document-kinds.js";
 
 /**
  * 同一 receipt への OCR 起動 throttle。 2 秒内の再起動 (auto + 手動 + claude-code) は skip。
@@ -55,9 +57,13 @@ const ListQuerySchema = z.object({
   status: z.enum(["pending", "processing", "done", "failed", "manual"]).optional(),
   date_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   date_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  doc_kind: z.enum(DOC_KINDS).optional(),
+  sample_role: z.enum(SAMPLE_ROLES).optional(),
   limit: z.coerce.number().int().min(1).max(1000).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
+
+const TagListSchema = z.array(z.string().max(64)).max(64);
 
 const OcrResultSchema = z.object({
   ocr_status: z.enum(["pending", "processing", "done", "failed", "manual"]),
@@ -70,7 +76,31 @@ const OcrResultSchema = z.object({
     qty: z.number().int().optional(),
   })).nullable().optional(),
   ocr_raw: z.string().max(100_000).nullable().optional(),
+  /**
+   * v19: 書類種別とサンプルラベル (spec/feature/scan-document-kinds.md)。 旧 payload (kind 無し) も通る。
+   * kind_fields / sample の中身は種別ごとに形が違うので、 正規化は services/receipt-labels.ts に委ねる。
+   */
+  kind: z.enum(DOC_KINDS).optional(),
+  kind_fields: z.unknown().optional(),
+  sample: z.object({
+    role: z.enum(SAMPLE_ROLES),
+    tags: TagListSchema.optional(),
+    reason: z.string().max(MAX_SAMPLE_REASON * 2).nullable().optional(),
+  }).nullable().optional(),
+  content_tags: TagListSchema.optional(),
 });
+
+/** 人手上書き (PATCH /v1/receipts/:id/labels)。 少なくとも 1 項目は要る。 */
+const LabelsPatchSchema = z.object({
+  doc_kind: z.enum(DOC_KINDS).optional(),
+  sample_role: z.enum(SAMPLE_ROLES).nullable().optional(),
+  sample_tags: TagListSchema.nullable().optional(),
+  sample_reason: z.string().max(MAX_SAMPLE_REASON * 2).nullable().optional(),
+  content_tags: TagListSchema.nullable().optional(),
+}).refine(
+  (v) => Object.values(v).some((x) => x !== undefined),
+  { message: "doc_kind / sample_role / sample_tags / sample_reason / content_tags のいずれかを指定する" },
+);
 
 export interface ReceiptsApiDeps {
   repo: ReceiptsRepo;
@@ -208,8 +238,13 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     return new Response(buf, { headers: { "content-type": mime } });
   });
 
-  /** @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md) */
+  /**
+   * @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md)
+   * @implements SPEC-SCAN-KIND-002 (spec/feature/scan-document-kinds.md)
+   */
   // PATCH /v1/receipts/:id/ocr — OCR 結果を上書き (v0.4 で OCR worker から呼ぶ)
+  //  kind / kind_fields / sample / content_tags が同じ payload に載っていれば LLM ラベルとして保存する。
+  //  旧 payload (kind 無し) は従来どおりフィールドだけ更新し、 ラベルは触らない (人手上書きも残る)。
   app.patch("/:id/ocr", async (c) => {
     const id = c.req.param("id");
     const r = deps.repo.find(id);
@@ -217,16 +252,43 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     const body = await c.req.json().catch(() => null);
     const parsed = OcrResultSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
-    deps.repo.setOcrResult(id, parsed.data as Parameters<typeof deps.repo.setOcrResult>[1]);
+    const { kind, kind_fields, sample, content_tags, ...fields } = parsed.data;
+    deps.repo.setOcrResult(id, fields as Parameters<typeof deps.repo.setOcrResult>[1]);
+
+    let labels: { applied: boolean; reason?: string } | null = null;
+    if (kind) {
+      const normalized = normalizeLlmLabels({ kind, kind_fields, sample, content_tags });
+      if (normalized) {
+        const outcome = applyLlmLabels(deps.repo, id, normalized);
+        labels = outcome.applied ? { applied: true } : { applied: false, reason: outcome.reason };
+      }
+    }
+
     // OCR が終わった時点で完備していれば投入まで進める (弾かれたものだけ手動へ残る)
     const intake = deps.intake?.afterOcr(id);
     return c.json({
       receipt: deps.repo.find(id),
+      labels,
       auto_commit: intake?.commit
-        ? (intake.commit.ok ? { committed: true, already: intake.commit.already } : { committed: false, reason: intake.commit.reason })
+        ? (intake.commit.ok
+          ? { committed: true, already: intake.commit.already }
+          : { committed: false, reason: commitReasonCode(intake.commit) })
         : null,
       auto_reconciled: intake?.reconcile?.matched.length ?? 0,
     });
+  });
+
+  /** @implements SPEC-SCAN-KIND-003 (spec/feature/scan-document-kinds.md) */
+  // PATCH /v1/receipts/:id/labels — 種別 / サンプルラベルの人手上書き (sample_source='manual')
+  app.patch("/:id/labels", async (c) => {
+    const id = c.req.param("id");
+    if (!deps.repo.find(id)) return c.json({ error: "not_found" }, 404);
+    const body = await c.req.json().catch(() => null);
+    const parsed = LabelsPatchSchema.safeParse(body);
+    if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
+    const outcome = applyManualLabels(deps.repo, id, parsed.data);
+    if (!outcome.applied) return c.json({ error: outcome.reason }, outcome.reason === "not_found" ? 404 : 400);
+    return c.json({ ok: true, receipt: deps.repo.find(id) });
   });
 
   // POST /v1/receipts/:id/regions — confirm フェーズの本物 BB を学習データに保存
@@ -281,15 +343,26 @@ export function receiptsRouter(deps: ReceiptsApiDeps): Hono {
     return c.json({ ok: true, saved: real.length, hasDiff: diff.hasDiff });
   });
 
-  /** @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md) */
-  // POST /v1/receipts/:id/commit — 「投入」: データ完備チェック + (日付-場所-金額) 重複判定 → 確定
-  //  422 incomplete  : date / payee / total のいずれか欠落 (OCR 未完 or 要編集)
-  //  409 duplicate   : 既に投入済の中に同じ (日付-場所-金額) がある
+  /**
+   * @implements SPEC-RECEIPT-AUTO-INTAKE-001 (spec/feature/receipt-auto-intake.md)
+   * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
+   */
+  // POST /v1/receipts/:id/commit — 「投入」: 種別ゲート + データ完備チェック + (日付-場所-金額) 重複判定 → 確定
+  //  422 kind_not_auto_committed : 種別の投入先が未配線 (invoice / utility / statement / other)。 種別を直してから
+  //  422 incomplete              : date / payee / total のいずれか欠落 (OCR 未完 or 要編集)
+  //  409 duplicate               : 既に投入済の中に同じ (日付-場所-金額) がある
   app.post("/:id/commit", (c) => {
     const id = c.req.param("id");
-    const outcome = commitReceipt(deps.repo, id);
+    const outcome = commitReceipt(deps.repo, id, { trigger: "manual" });
 
     if (!outcome.ok && outcome.reason === "not_found") return c.json({ error: "not_found" }, 404);
+    if (!outcome.ok && (outcome.reason === "kind_not_auto_committed" || outcome.reason === "needs_review")) {
+      return c.json({
+        error: outcome.reason,
+        kind: outcome.kind,
+        message: kindBlockMessage(outcome.kind),
+      }, 422);
+    }
     if (!outcome.ok && outcome.reason === "incomplete") {
       return c.json({
         error: "incomplete",

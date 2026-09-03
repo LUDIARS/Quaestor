@@ -8,14 +8,18 @@
  *   - 左右データストリーム + 下部進捗バー
  *   - locate フェーズ: 再スキャンライン (紫)
  *   - confirm フェーズ: フィールドごとに CONFIRMED バッジを順次表示
+ *   - CONFIRMED スタンプ / サマリーに分類バッジ (badges prop、 Quaestor では書類種別とサンプル区分)
  *
  * animated=false のときアニメーションをスキップして最終状態を即表示。
  * ボックス座標は naturalWidth/Height 座標系。letterbox は内部補正。
+ *
+ * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
+ * @implements SPEC-SCAN-KIND-002 (spec/feature/scan-document-kinds.md)
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./ScannerOverlay.css";
-import type { DetectedRegion, ScanPhase } from "./types.js";
+import type { DetectedRegion, ScanBadge, ScanPhase } from "./types.js";
 import {
   DETECT_DURATION_MS,
   RESCAN_PERIOD_MS,
@@ -173,6 +177,11 @@ interface Props {
    * — 再スキャン演出自体はエンジンの生死に関係なく回る。
    */
   liveProbes?: DetectedRegion[] | null;
+  /**
+   * CONFIRMED スタンプの下とサマリー見出しに添える分類バッジ (書類種別 / サンプル区分)。
+   * 消費側が表示文字列に落として渡す。 無ければ従来どおり。
+   */
+  badges?: ScanBadge[];
 }
 
 export function ScannerOverlay({
@@ -187,6 +196,7 @@ export function ScannerOverlay({
   expectConfirm = false,
   evolution,
   liveProbes,
+  badges,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [imgRect, setImgRect] = useState<{
@@ -550,19 +560,32 @@ export function ScannerOverlay({
         <ScannerCallouts container={containerSize} items={calloutItems} />
       )}
 
-      {/* CONFIRMED スタンプ */}
+      {/* CONFIRMED スタンプ (+ 分類バッジ: 書類種別 / サンプル区分) */}
       {showStamp && (
         <div
           className="sc-stamp"
           style={{ animationDelay: animated ? `${stampDelay}ms` : "0ms" }}
         >
           <div className="sc-stamp-inner">CONFIRMED</div>
+          {badges && badges.length > 0 && (
+            <div className="sc-stamp-badges">
+              {badges.map((b) => (
+                <span
+                  key={b.id}
+                  className="sc-badge"
+                  style={{ "--sc-clr": b.color ?? "#00ffc8" } as React.CSSProperties}
+                >
+                  {b.text}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {/* 全項目リスト + 余韻 (confirm 演出完了後に待機) */}
       {phase === "confirm" && confirmDone && (
-        <ScannerSummary regions={summaryRegions} exiting={exiting} />
+        <ScannerSummary regions={summaryRegions} exiting={exiting} badges={badges} />
       )}
 
       {/* exit スキャンライン: タップで上から下へ流して scanner に戻す */}

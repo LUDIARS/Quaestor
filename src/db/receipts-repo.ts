@@ -1,6 +1,8 @@
 import type Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { normalizePayee } from "../shared/text.js";
+import type { DocKind, SampleRole, SampleSource } from "../shared/document-kinds.js";
+import type { KindFields } from "../shared/receipt-kind-fields.js";
 
 export type OcrStatus = "pending" | "processing" | "done" | "failed" | "manual";
 
@@ -20,6 +22,18 @@ export interface ReceiptRow {
   committed_at: number | null;
   created_at: number;
   updated_at: number;
+  /** 書類種別 (v19)。 既定 'receipt' */
+  doc_kind: DocKind;
+  /** 種別固有フィールド (JSON)。 receipt / handwritten / other は NULL */
+  kind_fields: string | null;
+  /** LLM / 人手のサンプルラベル (v19)。 NULL = 未ラベル */
+  sample_role: SampleRole | null;
+  /** JSON 配列 */
+  sample_tags: string | null;
+  sample_reason: string | null;
+  sample_source: SampleSource | null;
+  /** JSON 配列 (内容タグ) */
+  content_tags: string | null;
 }
 
 export interface ReceiptItem {
@@ -45,10 +59,26 @@ export interface UpdateOcrInput {
   ocr_raw?: string | null;
 }
 
+/**
+ * 種別・サンプルラベルの更新。 undefined の項目は触らない (部分更新)。
+ * sample_source は必ず指定する (誰が付けたラベルかを常に残す)。
+ */
+export interface UpdateLabelsInput {
+  doc_kind?: DocKind;
+  kind_fields?: KindFields | null;
+  sample_role?: SampleRole | null;
+  sample_tags?: string[] | null;
+  sample_reason?: string | null;
+  content_tags?: string[] | null;
+  sample_source: SampleSource;
+}
+
 export interface ListFilter {
   status?: OcrStatus;
   date_from?: string;
   date_to?: string;
+  doc_kind?: DocKind;
+  sample_role?: SampleRole;
   limit?: number;
   offset?: number;
 }
@@ -106,12 +136,7 @@ export class ReceiptsRepo {
   }
 
   list(filter: ListFilter = {}): ReceiptRow[] {
-    const where: string[] = [];
-    const params: Record<string, unknown> = {};
-    if (filter.status) { where.push("ocr_status = @status"); params.status = filter.status; }
-    if (filter.date_from) { where.push("date >= @date_from"); params.date_from = filter.date_from; }
-    if (filter.date_to) { where.push("date <= @date_to"); params.date_to = filter.date_to; }
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const { whereSql, params } = buildWhere(filter);
     const limit = filter.limit ?? 200;
     const offset = filter.offset ?? 0;
     return this.db
@@ -120,13 +145,36 @@ export class ReceiptsRepo {
   }
 
   count(filter: ListFilter = {}): number {
-    const where: string[] = [];
-    const params: Record<string, unknown> = {};
-    if (filter.status) { where.push("ocr_status = @status"); params.status = filter.status; }
-    if (filter.date_from) { where.push("date >= @date_from"); params.date_from = filter.date_from; }
-    if (filter.date_to) { where.push("date <= @date_to"); params.date_to = filter.date_to; }
-    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const { whereSql, params } = buildWhere(filter);
     const r = this.db.prepare(`SELECT COUNT(*) AS c FROM receipts ${whereSql}`).get(params) as { c: number };
+    return r.c;
+  }
+
+  /**
+   * サンプルラベル未付与 (sample_role IS NULL)、 かつ人手上書きでなく、 画像を持ち OCR が終わった receipt を
+   * 撮影順 (古い順) に返す。 後付けラベル CLI の対象母集団 (spec SPEC-SCAN-KIND-004)。
+   * pending / processing は OCR 完了時にラベルが付くので含めない。
+   */
+  listUnlabeled(limit: number = 1000): ReceiptRow[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM receipts
+         WHERE sample_role IS NULL AND sample_source IS NOT 'manual' AND image_path IS NOT NULL
+           AND ocr_status IN ('done','manual','failed')
+         ORDER BY captured_at ASC, id ASC
+         LIMIT ?`,
+      )
+      .all(limit) as ReceiptRow[];
+  }
+
+  countUnlabeled(): number {
+    const r = this.db
+      .prepare(
+        `SELECT COUNT(*) AS c FROM receipts
+         WHERE sample_role IS NULL AND sample_source IS NOT 'manual' AND image_path IS NOT NULL
+           AND ocr_status IN ('done','manual','failed')`,
+      )
+      .get() as { c: number };
     return r.c;
   }
 
@@ -145,6 +193,36 @@ export class ReceiptsRepo {
       params.items = input.items ? JSON.stringify(input.items) : null;
     }
     if (input.ocr_raw !== undefined) { sets.push("ocr_raw = @ocr_raw"); params.ocr_raw = input.ocr_raw; }
+    const r = this.db.prepare(`UPDATE receipts SET ${sets.join(", ")} WHERE id = @id`).run(params);
+    return r.changes > 0;
+  }
+
+  /**
+   * 種別・サンプルラベルを部分更新する。 誰が付けたか (sample_source) は毎回上書きする。
+   * 「LLM を人手で上書きしてよいか」 の判断は services/receipt-labels.ts が持つ (ここは書くだけ)。
+   */
+  setLabels(id: string, input: UpdateLabelsInput): boolean {
+    const sets: string[] = ["sample_source = @sample_source", "updated_at = @updated_at"];
+    const params: Record<string, unknown> = {
+      id,
+      sample_source: input.sample_source,
+      updated_at: nowSec(),
+    };
+    if (input.doc_kind !== undefined) { sets.push("doc_kind = @doc_kind"); params.doc_kind = input.doc_kind; }
+    if (input.kind_fields !== undefined) {
+      sets.push("kind_fields = @kind_fields");
+      params.kind_fields = input.kind_fields ? JSON.stringify(input.kind_fields) : null;
+    }
+    if (input.sample_role !== undefined) { sets.push("sample_role = @sample_role"); params.sample_role = input.sample_role; }
+    if (input.sample_tags !== undefined) {
+      sets.push("sample_tags = @sample_tags");
+      params.sample_tags = input.sample_tags ? JSON.stringify(input.sample_tags) : null;
+    }
+    if (input.sample_reason !== undefined) { sets.push("sample_reason = @sample_reason"); params.sample_reason = input.sample_reason; }
+    if (input.content_tags !== undefined) {
+      sets.push("content_tags = @content_tags");
+      params.content_tags = input.content_tags ? JSON.stringify(input.content_tags) : null;
+    }
     const r = this.db.prepare(`UPDATE receipts SET ${sets.join(", ")} WHERE id = @id`).run(params);
     return r.changes > 0;
   }
@@ -188,6 +266,17 @@ export class ReceiptsRepo {
     const r = this.db.prepare(`DELETE FROM receipts WHERE id = ?`).run(id);
     return r.changes > 0;
   }
+}
+
+function buildWhere(filter: ListFilter): { whereSql: string; params: Record<string, unknown> } {
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
+  if (filter.status) { where.push("ocr_status = @status"); params.status = filter.status; }
+  if (filter.date_from) { where.push("date >= @date_from"); params.date_from = filter.date_from; }
+  if (filter.date_to) { where.push("date <= @date_to"); params.date_to = filter.date_to; }
+  if (filter.doc_kind) { where.push("doc_kind = @doc_kind"); params.doc_kind = filter.doc_kind; }
+  if (filter.sample_role) { where.push("sample_role = @sample_role"); params.sample_role = filter.sample_role; }
+  return { whereSql: where.length ? `WHERE ${where.join(" AND ")}` : "", params };
 }
 
 function nowSec(): number {

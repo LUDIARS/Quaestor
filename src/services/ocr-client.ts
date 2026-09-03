@@ -6,9 +6,15 @@
  *  - system prompt は cache_control: ephemeral で 1 セッション内 multi-receipt の入力を節約
  *  - 既定 model は **Haiku 4.5** — 単純な OCR に Sonnet/Opus は要らない、 速度・コスト重視
  *  - DI 可能: テストでは fake client を渡せるよう interface 化
+ *
+ * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
+ * @implements SPEC-SCAN-KIND-002 (spec/feature/scan-document-kinds.md)
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { DOC_KINDS, SAMPLE_ROLES } from "../shared/document-kinds.js";
+import { classificationPromptSection } from "./ocr-classification-prompt.js";
+import { normalizeLlmLabels, type LlmLabels } from "./receipt-labels.js";
 
 export interface ReceiptOcrResult {
   date: string | null;            // ISO yyyy-mm-dd
@@ -19,6 +25,8 @@ export interface ReceiptOcrResult {
   raw: string;                    // tool_use input の JSON 文字列 (ocr_raw に保存)
   /** 信頼度メタ (LLM が "uncertain" を返したら manual review に倒す) */
   confidence: "high" | "medium" | "low";
+  /** SDK が分類を返す新経路。 古い DI client との互換性のため optional。 */
+  labels?: LlmLabels;
 }
 
 export interface OcrClient {
@@ -34,15 +42,17 @@ const SYSTEM_PROMPT = `あなたは日本のレシート / 領収書を構造化
 - items: 個別商品 (name, price, qty)。 自信が無ければ空配列
 - confidence: "high" / "medium" / "low" 全項目の確信度。 ぼやけ / 切れ / 紙折れ等で不確実なら下げる
 
+${classificationPromptSection()}
+
 注意:
-- レシート以外 (背景、 メニュー、 名刺、 広告) なら confidence=low、 payee=null とする
+- 書類以外 (背景、 メニュー、 名刺、 広告) なら confidence=low、 payee=null、 kind="other" とする
 - 数字は半角に正規化、 カンマ・全角・通貨記号は除いて整数化
 - 商品名は明確な文字のみ拾う、 推測しない
 `;
 
 const TOOL: Anthropic.Tool = {
   name: "extract_receipt",
-  description: "Extract structured fields from a Japanese receipt or invoice image.",
+  description: "Extract fields and classification from a Japanese accounting document image.",
   input_schema: {
     type: "object",
     properties: {
@@ -63,8 +73,26 @@ const TOOL: Anthropic.Tool = {
         },
       },
       confidence: { type: "string", enum: ["high", "medium", "low"] },
+      kind: { type: "string", enum: [...DOC_KINDS] },
+      kind_fields: {
+        type: ["object", "null"],
+        description: "kind-specific fields; null for receipt, handwritten, and other",
+      },
+      sample: {
+        type: "object",
+        properties: {
+          role: { type: "string", enum: [...SAMPLE_ROLES] },
+          tags: { type: "array", items: { type: "string" } },
+          reason: { type: ["string", "null"] },
+        },
+        required: ["role", "tags", "reason"],
+      },
+      content_tags: { type: "array", items: { type: "string" } },
     },
-    required: ["date", "payee", "total", "currency", "items", "confidence"],
+    required: [
+      "date", "payee", "total", "currency", "items", "confidence",
+      "kind", "kind_fields", "sample", "content_tags",
+    ],
   },
 };
 
@@ -110,6 +138,10 @@ export class AnthropicOcrClient implements OcrClient {
     const tu = res.content.find((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
     if (!tu) throw new Error("no tool_use in response");
     const input = tu.input as Record<string, unknown>;
+    const labels = normalizeLlmLabels(input);
+    // The production SDK path must fail closed: without classification, intake
+    // would see the schema default (`receipt`) and could auto-commit another kind.
+    if (!labels || !labels.sample) throw new Error("invalid classification in tool response");
     return {
       date: typeof input.date === "string" ? input.date : null,
       payee: typeof input.payee === "string" ? input.payee : null,
@@ -132,6 +164,7 @@ export class AnthropicOcrClient implements OcrClient {
       confidence: (input.confidence === "high" || input.confidence === "medium" || input.confidence === "low")
         ? input.confidence
         : "low",
+      labels,
     };
   }
 }
