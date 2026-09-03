@@ -111,7 +111,7 @@ export function YearTabs({ value, onChange, fallback, showAll = true }: Props) {
   );
 }
 
-/** 現在年を yyyy で返す */
+/** 利用者のローカル現在年を yyyy で返す */
 export function currentYear(): string {
-  return new Date().getUTCFullYear().toString();
+  return new Date().getFullYear().toString();
 }
