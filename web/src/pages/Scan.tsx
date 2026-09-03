@@ -18,7 +18,7 @@ function loadMode(): ScanMode {
  * レシート取り込みページ。
  *  - manual : パシャパシャ手動シャッター (既定)。 撮影 → OCR → 投入 (日付-場所-金額 でユニーク判定)
  *  - ar     : 端で白枠を自動検出して安定したら自動キャプチャ (旧来方式、 opt-in)
- * 解析キュー ([[ReceiptQueue]]) はモード問わず下部に出す。
+ * 撮影方式の切替と解析キュー ([[ReceiptQueue]]) はカメラの下に出す (カメラをファーストビューに)。
  */
 export function Scan() {
   const [mode, setMode] = useState<ScanMode>(loadMode());
@@ -29,13 +29,15 @@ export function Scan() {
 
   return (
     <div>
-      <div className="flex items-center gap-2" style={{ marginBottom: "0.5rem" }}>
+      <h1 className="sr-only">書類撮影</h1>
+      {mode === "manual" ? <ManualShutter /> : <ArScanner />}
+
+      {/* 撮影方式の切替はカメラの下 (カメラをファーストビューに置く) */}
+      <div className="flex items-center gap-2" style={{ margin: "0.5rem 0" }}>
         <span className="text-xs text-subtle">撮影方式:</span>
         <ModeButton active={mode === "manual"} onClick={() => changeMode("manual")}>手動シャッター</ModeButton>
         <ModeButton active={mode === "ar"} onClick={() => changeMode("ar")}>AR 自動検出</ModeButton>
       </div>
-
-      {mode === "manual" ? <ManualShutter /> : <ArScanner />}
 
       <ReceiptQueue origin="scan tab" />
     </div>

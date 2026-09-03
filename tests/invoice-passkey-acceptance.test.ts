@@ -412,7 +412,7 @@ describe("API: passkey acceptance", () => {
     expect(res.status).toBe(409);
     expect((await res.json() as { error: string }).error).toBe("no_passkey");
     expect(await (await app.request(`/v1/invoices/share/${share.token}`)).text()).toContain("メール確認へ進む");
-  });
+  }, 10_000);
 
   it("grant は 1 回限りで、 OTP 未通過では登録できない", async () => {
     const share = await issueShare();

@@ -58,11 +58,11 @@ const defaultFieldLocator: FieldLocatorEngine = new ChainedFieldLocator([
 ]);
 
 /**
- * 手動シャッター撮影画面。
+ * 手動シャッター撮影画面 (表示見出し無し、 カメラがファーストビュー)。
  *
  * フロー: 撮影 → スキャンアニメ (DETECT→ANALYZE→RESULT→LOCATE→CONFIRM) → 投入。
  * カメラは常時 9:16 ポートレート + ループスキャンライン。
- * アニメーションは右上トグルでオフ可能。
+ * アニメーションはカメラ下のトグルでオフ可能。
  */
 export function ManualShutter() {
   const { videoRef, running, error } = useCamera();
@@ -178,18 +178,7 @@ export function ManualShutter() {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.4rem" }}>
-        <h2 style={{ margin: 0 }}>レシート撮影</h2>
-        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.75rem", color: "var(--c-subtle)", cursor: "pointer", marginLeft: "auto" }}>
-          <input
-            type="checkbox"
-            checked={animated}
-            onChange={(e) => { setAnimated(e.target.checked); saveAnimated(e.target.checked); }}
-            style={{ margin: 0 }}
-          />
-          スキャンアニメ
-        </label>
-      </div>
+      {/* 視覚的な見出しは置かず、 カメラをそのままファーストビューにする */}
       {/* カメラ + スキャンアニメーション — 常時 9:16 ポートレート */}
       <div
         className="scan-stage"
@@ -268,11 +257,20 @@ export function ManualShutter() {
         />
       </div>
 
-      <div className="scan-meta" style={{ marginTop: "0.5rem" }}>
+      <div className="scan-meta" style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.75rem", maxWidth: 360 }}>
         {error
           ? <span className="error">{error}</span>
-          : <>camera: {running ? "ready" : "starting…"} ｜ 撮影 {shots.length} 枚 ｜ 投入済 {committedCount}</>
+          : <span>camera: {running ? "ready" : "starting…"} ｜ 撮影 {shots.length} 枚 ｜ 投入済 {committedCount}</span>
         }
+        <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: "0.75rem", color: "var(--c-subtle)", cursor: "pointer", marginLeft: "auto", whiteSpace: "nowrap" }}>
+          <input
+            type="checkbox"
+            checked={animated}
+            onChange={(e) => { setAnimated(e.target.checked); saveAnimated(e.target.checked); }}
+            style={{ margin: 0 }}
+          />
+          スキャンアニメ
+        </label>
       </div>
 
       {/* 使い方はカメラの下 (カメラをファーストビューに置く) */}
