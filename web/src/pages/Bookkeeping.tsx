@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { YearTabs, currentYear } from "../components/YearTabs.js";
+import { MOBILE_QUERY, useMediaQuery } from "../lib/useMediaQuery.js";
 
 /** 簿記ページ: 仕訳帳 / 精算表 / 元帳 / 月別 / 決算書 / 期首残高。 API は /v1/bookkeeping。
  * @implements SPEC-HOUSEHOLD-BOOKKEEPING-001 (spec/feature/household-bookkeeping.md) */
@@ -22,7 +23,6 @@ interface JournalEntry {
   household_category_id: number | null; household_category_name: string | null; locked: number;
 }
 interface AccountCode { code: number; name: string; kind: string }
-interface Category { id: number; name: string }
 interface TrialRow {
   code: number; name: string; kind: string; opening_debit: number; opening_credit: number;
   debit_total: number; credit_total: number; pl_debit: number; pl_credit: number; bs_debit: number; bs_credit: number;
@@ -56,13 +56,11 @@ export function Bookkeeping() {
   const [year, setYear] = useState(currentYear());
   const [tab, setTab] = useState<SubTab>("journal");
   const [accounts, setAccounts] = useState<AccountCode[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     void jsonFetch<{ items: AccountCode[] }>("/v1/account-codes").then((j) => setAccounts(j.items)).catch((e: Error) => setErr(e.message));
-    void jsonFetch<{ items: Category[] }>("/v1/household/categories").then((j) => setCategories(j.items)).catch((e: Error) => setErr(e.message));
   }, []);
 
   const y = Number(year);
@@ -93,17 +91,20 @@ export function Bookkeeping() {
     <div>
       <h2>簿記 (エクセル簿記互換)</h2>
       <YearTabs value={year} onChange={(yy) => setYear(yy)} fallback={[currentYear()]} showAll={false} />
-      <div className="foundation-form" style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-        <button onClick={() => void rebuild()}>取引から仕訳帳を再生成</button>
-        <a href={`/v1/bookkeeping/${y}/workbook.xlsx`}><button>ブック出力 (.xlsx)</button></a>
-        <label>エクセル簿記の仕訳帳を取込 <input type="file" accept=".xlsx" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importXlsx(f); e.target.value = ""; }} /></label>
-      </div>
+      <details className="foundation-form journal-actions">
+        <summary>操作 (再生成 / ブック出力 / 取込)</summary>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+          <button onClick={() => void rebuild()}>取引から仕訳帳を再生成</button>
+          <a className="fd-btn-secondary" href={`/v1/bookkeeping/${y}/workbook.xlsx`}>ブック出力 (.xlsx)</a>
+          <label>エクセル簿記の仕訳帳を取込 <input type="file" accept=".xlsx" onChange={(e) => { const f = e.target.files?.[0]; if (f) void importXlsx(f); e.target.value = ""; }} /></label>
+        </div>
+      </details>
       {notice && <p>{notice}</p>}
       {err && <p className="error">{err}</p>}
       <nav style={{ display: "flex", gap: 6, margin: "8px 0" }}>
         {SUB_TABS.map((t) => <button key={t.key} aria-current={tab === t.key} onClick={() => setTab(t.key)}>{t.label}</button>)}
       </nav>
-      {tab === "journal" && <JournalTab year={y} accounts={accounts} categories={categories} onError={setErr} />}
+      {tab === "journal" && <JournalTab year={y} accounts={accounts} onError={setErr} />}
       {tab === "trial" && <TrialTab year={y} />}
       {tab === "ledger" && <LedgerTab year={y} accounts={accounts} />}
       {tab === "monthly" && <MonthlyTab year={y} />}
@@ -115,12 +116,20 @@ export function Bookkeeping() {
 
 type JournalView = "all" | "by-account";
 
-function JournalTab({ year, accounts, categories, onError }: { year: number; accounts: AccountCode[]; categories: Category[]; onError: (s: string | null) => void }) {
+/** 表示用の日付: 年は省く (年は上のタブで選んでいる) */
+const md = (iso: string) => `${iso.slice(5, 7)}/${iso.slice(8, 10)}`;
+
+/** スマホで隠す科目 = 資産・負債 (現金 / 当座預金 / 事業主貸 / 事業主借 / 仮払税金 / 備品 …)。 経費・収益だけを主科目として見せる */
+const HIDDEN_KINDS = new Set(["asset", "liability"]);
+
+function JournalTab({ year, accounts, onError }: { year: number; accounts: AccountCode[]; onError: (s: string | null) => void }) {
   const [items, setItems] = useState<JournalEntry[]>([]);
   const [month, setMonth] = useState<string>("");
   const [view, setView] = useState<JournalView>("all");
   const [editing, setEditing] = useState<JournalEntry | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [manual, setManual] = useState({ template: "sales_deposit", entry_date: `${year}-01-01`, amount: "", description: "", debit_code: "", credit_code: "" });
+  const isMobile = useMediaQuery(MOBILE_QUERY);
 
   const load = useCallback(async () => {
     const q = month ? `?month=${month}` : "";
@@ -130,6 +139,13 @@ function JournalTab({ year, accounts, categories, onError }: { year: number; acc
   useEffect(() => { void load(); }, [load]);
 
   const name = (code: number) => accounts.find((a) => a.code === code)?.name ?? `(${code})`;
+  const isHidden = (code: number) => { const a = accounts.find((x) => x.code === code); return a ? HIDDEN_KINDS.has(a.kind) : false; };
+  /** スマホの 1 行目に出す主科目: 隠さない側を優先。 両方隠す科目なら「借方 / 貸方」 */
+  const primaryAccount = (e: JournalEntry) => {
+    if (!isHidden(e.debit_code)) return `${e.debit_code} ${name(e.debit_code)}`;
+    if (!isHidden(e.credit_code)) return `${e.credit_code} ${name(e.credit_code)}`;
+    return `${name(e.debit_code)} / ${name(e.credit_code)}`;
+  };
 
   async function save() {
     if (!editing) return;
@@ -138,7 +154,7 @@ function JournalTab({ year, accounts, categories, onError }: { year: number; acc
         method: "PATCH", headers: { "content-type": "application/json" },
         body: JSON.stringify({
           debit_code: editing.debit_code, debit_amount: editing.debit_amount, credit_code: editing.credit_code, credit_amount: editing.credit_amount,
-          description: editing.description, rate: editing.rate, household_category_id: editing.household_category_id,
+          description: editing.description, rate: editing.rate,
         }),
       });
       setEditing(null);
@@ -148,8 +164,8 @@ function JournalTab({ year, accounts, categories, onError }: { year: number; acc
 
   /** 削除は編集モードの中だけに出す (誤爆防止)。 さらに確認ダイアログを挟む */
   async function remove(e: JournalEntry) {
-    if (!window.confirm(`№${e.no} ${e.entry_date} ${e.description} (${yen(e.debit_amount)}) を削除しますか?`)) return;
-    try { await jsonFetch(`/v1/bookkeeping/journal/${e.id}`, { method: "DELETE" }); setEditing(null); await load(); }
+    if (!window.confirm(`№${e.no} ${md(e.entry_date)} ${e.description} (${yen(e.debit_amount)}) を削除しますか?`)) return;
+    try { await jsonFetch(`/v1/bookkeeping/journal/${e.id}`, { method: "DELETE" }); setEditing(null); setSelectedId(null); await load(); }
     catch (err: unknown) { onError((err as Error).message); }
   }
 
@@ -175,36 +191,88 @@ function JournalTab({ year, accounts, categories, onError }: { year: number; acc
     return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([code, rows]) => ({ code, rows }));
   })();
 
+  const accountSelect = (value: number, onChange: (code: number) => void) => (
+    <select value={value} onChange={(ev) => onChange(Number(ev.target.value))}>{accounts.map((a) => <option key={a.code} value={a.code}>{a.code} {a.name}</option>)}</select>
+  );
+
+  const editActions = (e: JournalEntry) => (
+    <>
+      <button onClick={() => void save()}>保存</button> <button onClick={() => setEditing(null)}>取消</button>{" "}
+      <button className="danger" onClick={() => void remove(e)}>削除</button>
+    </>
+  );
+
+  // ---- PC: 罫線付きテーブル (№ が左端、 日付は月日) ----
   const renderRow = (e: JournalEntry) => editing?.id === e.id ? (
     <tr key={e.id} className="foundation-form journal-editing">
-      <td className="nowrap">{e.entry_date}</td><td>{e.no}</td>
-      <td className="nowrap"><select value={editing.debit_code} onChange={(ev) => setEditing({ ...editing, debit_code: Number(ev.target.value) })}>{accounts.map((a) => <option key={a.code} value={a.code}>{a.code} {a.name}</option>)}</select></td>
+      <td>{e.no}</td><td className="nowrap">{md(e.entry_date)}</td>
+      <td className="nowrap">{accountSelect(editing.debit_code, (c) => setEditing({ ...editing, debit_code: c }))}</td>
       <td className="num"><input type="number" style={{ width: 110 }} value={editing.debit_amount} onChange={(ev) => setEditing({ ...editing, debit_amount: Number(ev.target.value), credit_amount: Number(ev.target.value) })} /></td>
-      <td className="nowrap"><select value={editing.credit_code} onChange={(ev) => setEditing({ ...editing, credit_code: Number(ev.target.value) })}>{accounts.map((a) => <option key={a.code} value={a.code}>{a.code} {a.name}</option>)}</select></td>
+      <td className="nowrap">{accountSelect(editing.credit_code, (c) => setEditing({ ...editing, credit_code: c }))}</td>
       <td className="num">{yen(editing.credit_amount)}</td>
       <td><input value={editing.description} onChange={(ev) => setEditing({ ...editing, description: ev.target.value })} /></td>
       <td className="num">{yen(e.payment)}</td>
       <td><input type="number" step="0.1" min="0" max="1" style={{ width: 60 }} value={editing.rate} onChange={(ev) => setEditing({ ...editing, rate: Number(ev.target.value) })} /></td>
-      <td><select value={editing.household_category_id ?? ""} onChange={(ev) => setEditing({ ...editing, household_category_id: ev.target.value ? Number(ev.target.value) : null })}>
-        <option value="">-</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></td>
       <td>{e.origin}</td>
-      <td className="nowrap">
-        <button onClick={() => void save()}>保存</button> <button onClick={() => setEditing(null)}>取消</button>{" "}
-        <button className="danger" onClick={() => void remove(e)}>削除</button>
-      </td>
+      <td className="nowrap">{editActions(e)}</td>
     </tr>
   ) : (
     <tr key={e.id}>
-      <td className="nowrap">{e.entry_date}</td><td>{e.no}</td>
+      <td>{e.no}</td><td className="nowrap">{md(e.entry_date)}</td>
       <td className="nowrap">{e.debit_code} {name(e.debit_code)}</td><td className="num">{yen(e.debit_amount)}</td>
       <td className="nowrap">{e.credit_code} {name(e.credit_code)}</td><td className="num">{yen(e.credit_amount)}</td>
       <td>{e.description}</td><td className="num">{yen(e.payment)}</td>
       <td className="num">{Math.round(e.rate * 100)}%</td>
-      <td>{e.household_category_name ?? ""}</td>
       <td className="nowrap">{e.origin}{e.locked ? " 🔒" : ""}</td>
-      <td className="nowrap"><button onClick={() => setEditing(e)}>編集</button></td>
+      <td className="nowrap"><button onClick={() => { setSelectedId(e.id); setEditing(e); }}>編集</button></td>
     </tr>
   );
+
+  // ---- スマホ: 簡略 2 行表示。 選択すると隠した科目・由来・編集が出る ----
+  const renderMobileItem = (e: JournalEntry) => {
+    const selected = selectedId === e.id;
+    const isEditing = editing?.id === e.id;
+    return (
+      <li key={e.id} className={`journal-m-item${selected ? " selected" : ""}`}>
+        <button
+          type="button"
+          className="journal-m-row"
+          onClick={() => setSelectedId(selected ? null : e.id)}
+          aria-expanded={selected}
+          disabled={editing !== null}
+        >
+          <span className="journal-m-line1">
+            <span className="journal-m-no">{e.no}</span>
+            <span className="journal-m-date">{md(e.entry_date)}</span>
+            <span className="journal-m-account">{primaryAccount(e)}</span>
+            <span className="journal-m-amount">{yen(e.debit_amount)}</span>
+          </span>
+          <span className="journal-m-line2">
+            <span className="journal-m-desc">{e.description}</span>
+            <span className="journal-m-rate">按分 {Math.round(e.rate * 100)}%</span>
+          </span>
+        </button>
+        {selected && !isEditing && (
+          <div className="journal-m-detail">
+            <div>借方: {e.debit_code} {name(e.debit_code)} {yen(e.debit_amount)}</div>
+            <div>貸方: {e.credit_code} {name(e.credit_code)} {yen(e.credit_amount)}</div>
+            <div>算入金額: {yen(e.payment)} / 由来: {e.origin}{e.locked ? " 🔒" : ""}</div>
+            <div><button onClick={() => setEditing(e)}>編集</button></div>
+          </div>
+        )}
+        {selected && isEditing && editing && (
+          <div className="journal-m-detail foundation-form journal-editing">
+            <label>借方 {accountSelect(editing.debit_code, (c) => setEditing({ ...editing, debit_code: c }))}</label>
+            <label>貸方 {accountSelect(editing.credit_code, (c) => setEditing({ ...editing, credit_code: c }))}</label>
+            <label>金額 <input type="number" value={editing.debit_amount} onChange={(ev) => setEditing({ ...editing, debit_amount: Number(ev.target.value), credit_amount: Number(ev.target.value) })} /></label>
+            <label>摘要 <input value={editing.description} onChange={(ev) => setEditing({ ...editing, description: ev.target.value })} /></label>
+            <label>按分 <input type="number" step="0.1" min="0" max="1" value={editing.rate} onChange={(ev) => setEditing({ ...editing, rate: Number(ev.target.value) })} /></label>
+            <div>{editActions(e)}</div>
+          </div>
+        )}
+      </li>
+    );
+  };
 
   return (
     <div>
@@ -240,29 +308,42 @@ function JournalTab({ year, accounts, categories, onError }: { year: number; acc
           <button onClick={() => void addManual()}>追加</button>
         </div>
       </details>
-      <div style={{ overflowX: "auto" }}>
-        <table className="journal-table">
-          <colgroup>
-            <col style={{ width: 110 }} /><col style={{ width: 52 }} /><col style={{ width: 190 }} /><col style={{ width: 120 }} />
-            <col style={{ width: 190 }} /><col style={{ width: 120 }} /><col /><col style={{ width: 120 }} /><col style={{ width: 64 }} /><col style={{ width: 140 }} /><col style={{ width: 96 }} /><col style={{ width: 170 }} />
-          </colgroup>
-          <thead><tr><th>日付</th><th>№</th><th>借方</th><th>金額</th><th>貸方</th><th>金額</th><th>摘要</th><th>支払</th><th>按分</th><th>家計費目</th><th>由来</th><th></th></tr></thead>
-          <tbody>
-            {groups.map((g) => (
-              <Fragment key={g.code ?? "all"}>
-                {g.code !== null && (
-                  <tr className="journal-group">
-                    <td colSpan={3}><b>{g.code} {name(g.code)}</b></td>
-                    <td className="num"><b>{yen(g.rows.reduce((t, r) => t + r.debit_amount, 0))}</b></td>
-                    <td colSpan={8}>{g.rows.length} 件</td>
-                  </tr>
-                )}
-                {g.rows.map(renderRow)}
-              </Fragment>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {isMobile ? (
+        <div>
+          {groups.map((g) => (
+            <Fragment key={g.code ?? "all"}>
+              {g.code !== null && (
+                <div className="journal-m-group"><b>{g.code} {name(g.code)}</b> <span>{yen(g.rows.reduce((t, r) => t + r.debit_amount, 0))} / {g.rows.length} 件</span></div>
+              )}
+              <ul className="journal-m-list">{g.rows.map(renderMobileItem)}</ul>
+            </Fragment>
+          ))}
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table className="journal-table">
+            <colgroup>
+              <col style={{ width: 52 }} /><col style={{ width: 70 }} /><col style={{ width: 190 }} /><col style={{ width: 120 }} />
+              <col style={{ width: 190 }} /><col style={{ width: 120 }} /><col /><col style={{ width: 120 }} /><col style={{ width: 64 }} /><col style={{ width: 96 }} /><col style={{ width: 170 }} />
+            </colgroup>
+            <thead><tr><th>№</th><th>日付</th><th>借方</th><th>金額</th><th>貸方</th><th>金額</th><th>摘要</th><th>算入金額</th><th>按分</th><th>由来</th><th></th></tr></thead>
+            <tbody>
+              {groups.map((g) => (
+                <Fragment key={g.code ?? "all"}>
+                  {g.code !== null && (
+                    <tr className="journal-group">
+                      <td colSpan={3}><b>{g.code} {name(g.code)}</b></td>
+                      <td className="num"><b>{yen(g.rows.reduce((t, r) => t + r.debit_amount, 0))}</b></td>
+                      <td colSpan={7}>{g.rows.length} 件</td>
+                    </tr>
+                  )}
+                  {g.rows.map(renderRow)}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

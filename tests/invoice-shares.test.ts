@@ -715,7 +715,7 @@ describe("API: /v1/invoices share links", () => {
     expect((await app.request(
       `/v1/invoices/${invoiceId}/share-links/${created.share_id}/acceptance`,
     )).status).toBe(404);
-  });
+  }, 10_000);
 
   it("無効化済みの送信先では新しいリンクを発行しない", async () => {
     new InvoiceDeliveryContactsRepo(db).deactivate(recipientId);

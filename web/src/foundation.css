@@ -293,4 +293,23 @@ table {
 .journal-table td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .journal-table tr.journal-group td { background: var(--c-muted); }
 .journal-table tr.journal-editing td { background: rgba(167, 139, 250, 0.08); }
-.journal-table button.danger { color: var(--c-danger); border-color: var(--c-danger); }
+.journal-editing button.danger { color: var(--c-danger); border-color: var(--c-danger); }
+
+/* 簿記: スマホの簡略表示 (資産・負債科目を隠し、 摘要と按分を 2 行目に) */
+.journal-m-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--c-border); border-radius: 6px; }
+.journal-m-item + .journal-m-item { border-top: 1px solid var(--c-border); }
+.journal-m-item.selected { background: var(--c-muted); }
+.journal-m-row { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 0.45rem 0.6rem; font: inherit; }
+.journal-m-row:disabled { cursor: default; }
+.journal-m-line1, .journal-m-line2 { display: flex; gap: 0.5rem; align-items: baseline; }
+.journal-m-no { width: 2.4em; color: var(--c-subtle); font-variant-numeric: tabular-nums; }
+.journal-m-date { width: 3.4em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.journal-m-account { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journal-m-amount { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.journal-m-line2 { padding-left: 2.9em; font-size: 0.8rem; color: var(--c-subtle); }
+.journal-m-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.journal-m-rate { white-space: nowrap; }
+.journal-m-detail { padding: 0.4rem 0.6rem 0.6rem 3.5rem; font-size: 0.85rem; display: grid; gap: 0.3rem; }
+.journal-m-detail label { display: flex; gap: 0.4rem; align-items: center; }
+.journal-m-detail select, .journal-m-detail input { flex: 1; min-width: 0; }
+.journal-m-group { margin: 0.8rem 0 0.3rem; display: flex; justify-content: space-between; }
