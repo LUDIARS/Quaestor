@@ -19,6 +19,7 @@ import type { OcrSidecarClient } from "../ocr-sidecar-client.js";
 import type { ReceiptStorage } from "../receipt-storage.js";
 import { buildBenchCorpus } from "./corpus-builder.js";
 import { OcrGaBenchEvaluator, type EvalProgress } from "./evaluator.js";
+import { waitForSidecarHealth, type SidecarReadinessOptions } from "./sidecar-readiness.js";
 import { BENCH_REPORT_FILE, mergeBenchReport, readBenchReport, writeBenchReport } from "./report.js";
 import type { BenchLogger, BenchReport, LabelBenchReport } from "./types.js";
 
@@ -39,6 +40,8 @@ export interface GaBenchRunOptions {
   costPerSecond: number;
   /** バッチ sidecar に期待する device。gpu 指定で sidecar が gpu でなければ失敗 */
   expectedDevice?: "cpu" | "gpu";
+  /** sidecar `/health` の待ち方 (GPU の cold start 用)。省略で既定 (4 回 / 1 秒間隔) */
+  healthReadiness?: Omit<SidecarReadinessOptions, "logger">;
   logger?: BenchLogger;
   onProgress?: (p: EvalProgress) => void;
   now?: () => number;
@@ -54,10 +57,9 @@ export async function runGaBench(opts: GaBenchRunOptions): Promise<BenchReport> 
 }
 
 async function runGaBenchLocked(opts: GaBenchRunOptions): Promise<BenchReport> {
-  const health = await opts.sidecar.health().catch((e: unknown) => {
-    const message = e instanceof Error ? e.message : String(e);
-    throw new Error(`OCR sidecar unreachable at ${opts.sidecar.baseUrl}: ${message}`);
-  });
+  // GPU sidecar は最初の /health で CUDA を初期化するため、cold start は client の
+  // /health タイムアウト (5 秒) より長い。数回だけ待ってから不達と判定する
+  const health = await waitForSidecarHealth(opts.sidecar, { ...opts.healthReadiness, logger: opts.logger });
   if (!health.ok) throw new Error(`OCR sidecar at ${opts.sidecar.baseUrl} reports ok=false`);
   if (opts.expectedDevice === "gpu" && health.device !== "gpu") {
     throw new Error(

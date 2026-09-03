@@ -80,7 +80,7 @@ backend 側は `quaestor.config.json` の `training.gaBench.sidecarUrl` を `htt
 `device=gpu` なのに sidecar が `cpu` を報告したらバッチは走らず、エラーで止まる (黙って CPU で
 1 晩回さない)。
 
-### GPU wheel の導入手順 (本 PR では未導入。検証してから)
+### GPU wheel の導入手順 (2026-09-03 に B-6 で実機検証済み)
 
 1. **paddlepaddle-gpu の版を CUDA に合わせる。** `pip install paddlepaddle-gpu==<ver>` は
    PyPI の既定 wheel が CUDA 11.8 / 12.x のどれかに固定されているので、PaddlePaddle 公式の
@@ -98,6 +98,58 @@ backend 側は `quaestor.config.json` の `training.gaBench.sidecarUrl` を `htt
    同じ PC で Ollama が PTX 不一致で落ちた前例があるので、まずこの `/health` で判定する。
 5. 確認: `/health` の `device` が `gpu`、`/detect` の所要が CPU 比で数倍速いこと。
    結果は設計書 (Castra `spec/plan/2026-09-03-quaestor-scan-diversification-ga-evaluation.md` §3.4) に追記する。
+
+### 検証結果 (2026-09-03、B-6、検証機)
+
+**PTX 不一致は起きなかった。** CUDA 11.8 系 wheel で GTX 1070 (sm_61) がそのまま動く。
+Ollama の前例は再現しない。
+
+| 項目 | 値 |
+| --- | --- |
+| wheel | `paddlepaddle-gpu==3.3.1` (`cp39-cp39-win_amd64`)、index `https://www.paddlepaddle.org.cn/packages/stable/cu118/` |
+| paddle の CUDA / cuDNN | `paddle.version.cuda()` = 11.8 / `paddle.version.cudnn()` = 8.9.6 |
+| GPU | NVIDIA GeForce GTX 1070、compute capability 6.1、8191 MB、15 SM |
+| ドライバ | 560.94 (Driver API 12.6 / Runtime API 11.8) |
+| python | 3.9.6 (運用 `.venv` と同じ) |
+| 症状 | 無し。`paddle.matmul` 成功、`/health` = `{"device":"gpu","device_error":null}` |
+
+- **CUDA runtime と cuDNN の DLL を手で PATH へ置く必要は無かった。** wheel が
+  `nvidia-cuda-runtime-cu11` / `nvidia-cudnn-cu11` / `nvidia-cublas-cu11` 等を pip 依存として
+  引き込む (上記手順 2 の但し書きはこの wheel には当てはまらない)。
+- `.venv-gpu` は **約 4.5 GB** (CUDA ライブラリ込み)。DL も約 2.5 GB あるので初回導入は時間がかかる。
+- 運用の `.venv` (CPU) とは **別 venv**。`paddlepaddle` (CPU) と `paddlepaddle-gpu` を同居させない。
+
+導入手順 (実際に通したもの):
+
+```powershell
+python -m venv ocr-sidecar/.venv-gpu           # 運用の .venv とは別
+ocr-sidecar/.venv-gpu/Scripts/python.exe -m pip install --upgrade pip setuptools wheel
+ocr-sidecar/.venv-gpu/Scripts/python.exe -m pip install -r ocr-sidecar/requirements-gpu.txt
+cd ocr-sidecar; ./.venv-gpu/Scripts/python.exe main.py --device gpu --port 17351
+curl http://127.0.0.1:17351/health            # device: "gpu" を確認
+```
+
+### 計測 (2026-09-03、レシート 5 枚 × 既定遺伝子、608x1080)
+
+| 経路 | 1 画像の `/detect` | 備考 |
+| --- | --- | --- |
+| CPU (`:17350`、運用 sidecar) | 平均 **80.3 s** (49.4〜108.9) | 別パスで平均 90.4 s。負荷で 27〜194 s と振れる |
+| GPU (`:17351`、`.venv-gpu`) | 平均 **0.69 s** (0.49〜0.88) | 検出行数は CPU と同一 (57/40/55/42/27 行) |
+
+- **約 116 倍**。GA の夜間バッチは GPU 前提でなければ成立しない (CPU では 1 世代に数十時間)。
+- ただし **新しい遺伝子ごとに PaddleOCR インスタンス生成で約 8.6 秒** かかる
+  (同一遺伝子の 2 回目は約 1.0 秒)。1 世代のコストは
+  `画像数 × 個体数 × 約 1 秒 + 新遺伝子数 × 約 8.6 秒`。個体数を増やすより
+  **1 個体あたりの画像数を増やす方が償却が効く**。
+- **前処理縮小 (長辺 960) は効かない。** コーパス 357 件のうち 356 件が 608x1080 で、
+  det は既定 `limitSideLen=960` (`limit_type=max`) で 960 に落としている。実測でも
+  平均 89.4 s (縮小) vs 90.4 s (原寸)、fitness 差 **0.0000** (5 枚すべて一致)。
+  そのため `ocr-ga-bench` に縮小オプションは入れていない (詳細は
+  `../spec/feature/ocr-ga-evaluation.md`)。
+- 冷えた GPU sidecar への **最初の `/health` は約 7.4 秒** かかる (paddle import + CUDA 初期化 +
+  カーネル読込)。`HttpOcrSidecarClient` の `/health` 既定タイムアウト 5 秒より長いので、
+  バッチから叩く前に一度 `/health` を呼んで温めるか、タイムアウトを延ばす
+  (`spec/feature/ocr-ga-evaluation.md` の「残」参照)。
 
 ## web/backend からの接続
 

@@ -10,7 +10,8 @@
 - `src/services/ocr-ga.ts` — 遺伝子スキーマ、集団キー (ラベル) の規則、best の解決
 - `src/services/ocr-ga-fitness.ts` — fitness (純関数)。`payeeKey` / `itemKey` は撮影時の行マッチングでも使う
 - `src/services/ocr-sidecar-client.ts` — backend → sidecar `/detect` `/health` (1 並列・タイムアウト)
-- `src/services/ocr-ga-bench/` — corpus-builder / corpus-split / evaluator / report / bench-runner / nightly-job
+- `src/services/ocr-ga-bench/` — corpus-builder / corpus-split / evaluator / report / bench-runner /
+  nightly-job / sidecar-readiness
 - `src/services/receipt-detect/detect-service.ts` — 撮影時 detect (遺伝子解決 → sidecar 1 回 → 採点 → レコード発行)
 - `src/services/receipt-detect/field-regions.ts` — 認識行 ↔ 真値のマッチング (本物 BB)
 - `src/services/receipt-detect/production-eval-log.ts` — `production-eval.jsonl` の読み書きと直近 n 件の平均
@@ -111,8 +112,11 @@ web の `fitnessVsTruth` と同じ入出力 (sidecar 行 + 真値 → 0..1) で�
 - 運用の常駐 sidecar (supervisor 起動) は CPU のまま。設定既定 (`ocrSidecar`) は変えない。
 - バッチは `training.gaBench.sidecarUrl` (GPU 版など 2 本目) を叩き、`training.gaBench.device = gpu` の
   ときは `/health.device` が `gpu` でなければ走らせない (エラー停止)。
-- GPU wheel の導入は本 PR ではやらない。手順と注意 (paddlepaddle-gpu の版 / CUDA 要件 / GTX 1070 の
-  compute capability 6.1 / PTX 不一致時の症状) は `ocr-sidecar/README.md`「GPU はバッチ側だけ」。
+- GPU wheel の導入手順と注意 (paddlepaddle-gpu の版 / CUDA 要件 / GTX 1070 の compute capability 6.1 /
+  PTX 不一致時の症状) は `ocr-sidecar/README.md`「GPU はバッチ側だけ」。
+  **2026-09-03 に B-6 で実機検証済み**: `paddlepaddle-gpu==3.3.1` (CUDA 11.8 index) で GTX 1070 は
+  そのまま動き、PTX 不一致は起きない。`/detect` は CPU 80.3 s → GPU 0.69 s (約 116 倍)。
+  実測値と夜間バッチの規模は下の「実測と推奨設定」。
 
 ## SPEC-OCR-GA-EVAL-006 — 撮影時の運用評価 (勝ち遺伝子を実運用で採点する)
 
@@ -169,6 +173,106 @@ web の `fitnessVsTruth` と同じ入出力 (sidecar 行 + 真値 → 0..1) で�
 直近 20 件の平均 (`ProductionEvalLog.summary`) は **ログに出すだけ**。平均が baseline を下回っても
 `bestGenome` を既定に戻す処理は入れない (閾値は仮置き。人が B-5 の「OCR 進化」カードで見る)。
 
+## 実測と推奨設定 (B-6、2026-09-03)
+
+実測の全文と条件は設計書 §3.4 (Castra
+`spec/plan/2026-09-03-quaestor-scan-diversification-ga-evaluation.md`) と `ocr-sidecar/README.md`。
+ここには **夜間バッチをどう設定するか**だけ書く。
+
+| 実測 (GTX 1070 / Ryzen 9 3900X) | 値 |
+| --- | --- |
+| `/detect` 1 画像 (既定遺伝子、608x1080) | CPU **80.3 s** / GPU **0.69 s** (約 116 倍) |
+| 新しい遺伝子ごとの PaddleOCR インスタンス生成 | 約 **8.6 s** (同一遺伝子の 2 回目は約 1.0 s) |
+| `ga:bench --limit 50 --population 8 --generations 1` (GPU) | 358 detect / **466.1 s** = **1.30 s/detect** |
+| 全 357 件 × 集団 8 で 1 世代 (上記から換算) | 約 2430 detect ≈ **約 53 分** (CPU なら約 54 時間) |
+
+1 世代の detect 回数は `個体数 × train + 2 × holdout` (既定遺伝子は baseline と elite で共有され
+キャッシュに乗る)。コストは `画像数 × 個体数 × 約 1 s + 新遺伝子数 × 約 8.6 s` で、
+**個体数を増やすより 1 個体あたりの画像数を増やす方が償却が効く** (集団 8 は据え置いてよい)。
+
+### 推奨する `training.gaBench` (GPU sidecar を常駐させたとき)
+
+```jsonc
+"gaBench": {
+  "enabled": true,                            // GPU sidecar が常駐してから true にする
+  "hour": 3,
+  "generationsPerNight": 1,                   // 全 357 件 × 集団 8 で 1 世代 ≈ 53 分 (1 時間枠に収まる)
+  "sidecarUrl": "http://127.0.0.1:17351",     // バッチ専用 (GPU)。運用の 17350 は CPU のまま
+  "device": "gpu",                            // sidecar が cpu を報告したら走らせない (黙って CPU で 1 晩回さない)
+  "costPerSecond": 0.0005
+}
+```
+
+- **既定値は変えていない** (`enabled:false` / `sidecarUrl:null` / `device:"cpu"`)。GPU sidecar は
+  まだ常駐していないので、既定を `gpu` にすると `device` 不一致でバッチが毎晩失敗するだけになる。
+  上の値は **GPU sidecar を常駐させたあとに入れる推奨値**。
+- `generationsPerNight` を 2 以上にすると 1 時間枠を超える。増やしたいときは先に B-7
+  (`spec/tasks/2026-09-03-ocr-ga-b7-detect-stage-cache.md`) で 1 世代のコストを下げる。
+- GPU メモリは集団 8 (遺伝子 9 種) 評価後で 5.7 GB / 8 GB。`main.py` の `_OCR_CACHE_MAX = 12` を
+  埋めると 8 GB を超える恐れがあるので、集団を増やすときは合わせて見直す。
+
+### 前処理縮小は入れない (実装しない判断)
+
+コーパス 357 件のうち **356 件が 608x1080** (残り 1 件 405x720) で長辺は最大 1080。det は既定
+`limitSideLen=960` (`limit_type=max`) で既に 960 に落としているため、送る画像を 960 に縮めても
+det の入力は変わらない。実測 (CPU、5 枚) は 89.4 s (縮小) vs 90.4 s (原寸) で差は振れ幅の内側、
+**fitness は 5 枚すべて 4 桁一致 (0.9618)**。よって `ocr-ga-bench` の corpus 読み込みに縮小オプションは
+足さず、`training.gaBench` にも設定を足さない。将来コーパスに 1080 を大きく超える画像
+(別端末・スキャナ取込) が混ざったら再評価する。
+
+### GPU sidecar を常駐させるなら (提案。本 PR では登録しない)
+
+Excubitor は各リポの `excubitor.catalog.yaml` を正本にする (`Excubitor/catalog/FRAGMENTS.md`)。
+GA バッチ用 GPU sidecar を常駐させるなら、`Quaestor/excubitor.catalog.yaml` に **3 本目**として
+足す。運用 sidecar (`:17350`) は Quaestor backend が supervisor で起こすので catalog には出さない。
+
+```yaml
+  - code: quaestor-ocr-gpu
+    name: Quaestor OCR sidecar (GPU, GA batch)
+    tier: personal
+    project_code: quaestor
+    component: worker
+    port: 17351
+    repo: LUDIARS/Quaestor
+    runtime: python
+    cwd: ${ARS_ROOT}/Quaestor/ocr-sidecar
+    command: .venv-gpu/Scripts/python.exe main.py --device gpu --port 17351
+    autostart: false          # 夜間バッチの時間帯だけで足りる。常駐させるなら true
+    health:
+      type: http
+      url: http://127.0.0.1:17351/health
+      interval_sec: 60
+```
+
+登録の前に決めること (このタスクでは決めない):
+
+- **常駐か、夜間だけか。** 常駐すると GPU メモリを約 3 GB 占め続ける (デスクトップの他用途と競合する)。
+  夜間だけなら Excubitor の起動/停止をバッチ時刻に合わせる仕組みが要る。
+- `.venv-gpu` は約 4.5 GB。運用の `.venv` (CPU) とは別に置く前提を catalog のコメントに残す。
+- `health` は起動直後 (cold) の応答が遅い (下記)。`interval_sec` と初回猶予を合わせる。
+
+### GPU の cold start を待つ (`sidecar-readiness.ts`)
+
+`HttpOcrSidecarClient` の `/health` 既定タイムアウトは **5 秒**だが、冷えた GPU sidecar の
+最初の `/health` は paddle import + CUDA 初期化 + カーネル読込で **約 7.4 秒** かかる (B-6 実測)。
+`bench-runner` は `/health` 失敗を「sidecar 不達」として例外にするため、対策前は
+
+```
+ga:bench failed: OCR sidecar unreachable at http://127.0.0.1:17351:
+  sidecar request timed out after 5000 ms: http://127.0.0.1:17351/health
+```
+
+で **マシン再起動後の最初の夜間バッチが必ず落ちた** (B-6 で再現確認)。
+
+- `waitForSidecarHealth` (`src/services/ocr-ga-bench/sidecar-readiness.ts`) が `/health` を
+  **既定 4 回 / 1 秒間隔**まで待つ。中断されたリクエストの裏で sidecar の初期化は進むので、
+  2 回目以降の `/health` は即答する (実測: 1 回再試行して成功、バッチ全体 32 秒)。
+- 待つのは **応答できない間 (接続不可 / タイムアウト) だけ**。`ok:false` や device 不一致は
+  sidecar が出した明確な答えなので再試行せず、そのまま例外にする (§7.1 fail-fast)。
+- 回数と間隔は `runGaBench({ healthReadiness })` で差し替えられる (テストと、より遅い環境用)。
+- `ocr-sidecar-client.ts` の `healthTimeoutMs` 既定 (5 秒) 自体は変えていない。撮影時 detect
+  (B-1) は CPU の常駐 sidecar を叩くので、そちらを長くする理由が無いため。
+
 ## 判定基準 (仮置き、設計書 §3.2)
 
 「20 世代で best が baseline +0.05 未満なら効いていない」「train − holdout > 0.10 で過学習」などは
@@ -177,8 +281,11 @@ web の `fitnessVsTruth` と同じ入出力 (sidecar 行 + 真値 → 0..1) で�
 
 ## 残 (次 PR)
 
+- ~~B-1: 撮影時 detect を backend に移す~~ → 済 (PR #1267、`POST /v1/receipts/:id/detect`)。
 - B-5: 設定ページ「OCR 進化」カード (`bench-report.json` / `evolution.jsonl` / `production-eval.jsonl` の
   可視化、sidecar 不達の警告)。直近 20 件と baseline の差はここで人が見る。
-- B-6: 評価高速化の検証 (縮小 / GPU wheel / det-rec 分離) と、判定閾値の確定。
-  1 回 40 秒のままでは撮影時 detect が confirm に間に合わない (演出は fallback で進む) ので、
-  「実運用で本物 BB を出せた率」を上げるにはここが効く。
+- ~~B-6: 評価高速化の検証 (縮小 / GPU wheel / det-rec 分離)~~ → 済 (上の「実測と推奨設定」)。
+  判定閾値の確定は neco 判断待ちで、自動化しない (設計書 §3.2 / §5-5)。
+- B-7: sidecar の detect を stage 分割し、`dropScore` だけ違う個体でインスタンス生成と det+rec を
+  繰り返さないようにする (`spec/tasks/2026-09-03-ocr-ga-b7-detect-stage-cache.md`)。
+  B-6 実測で rec が約 86% を占め、`dropScore` は rec スコアの後段フィルタでしかないため。

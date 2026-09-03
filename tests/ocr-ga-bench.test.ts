@@ -301,7 +301,7 @@ describe("evaluator + bench-runner (sidecar モック)", () => {
     const base = { db, storage: storageFor(truths), gaRoot: join(root, "ga3"), sidecar, generations: 1, costPerSecond: 0 };
 
     sidecar.failHealth = true;
-    await expect(runGaBench(base)).rejects.toThrow(/unreachable/);
+    await expect(runGaBench({ ...base, healthReadiness: { attempts: 1 } })).rejects.toThrow(/unreachable/);
     sidecar.failHealth = false;
 
     await expect(runGaBench({ ...base, expectedDevice: "gpu" })).rejects.toThrow(/device=gpu but sidecar/);

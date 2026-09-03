@@ -1,0 +1,23 @@
+# GA バッチ専用 sidecar (GPU) の依存。運用の常駐 sidecar は requirements.txt (CPU) のまま。
+# spec/feature/ocr-ga-evaluation.md SPEC-OCR-GA-EVAL-005 / README「GPU はバッチ側だけ」。
+#
+#   python -m venv ocr-sidecar/.venv-gpu
+#   ocr-sidecar/.venv-gpu/Scripts/python.exe -m pip install -r ocr-sidecar/requirements-gpu.txt
+#   ocr-sidecar/.venv-gpu/Scripts/python.exe main.py --device gpu --port 17351
+#
+# paddlepaddle (CPU) と paddlepaddle-gpu を同じ環境に入れない (import が CPU 版を掴む)。
+# そのため運用の .venv とは別 venv (.venv-gpu) に入れる。
+#
+# CUDA 11.8 の index を使う: GTX 1070 は compute capability 6.1 (Pascal) で、
+# CUDA 12.x wheel は sm_61 の SASS を含まず PTX JIT に落ちる (README「GPU wheel の導入手順」§3)。
+# cu126 に切り替えるときは URL の cu118 を cu126 にする。
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu118/
+
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+pillow>=10.0
+numpy>=1.26
+paddleocr>=2.7
+# 運用 .venv の paddlepaddle と同じ版番号に合わせる (CPU/GPU で挙動差を出さない)
+paddlepaddle-gpu==3.3.1
