@@ -1,0 +1,51 @@
+/* =====================================================================
+   ScanGuide — カメラ右上の 「撮影対象と自動仕訳」 ボタンと説明パネル
+   ===================================================================== */
+
+.scan-guide-btn {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 40; /* シャッターフラッシュ (30) より上。 パネル開閉が常に押せるように */
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 999px;
+  cursor: pointer;
+  backdrop-filter: blur(2px);
+}
+.scan-guide-btn:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.scan-guide-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  padding: 2.6rem 1rem 1rem;
+  overflow-y: auto;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.82);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.scan-guide-panel h3 {
+  margin: 0.4rem 0 0.2rem;
+  font-size: 0.9rem;
+  color: #ffd76a;
+}
+.scan-guide-panel ul {
+  margin: 0 0 0.4rem;
+  padding-left: 1.2rem;
+}
+.scan-guide-panel li {
+  margin: 0.15rem 0;
+}
+.scan-guide-hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}

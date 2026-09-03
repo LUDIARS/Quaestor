@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./ManualShutter.css";
 import { useCamera } from "./useCamera.js";
+import { ScanGuide } from "./ScanGuide.js";
 import {
   captureFrame,
   uploadReceipt,
@@ -205,6 +206,9 @@ export function ManualShutter() {
             transition: "opacity 0.5s ease-out",
           }}
         />
+
+        {/* 右上: 撮影対象と自動仕訳の説明 (カメラに乗せる) */}
+        <ScanGuide />
 
         {/* シャッターフラッシュ (key で毎回アニメ再生) */}
         {flashKey > 0 && (
