@@ -190,11 +190,6 @@ export function ManualShutter() {
           スキャンアニメ
         </label>
       </div>
-      <p style={{ color: "var(--c-subtle)", fontSize: "0.85rem", marginTop: 0 }}>
-        レシートを画面に収めて <strong>シャッター</strong> を押すだけ。
-        撮影 → OCR → <strong>日付・場所・金額</strong> が揃えば自動で投入。 揃わない / 重複したものだけ手で直す。
-      </p>
-
       {/* カメラ + スキャンアニメーション — 常時 9:16 ポートレート */}
       <div
         className="scan-stage"
@@ -279,6 +274,12 @@ export function ManualShutter() {
           : <>camera: {running ? "ready" : "starting…"} ｜ 撮影 {shots.length} 枚 ｜ 投入済 {committedCount}</>
         }
       </div>
+
+      {/* 使い方はカメラの下 (カメラをファーストビューに置く) */}
+      <p style={{ color: "var(--c-subtle)", fontSize: "0.85rem", marginTop: "0.5rem", maxWidth: 360 }}>
+        レシートを画面に収めて <strong>シャッター</strong> を押すだけ。
+        撮影 → OCR → <strong>日付・場所・金額</strong> が揃えば自動で投入。 揃わない / 重複したものだけ手で直す。
+      </p>
 
       {shots.length > 0 && (
         <section style={{ marginTop: "1rem" }}>
