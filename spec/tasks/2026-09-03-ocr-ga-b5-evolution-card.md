@@ -19,19 +19,19 @@ sidecar の生死がどこにも表示されていなかったから (設計書 
 
 ## 完了条件
 
-- [ ] backend: `GET /v1/ocr-ga/status` を追加し、`bench-report.json` (ラベル / 件数 / 世代 / best / mean /
+- [x] backend: `GET /v1/ocr-ga/status` を追加し、`bench-report.json` (ラベル / 件数 / 世代 / best / mean /
       baseline / holdout best / 1 個体秒数 / 最終評価時刻) と `evolution.jsonl` のラベル別 直近 N 世代の
       best・baseline 推移、sidecar `/health` の到達可否と `device`、`training.gaBench` の設定
       (enabled / hour / sidecarUrl / device) を返す。個人データ (店名・金額) は含めない。
-- [ ] web: 設定ページ (`web/src/pages/Settings.tsx`) に「OCR 進化」カード。ラベルごとの行 + 小さな推移表示、
+- [x] web: 設定ページ (`web/src/pages/Settings.tsx`) に「OCR 進化」カード。ラベルごとの行 + 小さな推移表示、
       `bench-report.json` が無い / sidecar 不達 / 評価 0 件 / 最終評価が 48 時間以上前 を **警告** として表示
       (演出側は従来どおり非依存のまま)。
-- [ ] B-1 の運用評価レコード (`production-eval.jsonl`) があれば直近 20 件の fitness / fieldHits 平均と
+- [x] B-1 の運用評価レコード (`production-eval.jsonl`) があれば直近 20 件の fitness / fieldHits 平均と
       baseline 差も出す (無ければその行を出さない、ダミー値を出さない)。
-- [ ] 夜間ジョブ (`training.gaBench.enabled`) を設定ページから on/off できる (`quaestor.config.json` へ書き戻し、
+- [x] 夜間ジョブ (`training.gaBench.enabled`) を設定ページから on/off できる (`quaestor.config.json` へ書き戻し、
       `/v1/config/web` と同じ流儀)。反映は再起動後である旨を表示する。
-- [ ] spec: `spec/feature/ocr-ga-evaluation.md` に SPEC-OCR-GA-EVAL-007 (観測カードと警告条件) を追記。
-- [ ] `npx tsc --noEmit` 0 エラー、`npx vitest run` 全緑、`npm --prefix web run build` 通過。
+- [x] spec: `spec/feature/ocr-ga-evaluation.md` に SPEC-OCR-GA-EVAL-007 (観測カードと警告条件) を追記。
+- [x] `npx tsc --noEmit` 0 エラー、`npx vitest run` 全緑、`npm --prefix web run build` 通過。
       追加テスト: status API (report 無し / sidecar 不達 / 正常)、警告条件の純関数。
 
 ## スコープ (編集可ディレクトリ)

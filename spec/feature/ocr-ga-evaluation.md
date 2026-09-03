@@ -12,17 +12,29 @@
 - `src/services/ocr-sidecar-client.ts` — backend → sidecar `/detect` `/health` (1 並列・タイムアウト)
 - `src/services/ocr-ga-bench/` — corpus-builder / corpus-split / evaluator / report / bench-runner /
   nightly-job / sidecar-readiness
+- `src/services/ocr-ga-bench/status-service.ts` — 「OCR 進化」カードの観測値を 1 つにまとめる (読み取りのみ)
+- `src/services/ocr-ga-bench/status-types.ts` — `GET /v1/ocr-ga/status` の応答型 (API 契約)
+- `src/services/ocr-ga-bench/status-warnings.ts` — 警告条件 (純関数)
+- `src/services/ocr-ga-bench/status-report-validation.ts` — status が読む report ラベルの境界検証
+- `src/services/ocr-ga-bench/evolution-log.ts` — `evolution.jsonl` をラベル別 直近 N 世代に畳む
 - `src/services/receipt-detect/detect-service.ts` — 撮影時 detect (遺伝子解決 → sidecar 1 回 → 採点 → レコード発行)
 - `src/services/receipt-detect/field-regions.ts` — 認識行 ↔ 真値のマッチング (本物 BB)
 - `src/services/receipt-detect/production-eval-log.ts` — `production-eval.jsonl` の読み書きと直近 n 件の平均
 - `src/services/receipt-detect/types.ts` — 運用評価レコードと detect 結果の型
 - `src/services/detection-record.ts` — 本物 BB → `training-dataset.ts` の共通経路 (detect と `/regions` の両方)
 - `src/cli/ga-bench.ts` — `npm run ga:bench`
-- `src/api/ocr-ga.ts` — `/v1/ocr-ga/{population,best}`
+- `src/api/ocr-ga.ts` — `/v1/ocr-ga/{population,best,status}`
+- `src/api/config.ts` — `/v1/config/{web,ga-bench}` (夜間ジョブの on/off を quaestor.config.json へ書き戻す)
 - `src/api/receipts.ts` — `POST /v1/receipts/:id/detect`
 - `web/src/scanner/backend-detect-locator.ts` — web は backend の detect だけを呼ぶ (sidecar を直叩きしない)
 - `web/src/scan/captureUpload.ts` — `kickDetect()` (OCR 真値が揃った撮影に 1 回だけ detect をキック)
 - `web/src/scan/ManualShutter.tsx` — poll から `kickDetect`、confirm の locator に backend 段を挿す
+- `web/src/pages/Settings.tsx` — 設定ページ (「OCR 進化」カードの置き場)
+- `web/src/components/ocr-evolution/OcrEvolutionCard.tsx` — カードの取得と配置 (警告 → 設定 → sidecar → ラベル → 実運用)
+- `web/src/components/ocr-evolution/LabelRow.tsx` — ラベル 1 行 (bench-report の値 + 推移)
+- `web/src/components/ocr-evolution/TrendChart.tsx` — best (実線) / baseline (破線) の小さな折れ線
+- `web/src/components/ocr-evolution/NightlyBenchToggle.tsx` — 夜間ジョブ (`training.gaBench.enabled`) の on/off
+- `web/src/components/ocr-evolution/types.ts` — backend 応答型の写し (web 側の API 契約)
 - `ocr-sidecar/main.py` — `--device cpu|gpu`、`/health.device`
 
 ## SPEC-OCR-GA-EVAL-001 — ラベル別コーパス
@@ -173,6 +185,72 @@ web の `fitnessVsTruth` と同じ入出力 (sidecar 行 + 真値 → 0..1) で�
 直近 20 件の平均 (`ProductionEvalLog.summary`) は **ログに出すだけ**。平均が baseline を下回っても
 `bestGenome` を既定に戻す処理は入れない (閾値は仮置き。人が B-5 の「OCR 進化」カードで見る)。
 
+## SPEC-OCR-GA-EVAL-007 — 観測カード (「OCR 進化」) と警告条件
+
+OCR-GA は稼働開始 (2026-06-11) から一度も世代が進んでいなかったのに誰も気付かなかった。
+進化の状態と sidecar の生死がどこにも表示されていなかったからで (設計書 §0-2(c))、
+**「測定系が死んでいる」ことが画面で分かる**ようにするのがこのカードの目的。見た目の作り込みではない。
+
+### `GET /v1/ocr-ga/status`
+
+`src/api/ocr-ga.ts` は入口だけを持ち、応答は `services/ocr-ga-bench/status-service.ts` が組み立てる
+(値を触る経路を API から外し、個人データが混じる余地を無くす)。返すのは集計値だけ:
+
+| 出所 | 返す値 |
+| --- | --- |
+| `bench-report.json` | `bench` (最終評価 ts / sidecarUrl / device) と `labels[].bench` (ラベル / 件数 train・holdout・total / 世代 / generationsRun / population / best (fitness・fieldHitRate) / mean / worst / baseline / holdout best・baseline / 1 個体秒数 / 総秒数 / detect 回数 / errors / reseeded / ts) |
+| `evolution.jsonl` | `labels[].trend` — ラベル別 直近 N 世代 (既定 20、古い順) の ts / generation / evaluated / best / mean / baseline / reseeded |
+| sidecar `/health` | `sidecar` — url / reachable / ok / device / requestedDevice / deviceError / error |
+| `training.gaBench` | `config` — enabled / hour / generationsPerNight / sidecarUrl / device / costPerSecond (env override 込みの実効値) |
+| `production-eval.jsonl` | `production` — 直近 20 件の件数 / fitness 平均 / baseline 平均と差 / フィールド別 hit 率 / 最新 ts |
+
+- **個人データ (店名 / 金額 / receiptId) は 1 つも返さない。** `best.genome` も載せない
+  (カードに要らない)。`fieldHitRate` / `meanFieldHits` の `payee` `total` は率であって値ではない。
+- status は直接の loopback リクエストだけに返し、GA 永続ルートなどのローカルファイルパスや
+  URL credential は返さない。
+- **sidecar 不達で 500 にしない。** `/health` の例外は `reachable:false` + `error` (理由) として返す。
+  死んでいることが見えるのが目的なので、エラーで画面ごと落とさない。
+- `production-eval.jsonl` が無い / 0 件のときは `production` **キー自体を返さない**。
+  ダミー値・0 埋めをしない (「測った結果 0」と区別できなくなるため)。
+- bench-report に無く `evolution.jsonl` にだけ居るラベルも行として残す (逆も同じ)。
+  壊れた JSON / 壊れた行は捨てて、読めるところだけ返す (観測用ファイル)。
+- ラベルは `global` / 正規化済み `tag:<形状タグ>` だけを返し、旧店舗キーは応答へ出さない。
+
+### 警告条件 (`status-warnings.ts`、純関数)
+
+`warnings[]` に `{ code, message }` を並び順固定で返す。web は文言を出すだけで判定しない。
+
+| code | 条件 |
+| --- | --- |
+| `bench_report_missing` | `bench-report.json` が無い (夜間バッチが一度も完走していない) |
+| `no_evaluations` | report はあるが `corpus.total > 0` のラベルが 0 件 (コーパスが空のまま終わった) |
+| `stale_evaluation` | report の `ts` が **48 時間以上前** (夜間バッチは 1 日 1 回なので 2 回落ちた) |
+| `sidecar_unreachable` | `/health` が不達、または `ok:false` |
+
+- report が無いときは `no_evaluations` を重ねて出さない (原因は 1 つ)。
+- `ts` が壊れていれば陳腐化は判定しない (勝手に「古い」ことにしない)。
+- 閾値 48 時間と直近 20 件以外の**判定 (効いている / いない) は自動化しない**。
+  「20 世代で baseline +0.05 未満」「train − holdout > 0.10」は仮置きなので、
+  カードは **数値を出すだけ** (設計書 §3.2、SPEC-OCR-GA-EVAL-006 の「判定は自動化しない」と同じ立場)。
+
+### 設定ページのカード
+
+`web/src/pages/Settings.tsx` に `web/src/components/ocr-evolution/` の部品を置く:
+`OcrEvolutionCard.tsx` (取得と配置) / `LabelRow.tsx` (ラベル 1 行) / `TrendChart.tsx` (推移の折れ線) /
+`NightlyBenchToggle.tsx` (夜間ジョブの on/off) / `types.ts` (backend 応答型の写し)。
+
+- 警告を先頭に出し、ラベルごとに 1 行 + 小さな推移 (best 実線 / baseline 破線) を描く。
+- **撮影演出はこのカードにも sidecar にも依存しない** — 従来どおりエンジン非依存 (`scanner-overlay.md` §1)。
+
+### 夜間ジョブの on/off — `GET` / `PUT /v1/config/ga-bench`
+
+- `PUT { enabled: boolean }` で `quaestor.config.json` の `training.gaBench.enabled` だけを書き戻す
+  (`$comment` や `hour` / `sidecarUrl` は消さない)。作法は `/v1/config/web` と同じ。
+- 設定 API は直接の loopback リクエストだけを許可し、壊れた JSON は上書きせずエラーにする。
+- 夜間ジョブは `server.ts` が **起動時に**組み立てるので、**反映は再起動後**。応答の `note` と
+  画面の両方でそう伝える (走っているジョブをこの API が起こしたり止めたりはしない)。
+- 返すのは env override 込みの実効値。`QUAESTOR_GA_BENCH` が立っていれば書き戻しても値は変わらない。
+
 ## 実測と推奨設定 (B-6、2026-09-03)
 
 実測の全文と条件は設計書 §3.4 (Castra
@@ -282,8 +360,8 @@ ga:bench failed: OCR sidecar unreachable at http://127.0.0.1:17351:
 ## 残 (次 PR)
 
 - ~~B-1: 撮影時 detect を backend に移す~~ → 済 (PR #1267、`POST /v1/receipts/:id/detect`)。
-- B-5: 設定ページ「OCR 進化」カード (`bench-report.json` / `evolution.jsonl` / `production-eval.jsonl` の
-  可視化、sidecar 不達の警告)。直近 20 件と baseline の差はここで人が見る。
+- ~~B-5: 設定ページ「OCR 進化」カード~~ → 済 (`GET /v1/ocr-ga/status` + `web/src/components/ocr-evolution/`、
+  SPEC-OCR-GA-EVAL-007)。直近 20 件と baseline の差はここで人が見る。
 - ~~B-6: 評価高速化の検証 (縮小 / GPU wheel / det-rec 分離)~~ → 済 (上の「実測と推奨設定」)。
   判定閾値の確定は neco 判断待ちで、自動化しない (設計書 §3.2 / §5-5)。
 - B-7: sidecar の detect を stage 分割し、`dropScore` だけ違う個体でインスタンス生成と det+rec を

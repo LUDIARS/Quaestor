@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { OcrEvolutionCard } from "../components/ocr-evolution/OcrEvolutionCard";
 
 function WebHostsSection() {
   const [hosts, setHosts] = useState<string[] | null>(null);
@@ -93,6 +94,9 @@ export function Settings() {
       </header>
       <section>
         <WebHostsSection />
+      </section>
+      <section>
+        <OcrEvolutionCard />
       </section>
     </div>
   );

@@ -537,7 +537,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/apportionment-rules", apportionmentRulesRouter({ repo: rules }));
   app.route("/v1/apportionment-advisor", apportionmentAdvisorRouter({ advisor: apportionmentAdvisor }));
   app.route("/v1/receipts", receiptsRouter({ repo: receipts, storage, ocr, dataset: trainingDataset, diffEvaluator, intake: receiptIntake, destinations: kindDestinations, claudeCodeModel: deps.ocrClaudeCodeModel, detect: receiptDetect }));
-  app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa }));
+  app.route("/v1/ocr-ga", ocrGaRouter({ ga: ocrGa, gaRoot }));
   app.route("/v1/reconciliations", reconciliationsRouter({ db: deps.db, repo: reconciliations, receipts }));
   app.route("/v1/exports", exportsRouter({ db: deps.db, rules, accounts }));
   const fixedAssets = new FixedAssetsRepo(deps.db);
