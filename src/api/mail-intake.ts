@@ -5,13 +5,15 @@ import { z } from "zod";
 import type { InboundDocumentRow, InboundDocumentsRepo } from "../db/inbound-documents-repo.js";
 import type { MailMessagesRepo } from "../db/mail-messages-repo.js";
 import type { MailIntakeService } from "../services/mail-intake-service.js";
+import type { MailWatchRunner } from "../services/mail-watch-runner.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
 import { normalizeDate } from "../shared/text.js";
 
 const SweepSchema = z.object({ dry_run: z.boolean().optional() }).strict();
 const MessageQuerySchema = z.object({
-  kind: z.enum(["invoice", "cloud_notice", "ignore"]).optional(),
+  // MailKind と同じ集合にする。 足し忘れると GET ?kind=ci_failure が 400 になる。
+  kind: z.enum(["invoice", "cloud_notice", "ci_failure", "dependabot", "ignore"]).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 const DocumentQuerySchema = z.object({
@@ -25,6 +27,8 @@ const CommitSchema = z.object({
 
 export interface MailIntakeApiDeps {
   service: MailIntakeService;
+  /** realtime 未配線なら watch 系は disabled を 200 で返す */
+  watch?: MailWatchRunner;
   messages: MailMessagesRepo;
   documents: InboundDocumentsRepo;
   documentsRoot: string;
@@ -51,6 +55,33 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
     return parsed.success
       ? c.json(await deps.service.sweep(parsed.data))
       : c.json({ error: parsed.error.message }, 400);
+  });
+
+  /**
+   * history 差分の手動同期 (デバッグ用)。 通常は Pub/Sub 通知が呼ぶ。
+   * @implements SPEC-MAIL-REALTIME-001 (spec/feature/mail-realtime.md)
+   */
+  app.post("/sync", async (c) => c.json(await deps.service.syncFromHistory()));
+
+  /**
+   * users.watch の張り直し。 Concordia の日次 cron から叩く。
+   * @implements SPEC-MAIL-REALTIME-005 (spec/feature/mail-realtime.md)
+   */
+  app.post("/watch/renew", async (c) => {
+    if (!deps.watch) return c.json(watchUnavailable());
+    return c.json(await deps.watch.renew());
+  });
+
+  /** @implements SPEC-MAIL-REALTIME-005 (spec/feature/mail-realtime.md) */
+  app.post("/watch/stop", async (c) => {
+    if (!deps.watch) return c.json(watchUnavailable());
+    return c.json(await deps.watch.stopWatch());
+  });
+
+  /** @implements SPEC-MAIL-REALTIME-006 (spec/feature/mail-realtime.md) */
+  app.get("/watch", (c) => {
+    if (!deps.watch) return c.json(watchUnavailable());
+    return c.json(deps.watch.status());
   });
 
   app.get("/messages", (c) => {
@@ -127,6 +158,11 @@ export function resolveInboundDocumentPath(
   } catch {
     return null; // ReceiptStorage が root 外の path と空 path を拒否する
   }
+}
+
+/** realtime 未配線 (設定・鍵なし) は失敗ではなく disabled として 200 で返す。 */
+function watchUnavailable(): { disabled: true; reason: string } {
+  return { disabled: true, reason: "mailIntake.realtime is not configured" };
 }
 
 function encodeHeaderFilename(filename: string): string {

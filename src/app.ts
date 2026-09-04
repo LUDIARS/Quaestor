@@ -35,6 +35,8 @@ import { HoldingValuationsRepo } from "./db/holding-valuations-repo.js";
 import { HoldingDividendsRepo } from "./db/holding-dividends-repo.js";
 import { DividendCandidatesRepo } from "./db/dividend-candidates-repo.js";
 import { MailMessagesRepo } from "./db/mail-messages-repo.js";
+import { MailActionThrottleRepo } from "./db/mail-action-throttle-repo.js";
+import { MailWatchStateRepo } from "./db/mail-watch-state-repo.js";
 import { InboundDocumentsRepo } from "./db/inbound-documents-repo.js";
 import { ReceiptStorage } from "./services/receipt-storage.js";
 import { TrainingDataset } from "./services/training-dataset.js";
@@ -93,6 +95,8 @@ import { configRouter } from "./api/config.js";
 import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 import { mailIntakeRouter } from "./api/mail-intake.js";
 import { MailIntakeService, type MailIntakeConfig } from "./services/mail-intake-service.js";
+import { MailActions } from "./services/mail-actions.js";
+import { MailWatchRunner } from "./services/mail-watch-runner.js";
 import { GmailSource, createRefreshTokenProvider, type MailSource } from "@ludiars/mail-inbox";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
@@ -252,6 +256,10 @@ export interface AppDeps {
   mailIntake?: MailIntakeConfig;
   /** テスト・埋め込み用途のメール取得元。実運用では GmailSource を自動構築する。 */
   mailSource?: MailSource;
+  /** 検知後の起動。省略時は設定どおりの MailActions を組み立てる (テストで差し替える) */
+  mailActions?: MailActions;
+  /** true のときだけ Pub/Sub 購読を張る。テストとビルド時の常駐を避けるため既定 false */
+  startMailWatch?: boolean;
   /** buildApp が所有する timer / background I/O 等を、プロセス終了時に解放するための登録先。 */
   registerCleanup?: (cleanup: () => void | Promise<void>) => void;
 }
@@ -269,6 +277,8 @@ export function buildApp(deps: AppDeps): Hono {
   const rules = new ApportionmentRulesRepo(deps.db);
   const receipts = new ReceiptsRepo(deps.db);
   const mailMessages = new MailMessagesRepo(deps.db);
+  const mailWatchState = new MailWatchStateRepo(deps.db);
+  const mailActionThrottle = new MailActionThrottleRepo(deps.db);
   const inboundDocuments = new InboundDocumentsRepo(deps.db);
   const reconciliations = new ReconciliationsRepo(deps.db);
   // 家計簿 × 業務仕訳 (spec/plan/2026-09-03-household-bookkeeping-analysis.md)
@@ -424,6 +434,7 @@ export function buildApp(deps: AppDeps): Hono {
     maxAttachmentBytes: 15_728_640,
     rules: [],
   };
+  const mailRealtime = mailConfig.realtime;
   const mailCredentials = {
     clientId: process.env.QUAESTOR_GMAIL_CLIENT_ID,
     clientSecret: process.env.QUAESTOR_GMAIL_CLIENT_SECRET,
@@ -440,8 +451,20 @@ export function buildApp(deps: AppDeps): Hono {
       })
       : undefined
   );
+  // CI 失敗 / Dependabot の検知後の起動。 起動判断も分類も決定的コードで行い、 メール本文は渡さない
+  // (spec/feature/mail-realtime.md)。 委託先の endpoint は Excubitor catalog から解決する。
+  const mailActions = deps.mailActions ?? new MailActions({
+    throttle: mailActionThrottle,
+    notify: (notice) => notificationService.notifyMailAction(notice),
+    config: {
+      enabled: mailRealtime?.enabled ?? false,
+      repoAllowlist: mailRealtime?.repoAllowlist ?? [],
+    },
+  });
   const mailIntake = new MailIntakeService({
     source: mailSource,
+    watchState: mailWatchState,
+    actions: mailActions,
     messages: mailMessages,
     documents: inboundDocuments,
     receipts,
@@ -449,6 +472,19 @@ export function buildApp(deps: AppDeps): Hono {
     notifications: notificationService,
     config: mailConfig,
   });
+  // Pub/Sub 購読は設定と鍵が揃っているときだけ張る。 欠けていれば理由付きで disabled のまま。
+  const mailWatch = new MailWatchRunner({
+    source: mailSource,
+    watchState: mailWatchState,
+    config: mailRealtime,
+    sync: () => mailIntake.syncFromHistory(),
+    logger: deps.logger,
+  });
+  if (deps.startMailWatch) {
+    const started = mailWatch.start();
+    if (started.started) deps.registerCleanup?.(() => mailWatch.stop());
+    else deps.logger?.warn({ reason: started.reason }, "mail realtime subscriber not started");
+  }
 
   const app = new Hono();
   const invoiceShareService = new InvoiceShareService({
@@ -522,14 +558,30 @@ export function buildApp(deps: AppDeps): Hono {
     senderName: deps.invoiceShare?.email?.senderName,
   });
 
-  app.get("/health", (c) => c.json({
-    ok: true,
-    service: "quaestor",
-    version: runtimeVersionFromEnvironment(),
-    ocr_enabled: ocrEnabled,
-    invest_enabled: { mapper: !!securityMapper, stock: !!stockClient, perks: !!perkClient },
-    portfolio_enabled: { stock: !!stockClient, dividends: !!dividendClient },
-  }));
+  /**
+   * mail_realtime は常駐 gRPC が黙って切れる事故を見えるようにするためのブロック。
+   * メールが止まっても Quaestor 本体は生きているので ok 自体は落とさない。
+   *
+   * @implements SPEC-MAIL-REALTIME-006 (spec/feature/mail-realtime.md)
+   */
+  app.get("/health", (c) => {
+    const watch = mailWatch.status();
+    return c.json({
+      ok: true,
+      service: "quaestor",
+      version: runtimeVersionFromEnvironment(),
+      ocr_enabled: ocrEnabled,
+      invest_enabled: { mapper: !!securityMapper, stock: !!stockClient, perks: !!perkClient },
+      portfolio_enabled: { stock: !!stockClient, dividends: !!dividendClient },
+      mail_realtime: {
+        enabled: watch.enabled,
+        connected: watch.connected,
+        watch_expires_at: watch.watch_expires_at,
+        last_notified_at: watch.last_notified_at,
+        stale: watch.stale,
+      },
+    });
+  });
 
   app.route("/v1/transactions", transactionsRouter({ txs, db: deps.db }));
   app.route("/v1/imports", importsRouter({ imports, txs, smart, profiles: statementProfiles, intake: receiptIntake }));
@@ -616,6 +668,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
   app.route("/v1/mail", mailIntakeRouter({
     service: mailIntake,
+    watch: mailWatch,
     messages: mailMessages,
     documents: inboundDocuments,
     documentsRoot: mailConfig.documentsRoot,

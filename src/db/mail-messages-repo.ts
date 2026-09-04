@@ -1,6 +1,11 @@
 import type Database from "better-sqlite3";
 
-export type MailKind = "invoice" | "cloud_notice" | "ignore";
+/**
+ * 分類ルールの結果。 ci_failure / dependabot は GitHub 通知メール由来 (v21)。
+ * ここへ足したら schema.ts の CHECK 制約と api/mail-intake.ts の z.enum も併せて広げる
+ * (どちらか片方だけだと claim() か GET が実行時に落ちる)。
+ */
+export type MailKind = "invoice" | "cloud_notice" | "ci_failure" | "dependabot" | "ignore";
 export interface MailMessageRow {
   message_id: string;
   thread_id: string | null;

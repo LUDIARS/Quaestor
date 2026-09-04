@@ -1,14 +1,19 @@
 {
   "name": "mail-intake",
-  "description": "受信メールの決定的分類と請求書 PDF の取り込み。突合は receipt-intake、通知経路は notifications が持つ。",
+  "description": "受信メールの決定的分類と請求書 PDF の取り込み、 および Gmail リアルタイム受信 (Pub/Sub) と CI 失敗 / Dependabot 検知後の起動。 突合は receipt-intake、 通知経路は notifications が持つ。",
   "presetRules": [],
   "templateRules": [],
   "membership": [
     { "pathPattern": "(^|/)src/mail/(?:.*/)?[^/]+$" },
     { "pathPattern": "(^|/)src/api/mail-intake\\.ts$" },
     { "pathPattern": "(^|/)src/db/mail-messages-repo\\.ts$" },
+    { "pathPattern": "(^|/)src/db/mail-watch-state-repo\\.ts$" },
+    { "pathPattern": "(^|/)src/db/mail-action-throttle-repo\\.ts$" },
     { "pathPattern": "(^|/)src/db/inbound-documents-repo\\.ts$" },
     { "pathPattern": "(^|/)src/services/mail-intake-service\\.ts$" },
+    { "pathPattern": "(^|/)src/services/mail-watch-runner\\.ts$" },
+    { "pathPattern": "(^|/)src/services/mail-actions\\.ts$" },
+    { "pathPattern": "(^|/)src/services/excubitor-catalog\\.ts$" },
     { "pathPattern": "(^|/)src/services/mail-notices\\.ts$" }
   ]
 }

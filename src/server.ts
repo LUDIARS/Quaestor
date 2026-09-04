@@ -100,6 +100,8 @@ const app = buildApp({
   // sidecar は backend からだけ叩く (web へは公開しない)
   ocrSidecarUrl: sidecarUrlOf(config),
   mailIntake: config.mailIntake,
+  // 常駐プロセスだけが Pub/Sub の StreamingPull を張る (テストや埋め込み利用では張らない)。
+  startMailWatch: true,
   ocrClaudeCodeModel: config.ocrClaudeCode.model,
   invoiceShare: localTest
     ? { ...config.invoiceShare, publicUrl: `http://localhost:${config.server.port}` }

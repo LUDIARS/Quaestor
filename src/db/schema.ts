@@ -334,11 +334,36 @@ const STATEMENTS: string[] = [
 
   `CREATE INDEX IF NOT EXISTS idx_fs_year ON financial_statements(year, section, display_order)`,
 
+  // kind は分類ルールの結果。 v21 で CI 失敗 / Dependabot 通知を足した
+  // (spec/feature/mail-realtime.md)。 CHECK は SQLite では ALTER できないため、
+  // 既存 DB は migrateMailMessageKinds() が table を作り替えて広げる。
   `CREATE TABLE IF NOT EXISTS mail_messages (
     message_id TEXT PRIMARY KEY, thread_id TEXT, received_at INTEGER NOT NULL,
     from_address TEXT NOT NULL, subject TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('invoice','cloud_notice','ignore')),
+    kind TEXT NOT NULL CHECK (kind IN ('invoice','cloud_notice','ci_failure','dependabot','ignore')),
     rule_index INTEGER, outcome TEXT NOT NULL, error TEXT, processed_at INTEGER NOT NULL
+  )`,
+
+  // ---- v21: Gmail リアルタイム受信 (spec/feature/mail-realtime.md) ----
+
+  // mail_watch_state — users.watch 登録と history 差分の基準点 (1 行のみ)。
+  // Pub/Sub 通知は順序保証が無いため、 通知内の historyId ではなくこの行を基準にする。
+  `CREATE TABLE IF NOT EXISTS mail_watch_state (
+    id               INTEGER PRIMARY KEY CHECK (id = 1),
+    history_id       TEXT,
+    watch_expires_at INTEGER,
+    last_notified_at INTEGER,
+    last_synced_at   INTEGER,
+    updated_at       INTEGER NOT NULL
+  )`,
+
+  // mail_action_throttle — 検知後の delegation 起動の debounce。
+  // key の形で役割を分ける (sha 単位の 1 回きり / (repo, workflow) の時間・日次上限 / リポ単位の 24 時間)。
+  `CREATE TABLE IF NOT EXISTS mail_action_throttle (
+    key           TEXT PRIMARY KEY,
+    last_fired_at INTEGER NOT NULL,
+    fired_today   INTEGER NOT NULL,
+    day           TEXT NOT NULL
   )`,
   // 受領書類。 メール添付 PDF (source='mail'、 message_id あり) と スキャンした請求書
   // (source='scan'、 message_id / sha256 は NULL) の両方を持つ (v20)。
@@ -869,7 +894,48 @@ export function applyMigrations(db: Database.Database): void {
   // v20: 書類種別ごとの投入先配線 (spec/feature/scan-document-kinds.md SPEC-SCAN-KIND-005)。
   //      スキャンした請求書を受領書類に載せるため inbound_documents をメール専用から広げる。
   rebuildInboundDocumentsForScan(db);
-  db.pragma("user_version = 20");
+  // v21: Gmail リアルタイム受信 (spec/feature/mail-realtime.md SPEC-MAIL-REALTIME-010)。
+  //      mail_messages.kind の CHECK に ci_failure / dependabot を足す。 忘れると分類は通るのに
+  //      claim() が実行時に constraint failed で静かに落ちる。
+  migrateMailMessageKinds(db);
+  db.pragma("user_version = 21");
+}
+
+/**
+ * v21: mail_messages.kind の CHECK 制約を 'ci_failure' / 'dependabot' まで広げる。
+ * SQLite は CHECK を ALTER できないので table を作り直す。 既存行はそのまま移す。
+ * 既に新しい CHECK なら何もしない (冪等)。
+ *
+ * @implements SPEC-MAIL-REALTIME-010 (spec/feature/mail-realtime.md)
+ */
+function migrateMailMessageKinds(db: Database.Database): void {
+  const row = db.prepare(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mail_messages'",
+  ).get() as { sql?: string } | undefined;
+  const ddl = row?.sql ?? "";
+  if (ddl === "" || (ddl.includes("'ci_failure'") && ddl.includes("'dependabot'"))) return;
+  // inbound_documents が mail_messages(message_id) を参照するので、 作り替えの間だけ外部キーを止める
+  // (PRAGMA foreign_keys は transaction 内では無視されるため transaction の外で切り替える)。
+  const foreignKeysEnabled = db.pragma("foreign_keys", { simple: true }) === 1;
+  db.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    db.transaction(() => {
+      db.exec(`CREATE TABLE mail_messages_v21 (
+        message_id TEXT PRIMARY KEY, thread_id TEXT, received_at INTEGER NOT NULL,
+        from_address TEXT NOT NULL, subject TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('invoice','cloud_notice','ci_failure','dependabot','ignore')),
+        rule_index INTEGER, outcome TEXT NOT NULL, error TEXT, processed_at INTEGER NOT NULL
+      )`);
+      db.exec(`INSERT INTO mail_messages_v21
+        (message_id, thread_id, received_at, from_address, subject, kind, rule_index, outcome, error, processed_at)
+        SELECT message_id, thread_id, received_at, from_address, subject, kind, rule_index, outcome, error, processed_at
+        FROM mail_messages`);
+      db.exec("DROP TABLE mail_messages");
+      db.exec("ALTER TABLE mail_messages_v21 RENAME TO mail_messages");
+    })();
+  } finally {
+    db.exec(`PRAGMA foreign_keys = ${foreignKeysEnabled ? "ON" : "OFF"};`);
+  }
 }
 
 /**

@@ -27,12 +27,12 @@ function columnNames(db: Database.Database, table: string): string[] {
 }
 
 describe("schema v19: receipts の書類種別 / サンプルラベル列", () => {
-  it("新規 DB に 7 列と index が出来て user_version が 20 になる", () => {
+  it("新規 DB に 7 列と index が出来て user_version が 21 になる", () => {
     const db = new Database(":memory:");
     try {
       applyMigrations(db);
       expect(columnNames(db, "receipts")).toEqual(expect.arrayContaining(RECEIPT_COLUMNS_V19));
-      expect(db.pragma("user_version", { simple: true })).toBe(20);
+      expect(db.pragma("user_version", { simple: true })).toBe(21);
       const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='receipts'").all() as { name: string }[];
       expect(idx.map((i) => i.name)).toEqual(expect.arrayContaining(["idx_receipts_doc_kind", "idx_receipts_sample_role"]));
     } finally {
@@ -65,7 +65,7 @@ describe("schema v19: receipts の書類種別 / サンプルラベル列", () =
       expect(row.sample_role).toBeNull();
       expect(row.sample_source).toBeNull();
       expect(row.committed_at).toBe(2);
-      expect(db.pragma("user_version", { simple: true })).toBe(20);
+      expect(db.pragma("user_version", { simple: true })).toBe(21);
       // CHECK 制約が効く
       expect(() => db.prepare("UPDATE receipts SET doc_kind = 'menu' WHERE id = 'legacy'").run()).toThrow();
       expect(() => db.prepare("UPDATE receipts SET sample_role = 'great' WHERE id = 'legacy'").run()).toThrow();

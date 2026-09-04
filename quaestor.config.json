@@ -15,7 +15,17 @@
     "query": "in:inbox newer_than:3d -category:promotions -category:social",
     "documentsRoot": "app_data/inbound",
     "maxAttachmentBytes": 15728640,
+    "realtime": {
+      "$comment": "Gmail Pub/Sub リアルタイム受信 (spec/feature/mail-realtime.md)。鍵は暗号化ストアの QUAESTOR_PUBSUB_SA_JSON。topicName / subscriptionName を入れて enabled=true にすると購読を張る。",
+      "enabled": false,
+      "topicName": null,
+      "subscriptionName": null,
+      "labelIds": ["INBOX"],
+      "repoAllowlist": ["LUDIARS/*"]
+    },
     "rules": [
+      { "kind": "ci_failure", "fromDomains": ["github.com"], "subjectAny": ["run failed"] },
+      { "kind": "dependabot", "fromDomains": ["github.com"], "subjectAny": ["dependabot", "security alert"] },
       { "kind": "cloud_notice", "fromDomains": ["amazonaws.com", "amazon.com"], "subjectAny": ["Invoice", "Billing", "SES", "Support", "Production Access", "Your AWS account"] },
       { "kind": "cloud_notice", "fromDomains": ["google.com", "cloud.google.com"], "subjectAny": ["Invoice", "Billing", "budget", "Cloud"] },
       { "kind": "invoice", "attachmentMime": ["application/pdf"], "subjectAny": ["請求書", "請求", "インボイス", "Invoice", "領収書", "Receipt"] },

@@ -11,7 +11,10 @@ import type { SubsidySuggestion } from "./subsidy-advisor.js";
 import { buildInvestAdvice, buildDividendAdvice, buildSubsidyAdvice, type BuiltAdvice } from "./advice-notifications.js";
 import { buildInvoiceNotice } from "./invoice-notice.js";
 import type { InvoiceRow } from "../db/invoices-repo.js";
-import { buildMailCloudNotice, buildMailInvoiceNotice, type MailNotice } from "./mail-notices.js";
+import {
+  buildMailActionNotice, buildMailCloudNotice, buildMailInvoiceNotice,
+  type MailActionNotice, type MailNotice,
+} from "./mail-notices.js";
 
 export interface NotifyResult {
   sent: boolean;
@@ -78,6 +81,18 @@ export class NotificationService {
     return this.dispatch(
       `mail:${notice.messageId}`,
       buildMailCloudNotice(notice),
+      { dedup: true },
+    );
+  }
+
+  /**
+   * CI 失敗 / Dependabot の検知通知。 委託の起動を throttle で見送ったときも送る。
+   * @implements SPEC-MAIL-REALTIME-007 (spec/feature/mail-realtime.md)
+   */
+  async notifyMailAction(notice: MailActionNotice): Promise<NotifyResult> {
+    return this.dispatch(
+      `mail:${notice.messageId}`,
+      buildMailActionNotice(notice),
       { dedup: true },
     );
   }

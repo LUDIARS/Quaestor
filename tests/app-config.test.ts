@@ -136,6 +136,42 @@ describe("app-config loader (§7.1)", () => {
       documentsRoot: "data/mail",
       maxAttachmentBytes: 1024,
       rules: [{ kind: "invoice", attachmentMime: ["application/pdf"] }],
+      // realtime はファイルに書かなければ既定 (無効) のまま
+      realtime: {
+        enabled: false,
+        topicName: null,
+        subscriptionName: null,
+        labelIds: ["INBOX"],
+        repoAllowlist: ["LUDIARS/*"],
+      },
+    });
+  });
+
+  it("mailIntake.realtime: ファイル値を読み、topic / subscription 未設定は null のまま", () => {
+    const p = join(dir, "realtime.json");
+    writeFileSync(p, JSON.stringify({
+      mailIntake: {
+        realtime: {
+          enabled: true,
+          topicName: "projects/p/topics/gmail-notify",
+          subscriptionName: "projects/p/subscriptions/gmail-notify-quaestor",
+          labelIds: ["INBOX", "CATEGORY_UPDATES"],
+          repoAllowlist: ["LUDIARS/Quaestor"],
+        },
+      },
+    }), "utf8");
+
+    expect(loadAppConfig(p).mailIntake.realtime).toEqual({
+      enabled: true,
+      topicName: "projects/p/topics/gmail-notify",
+      subscriptionName: "projects/p/subscriptions/gmail-notify-quaestor",
+      labelIds: ["INBOX", "CATEGORY_UPDATES"],
+      repoAllowlist: ["LUDIARS/Quaestor"],
+    });
+    expect(loadAppConfig(join(dir, "missing.json")).mailIntake.realtime).toMatchObject({
+      enabled: false,
+      topicName: null,
+      subscriptionName: null,
     });
   });
 

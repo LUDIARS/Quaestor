@@ -10,7 +10,10 @@ import { ReceiptsRepo } from "../src/db/receipts-repo.js";
 import { ReconciliationsRepo } from "../src/db/reconciliations-repo.js";
 import { applyMigrations } from "../src/db/schema.js";
 import type { PdfExtraction } from "../src/mail/pdf-extract.js";
-import { MailIntakeService } from "../src/services/mail-intake-service.js";
+import {
+  MailIntakeService,
+  type MailActionRunner,
+} from "../src/services/mail-intake-service.js";
 import type { NotificationService } from "../src/services/notification-service.js";
 import { ReceiptIntake } from "../src/services/receipt-intake.js";
 
@@ -124,6 +127,34 @@ describe("MailIntakeService", () => {
     expect(notifyMailInvoice).not.toHaveBeenCalled();
   });
 
+  it("keeps action delegations out of dry-run", async () => {
+    source = mailSource([{
+      ...cloudMessage(),
+      id: "ci-1",
+      from: { address: "notifications@github.com" },
+      subject: "Run failed: CI",
+    }]);
+    const handle = vi.fn(async () => ({
+      kind: "ci_failure" as const,
+      repo: "LUDIARS/Quaestor",
+      invoked: true,
+      skipped: null,
+      runId: "run-1",
+      notified: true,
+      outcome: "ci_failure; invoked",
+    }));
+
+    const result = await createService(
+      COMPLETE_EXTRACTION,
+      true,
+      async () => COMPLETE_EXTRACTION,
+      { handle },
+    ).sweep({ dry_run: true });
+
+    expect(result.processed.ci_failure).toBe(1);
+    expect(handle).not.toHaveBeenCalled();
+  });
+
   it("notifies a cloud notice exactly once", async () => {
     source = mailSource([cloudMessage()]);
     const service = createService(REVIEW_EXTRACTION);
@@ -160,6 +191,7 @@ describe("MailIntakeService", () => {
     extraction: PdfExtraction,
     withSource = true,
     extractPdf: (data: Buffer, issuer: string | null) => Promise<PdfExtraction> = async () => extraction,
+    actions?: MailActionRunner,
   ): MailIntakeService {
     return new MailIntakeService({
       source: withSource ? source : undefined,
@@ -172,12 +204,14 @@ describe("MailIntakeService", () => {
         reconciliations: new ReconciliationsRepo(db),
       }),
       notifications,
+      actions,
       config: {
         enabled: true,
         query: "in:inbox",
         documentsRoot,
         maxAttachmentBytes: 1024,
         rules: [
+          { kind: "ci_failure", fromDomains: ["github.com"], subjectAny: ["run failed"] },
           { kind: "cloud_notice", fromDomains: ["cloud.example"] },
           { kind: "invoice", attachmentMime: ["application/pdf"] },
         ],
@@ -224,5 +258,9 @@ function mailSource(messages: MailMessage[]): MailSource {
     search: vi.fn(async () => messages),
     get: vi.fn(async (id: string) => messages.find((message) => message.id === id) ?? null),
     loadAttachment: vi.fn(async () => Buffer.from("pdf")),
+    history: vi.fn(async () => ({ changes: [], historyId: "1", expired: false })),
+    watch: vi.fn(async () => ({ historyId: "1", expiration: new Date(0) })),
+    stopWatch: vi.fn(async () => { /* not used by sweep */ }),
+    currentHistoryId: vi.fn(async () => "1"),
   };
 }

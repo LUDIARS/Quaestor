@@ -18,11 +18,23 @@ export interface AppConfig {
     documentsRoot: string;
     maxAttachmentBytes: number;
     rules: Array<{
-      kind: "invoice" | "cloud_notice";
+      kind: "invoice" | "cloud_notice" | "ci_failure" | "dependabot";
       fromDomains?: string[];
       subjectAny?: string[];
       attachmentMime?: string[];
     }>;
+    /**
+     * Gmail Pub/Sub リアルタイム受信 (spec/feature/mail-realtime.md)。
+     * 鍵は暗号化ストアの QUAESTOR_PUBSUB_SA_JSON (Gmail 読み取りの OAuth とは別資格情報)。
+     */
+    realtime: {
+      enabled: boolean;
+      topicName: string | null;
+      subscriptionName: string | null;
+      labelIds: string[];
+      /** ci_failure で委託を起動してよいリポジトリ (owner/name、 末尾 /* で owner 配下) */
+      repoAllowlist: string[];
+    };
   };
   server: {
     host: string;
@@ -156,6 +168,13 @@ const DEFAULTS: AppConfig = {
         fromDomains: ["freee.co.jp", "moneyforward.com", "misoca.jp", "invoice.ne.jp"],
       },
     ],
+    realtime: {
+      enabled: false,
+      topicName: null,
+      subscriptionName: null,
+      labelIds: ["INBOX"],
+      repoAllowlist: ["LUDIARS/*"],
+    },
   },
   server:  { host: "127.0.0.1", port: 17400, logLevel: "info" },
   web: { allowedHosts: [] },
@@ -214,6 +233,20 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
         DEFAULTS.mailIntake.maxAttachmentBytes,
       ),
       rules: fromFile?.mailIntake?.rules ?? DEFAULTS.mailIntake.rules,
+      realtime: {
+        enabled: flag(
+          env("QUAESTOR_MAIL_REALTIME"),
+          fromFile?.mailIntake?.realtime?.enabled,
+          DEFAULTS.mailIntake.realtime.enabled,
+        ),
+        topicName: strOrNull(undefined, fromFile?.mailIntake?.realtime?.topicName),
+        subscriptionName: strOrNull(undefined, fromFile?.mailIntake?.realtime?.subscriptionName),
+        labelIds: arr(fromFile?.mailIntake?.realtime?.labelIds, DEFAULTS.mailIntake.realtime.labelIds),
+        repoAllowlist: arr(
+          fromFile?.mailIntake?.realtime?.repoAllowlist,
+          DEFAULTS.mailIntake.realtime.repoAllowlist,
+        ),
+      },
     },
     server: {
       host:     str(env("QUAESTOR_HOST"),      fromFile?.server?.host,     DEFAULTS.server.host),
@@ -313,7 +346,9 @@ export function gaBenchSidecarUrlOf(c: AppConfig): string {
 
 /** 設定ファイルの部分型 (欠けたキーは既定値で補完) */
 type PartialConfig = {
-  mailIntake?: Partial<AppConfig["mailIntake"]>;
+  mailIntake?: Partial<Omit<AppConfig["mailIntake"], "realtime">> & {
+    realtime?: Partial<AppConfig["mailIntake"]["realtime"]>;
+  };
   server?: Partial<AppConfig["server"]>;
   storage?: Partial<AppConfig["storage"]>;
   ocrWorker?: Partial<AppConfig["ocrWorker"]>;

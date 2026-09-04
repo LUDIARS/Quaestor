@@ -150,3 +150,15 @@ key はラベル (`global` / `tag:<形状タグ>`、ファイル名は `tag_<タ
 # mail-intake
 
 `quaestor.config.json` の `mailIntake.enabled`、`query`、`documentsRoot`、`maxAttachmentBytes`、`rules` はメール取込の非シークレット設定である。Gmail 認証は暗号化ストアに `QUAESTOR_GMAIL_CLIENT_ID`、`QUAESTOR_GMAIL_CLIENT_SECRET`、`QUAESTOR_GMAIL_REFRESH_TOKEN` を登録する。権限は `gmail.readonly` のみとする。
+
+# mail-realtime
+
+`quaestor.config.json` の `mailIntake.realtime` はリアルタイム受信の非シークレット設定である
+(`enabled`、`topicName` = `projects/<gcp-project>/topics/<name>`、`subscriptionName` =
+`projects/<gcp-project>/subscriptions/<name>`、`labelIds`、`repoAllowlist`)。
+Pub/Sub 購読の資格情報は暗号化ストアに `QUAESTOR_PUBSUB_SA_JSON` (サービスアカウント鍵 JSON 全体、
+`npm run secret -- set-stdin QUAESTOR_PUBSUB_SA_JSON`) を登録する。
+Gmail 読み取りの `QUAESTOR_GMAIL_*` (OAuth refresh token) とは別の資格情報である点に注意する。
+`enabled=false` または鍵未投入のときは watch 系 API が `{ disabled: true, reason }` を 200 で返し、
+定時 sweep だけで動く (`spec/feature/mail-realtime.md`)。
+起動先 (Concordia) の endpoint はポートを焼き付けず Excubitor catalog から解決する。

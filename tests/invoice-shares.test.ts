@@ -306,7 +306,7 @@ describe("invoice share schema migration", () => {
       expect(db.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'invoice_share_acceptances'",
       ).get()).toEqual({ name: "invoice_share_acceptances" });
-      expect(db.pragma("user_version", { simple: true })).toBe(20);
+      expect(db.pragma("user_version", { simple: true })).toBe(21);
     } finally {
       db.close();
     }

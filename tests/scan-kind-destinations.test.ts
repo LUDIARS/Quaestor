@@ -401,7 +401,7 @@ describe("schema v20: inbound_documents をスキャン由来にも開く", () =
         file_path: "2026/08/y.jpg", sha256: null, size: 0, extracted: null, status: "committed",
         receipt_id: secondReceiptId,
       })).not.toThrow();
-      expect(db.pragma("user_version", { simple: true })).toBe(20);
+      expect(db.pragma("user_version", { simple: true })).toBe(21);
     } finally {
       db.close();
     }
