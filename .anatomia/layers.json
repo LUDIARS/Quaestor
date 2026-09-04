@@ -33,6 +33,7 @@
 
     { "glob": "src/db/*", "layer": "infrastructure" },
 
+    { "glob": "vitest.config.ts", "layer": "shared" },
     { "glob": "tests/*", "layer": "shared" },
     { "glob": "tests/helpers/*", "layer": "shared" }
   ],
