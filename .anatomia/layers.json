@@ -1,0 +1,41 @@
+{
+  "$comment": "Anatomia のプログラムドメイン (二層判定) 用の層宣言。 glob は repo 相対のファイルパスへ完全一致で当たる (`*` = 1 階層、 `**` = 任意階層)。 ローダーが glob 文字列でソートしてから先勝ちで評価するため記述順は効かない。 したがって glob 同士を重ねず、 モジュール 1 つにつき `<dir>/*` を 1 本だけ置く。 確認は `anatomia domains program --repo .` で unclassified 0 を保つこと。",
+
+  "layers": [
+    { "glob": "src/api/*", "layer": "presentation" },
+    { "glob": "web/*", "layer": "presentation" },
+    { "glob": "web/src/*", "layer": "presentation" },
+    { "glob": "web/src/components/*", "layer": "presentation" },
+    { "glob": "web/src/components/ocr-evolution/*", "layer": "presentation" },
+    { "glob": "web/src/lib/*", "layer": "presentation" },
+    { "glob": "web/src/pages/*", "layer": "presentation" },
+    { "glob": "web/src/scan/*", "layer": "presentation" },
+    { "glob": "web/src/scanner/*", "layer": "presentation" },
+
+    { "glob": "scripts/*", "layer": "application" },
+    { "glob": "src/*", "layer": "application" },
+    { "glob": "src/cli/*", "layer": "application" },
+    { "glob": "src/importers/*", "layer": "application" },
+    { "glob": "src/mail/*", "layer": "application" },
+
+    { "glob": "src/business-plan/*", "layer": "domain-logic" },
+    { "glob": "src/detection/*", "layer": "domain-logic" },
+    { "glob": "src/invoices/*", "layer": "domain-logic" },
+    { "glob": "src/services/*", "layer": "domain-logic" },
+    { "glob": "src/services/apportionment-sheet/*", "layer": "domain-logic" },
+    { "glob": "src/services/bookkeeping/*", "layer": "domain-logic" },
+    { "glob": "src/services/cost-structure/*", "layer": "domain-logic" },
+    { "glob": "src/services/depreciation/*", "layer": "domain-logic" },
+    { "glob": "src/services/household/*", "layer": "domain-logic" },
+    { "glob": "src/services/ocr-ga-bench/*", "layer": "domain-logic" },
+    { "glob": "src/services/receipt-detect/*", "layer": "domain-logic" },
+    { "glob": "src/shared/*", "layer": "domain-logic" },
+
+    { "glob": "src/db/*", "layer": "infrastructure" },
+
+    { "glob": "tests/*", "layer": "shared" },
+    { "glob": "tests/helpers/*", "layer": "shared" }
+  ],
+
+  "mergeCouplingThreshold": 1
+}
