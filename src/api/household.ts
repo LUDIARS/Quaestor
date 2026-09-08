@@ -86,8 +86,9 @@ export function householdRouter(deps: HouseholdApiDeps): Hono {
     if (!parsed.success) return c.json({ error: parsed.error.message }, 400);
     const q = parsed.data;
     const window = q.window as (typeof ANALYSIS_WINDOWS)[number];
-    const result = analyzeHousehold(deps.analysis, window, q.anchor ?? today(), {
-      top_places: q.top_places, top_locations: q.top_locations,
+    const asOf = today();
+    const result = analyzeHousehold(deps.analysis, window, q.anchor ?? asOf, {
+      top_places: q.top_places, top_locations: q.top_locations, as_of: asOf,
     });
     return c.json(result);
   });

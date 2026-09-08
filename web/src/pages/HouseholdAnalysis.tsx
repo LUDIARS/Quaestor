@@ -1,4 +1,9 @@
 import { useEffect, useState } from "react";
+import { HouseholdEvaluationCard } from "../components/HouseholdEvaluationCard";
+import type { HouseholdEvaluation } from "../../../src/shared/household-evaluation";
+import { HouseholdCashFlowCard } from "../components/HouseholdCashFlowCard";
+import { HouseholdSavingSuggestions } from "../components/HouseholdSavingSuggestions";
+import type { HouseholdCashFlow, SavingSuggestion } from "../../../src/shared/household-cash-flow";
 
 /** 家計分析ページ: 週 / 月 / 3ヶ月 / 6ヶ月 / 1年 で費目別・場所別・地点別・決済手段別・日別を見る。 API は /v1/household/analysis。
  * @implements SPEC-HOUSEHOLD-ANALYSIS-002 (spec/feature/household-bookkeeping.md) */
@@ -10,6 +15,9 @@ const WINDOWS: { key: Window; label: string }[] = [
 
 interface Totals { spend: number; household: number; business: number; count: number }
 interface AnalysisRes {
+  evaluation?: HouseholdEvaluation;
+  cash_flow?: HouseholdCashFlow;
+  saving_suggestions?: SavingSuggestion[];
   window: { window: Window; anchor: string; current: { from: string; to: string }; previous: { from: string; to: string }; label: string };
   coverage: { latest: string | null; earliest: string | null; months: string[] };
   totals: { current: Totals; previous: Totals; delta: number };
@@ -76,6 +84,9 @@ export function HouseholdAnalysis() {
             </div>
           </div>
 
+          {data.cash_flow && <HouseholdCashFlowCard flow={data.cash_flow} />}
+          {data.evaluation && <HouseholdEvaluationCard evaluation={data.evaluation} />}
+          {data.saving_suggestions && <HouseholdSavingSuggestions suggestions={data.saving_suggestions} />}
           <h3>費目別 (前期比)</h3>
           <table style={{ width: "100%" }}>
             <thead><tr><th>費目</th><th>今期</th><th>前期</th><th>差分</th><th>割合</th><th style={{ width: "40%" }}></th></tr></thead>

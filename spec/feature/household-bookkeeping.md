@@ -41,6 +41,26 @@
 - 費目別 (家計分を費目へ、 事業分は擬似費目「事業経費」)、 場所別 (正規化店名)、 地点別 (レシート GPS を約 100 m 格子)、 決済手段別、 日別推移 を返す。 費目別の合計 = 支出合計。
 - データのある最終月 (coverage) を返し、 画面は未取込の可能性を示す。
 
+## SPEC-HOUSEHOLD-ANALYSIS-003 — 家計支出の評価
+
+- 分析 API の `evaluation` は家計分のみを対象にする。各期間の家計支出を暦日数で割った日額の前期比で、+10% 以上は増加、−10% 以下は減少、それ以外は横ばいとする。10% は表示用の比較基準であり、予算・収入に基づく健全性判定ではない。
+- サーバーの今日（注入可能）時点で対象期間が終了していない、今期または前期に支出イベントがない、前期の家計支出がゼロ、両期間に含まれる月が coverage に欠ける場合は評価保留とし、理由をすべて返す。増減率は null、影響費目は空にする。
+- coverage は支出記録のある月を示すだけで取込完了の証明ではない。画面は取込済みデータの参考評価であることと、明細の取込漏れを判別できないことを明示する。
+- 費目ごとの日額差分の絶対値が大きい順に最大 5 件を根拠として表示する。同値は費目 ID 順。事業経費（擬似費目 0）は除外し、前期のみの費目も含める。
+- 評価は純関数で、元データ・按分ルールを変更せず外部サービスを呼ばない。既存 API の集計値は維持する。
+- 実装は `src/services/household/household-evaluation.ts`、契約は `src/shared/household-evaluation.ts`、画面は `web/src/components/HouseholdEvaluationCard.tsx`。
+
+## SPEC-HOUSEHOLD-ANALYSIS-004 — インカム・アウトカム、貯蓄傾向と節制提案
+
+- インカムは取引の `is_transfer=0 AND amount_in>0` を日付範囲内で集計する。仕訳帳と重ねて集計しない。売上・返金・借入の識別や手入力仕訳のみの収入取込は現状の入力契約では行わず、画面に限界を表示する。
+- アウトカムは既存の支出イベント合計。家計・事業の内訳を併記する。収支差額は入金−家計支出−事業支出、貯蓄率の目安は差額÷入金（入金ゼロは null）。実際の口座残高の増減とは区別する。
+- 今期・前期の貯蓄率差をポイント表示し、正なら上昇、負なら低下、ゼロなら横ばい。期間未終了、いずれかの期間に入金または支出記録なし、比較範囲に支出記録のない月があれば傾向を保留して理由を返す。
+- 両期間の月別入金・支出・差額・貯蓄率を返す。週などで月全体を含まない場合や当月・未来月は `is_partial` を表示する。
+- 節制提案は既定費目名「食費(外食)」「食費(コンビニ)」「娯楽・サブスク」「旅行・レジャー」「衣服・美容」に限定する。医療・住居などを自動的に削減対象としない。カスタム費目は自動推測しない。
+- 各候補に支出額・件数・具体的な見直し方法・10%削減時の試算（円未満切捨て）を付け、試算額降順、同額は費目ID順で最大5件返す。今期の実績に基づく仮定の試算であり、節約可能額の保証や残り期間への予測ではない。候補は今期実績のみで決まるため前期比の日額差分は持たない。
+- 実装は `src/services/household/household-cash-flow.ts`、`src/services/household/income-events.ts`、`src/services/household/saving-suggestions.ts`、契約は `src/shared/household-cash-flow.ts`、画面は `web/src/components/HouseholdCashFlowCard.tsx` と `web/src/components/HouseholdSavingSuggestions.tsx`。
+- 検証ケースは `tests/household-evaluation.test.ts` と `tests/household-cash-flow.test.ts` に記載。
+
 ## SPEC-APPORTIONMENT-SHEET-001 — 観測は人が決めた行から作る
 
 - `ledger` 観測は `origin=manual` と `origin=transaction かつ locked=1` の経費 / 家計行だけ。 未編集の自動生成行は入れない。

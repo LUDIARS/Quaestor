@@ -15,6 +15,12 @@ import { dataCoverage, type DataCoverage } from "../behavior-analysis.js";
 import type { HouseholdClassifier } from "./household-classifier.js";
 import { enumerateDays, resolveWindow, type AnalysisWindow, type ResolvedWindow } from "./analysis-windows.js";
 import { collectSpendEvents, type SpendEvent } from "./spend-events.js";
+import { evaluateHousehold } from "./household-evaluation.js";
+import type { HouseholdEvaluation } from "../../shared/household-evaluation.js";
+import type { HouseholdCashFlow, SavingSuggestion } from "../../shared/household-cash-flow.js";
+import { collectIncomeEvents } from "./income-events.js";
+import { analyzeCashFlow } from "./household-cash-flow.js";
+import { suggestSavings } from "./saving-suggestions.js";
 
 export interface HouseholdAnalysisDeps {
   db: Database.Database;
@@ -72,6 +78,9 @@ export interface DailyPoint {
 }
 
 export interface HouseholdAnalysis {
+  evaluation: HouseholdEvaluation;
+  cash_flow: HouseholdCashFlow;
+  saving_suggestions: SavingSuggestion[];
   window: ResolvedWindow;
   coverage: DataCoverage;
   totals: { current: SpendTotals; previous: SpendTotals; delta: number };
@@ -145,7 +154,7 @@ export function analyzeHousehold(
   deps: HouseholdAnalysisDeps,
   window: AnalysisWindow,
   anchor: string,
-  opts: { top_places?: number; top_locations?: number } = {},
+  opts: { top_places?: number; top_locations?: number; as_of?: string } = {},
 ): HouseholdAnalysis {
   const resolved = resolveWindow(window, anchor);
   const current = splitEvents(deps, collectSpendEvents(deps.db, resolved.current));
@@ -226,11 +235,19 @@ export function analyzeHousehold(
   const daily = enumerateDays(resolved.current).map((date) => ({ date, amount: dailyMap.get(date) ?? 0 }));
 
   const withReceipt = current.filter((e) => e.receipt_id).length;
+  const coverage = dataCoverage(deps.db);
+  const totals = { current: curTotals, previous: prevTotals, delta: curTotals.spend - prevTotals.spend };
+  const asOf = opts.as_of ?? new Date().toISOString().slice(0, 10);
+  const income = collectIncomeEvents(deps.db, { from: resolved.previous.from, to: resolved.current.to });
 
   return {
+    cash_flow: analyzeCashFlow({ window: resolved, income, spending: [...previous, ...current], coverage, asOf }),
+    saving_suggestions: suggestSavings(byCategory),
+    evaluation: evaluateHousehold({ window: resolved, coverage, totals, by_category: byCategory },
+      asOf),
     window: resolved,
-    coverage: dataCoverage(deps.db),
-    totals: { current: curTotals, previous: prevTotals, delta: curTotals.spend - prevTotals.spend },
+    coverage,
+    totals,
     by_category: byCategory,
     by_place: byPlace,
     by_location: byLocation,
