@@ -34,8 +34,9 @@ export function analyzeCashFlow(input: CashFlowInput): HouseholdCashFlow {
   if (input.window.current.to >= input.asOf) reasons.push("対象期間がまだ終了していません。");
   if (current.income_count === 0) reasons.push("今期の入金記録がなく、貯蓄率を算出できません。");
   if (previous.income_count === 0) reasons.push("前期の入金記録がなく、貯蓄率を比較できません。");
-  const days = enumerateDays({ from: input.window.previous.from, to: input.window.current.to });
-  const months = [...new Set(days.map((day) => day.slice(0, 7)))];
+  // previous と current が連続しない window でも、両期間の日だけを月別集計の母集合にする。
+  const days = [...enumerateDays(input.window.previous), ...enumerateDays(input.window.current)];
+  const months = [...new Set(days.map((day) => day.slice(0, 7)))].sort();
   const missing = months.filter((month) => !input.coverage.months.includes(month));
   if (missing.length > 0) reasons.push(`支出データのない月があります: ${missing.join("、")}`);
   // A week can share a coverage month with its comparison but still have no spending records.
@@ -49,7 +50,7 @@ export function analyzeCashFlow(input: CashFlowInput): HouseholdCashFlow {
   // Compare rates, so calendar periods with different lengths remain comparable.
   const trend = delta === null ? "insufficient_data" : delta > 0 ? "improving" : delta < 0 ? "declining" : "stable";
   const monthly = months.map((month) => {
-    const monthDays = days.filter((day) => day.startsWith(month));
+    const monthDays = [...new Set(days.filter((day) => day.startsWith(month)))].sort();
     const from = monthDays[0]!;
     const to = monthDays[monthDays.length - 1]!;
     const end = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
