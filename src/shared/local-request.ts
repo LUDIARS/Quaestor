@@ -18,6 +18,10 @@ function isLoopbackHostname(hostname: string): boolean {
 
 /** 機微な会計データを返す API を、直接の loopback リクエストだけに限定する。 */
 export function isDirectLoopbackRequest(c: Context): boolean {
+  // Excubitor Viewer の最終ホップも loopback になるため、Viewer が付与する転送印を先に拒否する。
+  // これがないと、外部ブラウザからの GET が Origin ヘッダを伴わない場合に直接接続と誤認する。
+  if (c.req.header("X-Forwarded-Prefix")) return false;
+
   let remoteAddress: string | undefined;
   try {
     remoteAddress = getConnInfo(c).remote.address;
