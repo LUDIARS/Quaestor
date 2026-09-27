@@ -12,6 +12,8 @@ import type { MailActionKind, MailActionResult } from "./mail-actions.js";
 import type { MailNotice } from "./mail-notices.js";
 import type { NotificationService } from "./notification-service.js";
 import type { ReceiptIntake } from "./receipt-intake.js";
+import type { MailIgnoreEngine } from "./mail-ignore-engine.js";
+import { bootstrapIgnorePatterns } from "./mail-ignore-bootstrap.js";
 
 /** Gmail Pub/Sub リアルタイム受信の設定 (spec/feature/mail-realtime.md) */
 export interface MailRealtimeConfig {
@@ -62,6 +64,7 @@ export interface MailSyncResult extends MailSweepResult {
 }
 
 export interface MailIntakeDeps {
+  ignoreEngine?: MailIgnoreEngine;
   source?: MailSource;
   sourceReady?: () => boolean;
   /** realtime の基準点。 省略時 syncFromHistory は disabled を返す */
@@ -88,6 +91,12 @@ export class MailIntakeService {
 
   /** @implements SPEC-MAIL-INTAKE-001 (spec/feature/mail-intake.md) */
   constructor(private readonly deps: MailIntakeDeps) {}
+
+  async bootstrapIgnoreRules(limit: number): Promise<unknown> {
+    const reason = this.disabledReason();
+    if (reason || !this.deps.source || !this.deps.ignoreEngine) return { disabled: true, reason: reason ?? "ignore engine unavailable" };
+    return bootstrapIgnorePatterns(this.deps.source, this.deps.messages, this.deps.ignoreEngine, this.deps.config.rules, limit);
+  }
 
   /**
    * @implements SPEC-MAIL-INTAKE-001 (spec/feature/mail-intake.md)
@@ -251,6 +260,7 @@ export class MailIntakeService {
           }
         }
         this.deps.messages.updateOutcome(message.id, outcome, null);
+        if (classified.kind === "ignore") this.deps.ignoreEngine?.observe(message);
       } catch (error) {
         const errorKind = safeErrorKind(error);
         this.deps.messages.updateOutcome(message.id, "error", errorKind);
@@ -297,7 +307,10 @@ export class MailIntakeService {
     persist: boolean,
     result: MailSweepResult,
   ): Promise<ProcessedMail> {
-    if (kind === "ignore") return { outcome: "ignored" };
+    if (kind === "ignore") {
+      const ruleId = this.deps.ignoreEngine?.match(message, persist);
+      return { outcome: ruleId ? `ignored: pattern ${ruleId}` : "ignored" };
+    }
     if (kind === "cloud_notice") {
       return { outcome: "cloud_notice", notice: this.notice(message, "cloud_notice") };
     }

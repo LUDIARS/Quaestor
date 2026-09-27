@@ -94,6 +94,7 @@ import { apportionmentAdvisorRouter } from "./api/apportionment-advisor.js";
 import { configRouter } from "./api/config.js";
 import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 import { mailIntakeRouter } from "./api/mail-intake.js";
+import { MailIgnoreEngine } from "./services/mail-ignore-engine.js";
 import { mailHistoryRouter } from "./api/mail-history.js";
 import { gmailOAuthRouter } from "./api/gmail-oauth.js";
 import type { GmailOAuth } from "./services/gmail-oauth.js";
@@ -282,6 +283,7 @@ export function buildApp(deps: AppDeps): Hono {
   const rules = new ApportionmentRulesRepo(deps.db);
   const receipts = new ReceiptsRepo(deps.db);
   const mailMessages = new MailMessagesRepo(deps.db);
+  const mailIgnoreEngine = new MailIgnoreEngine(deps.db);
   const mailWatchState = new MailWatchStateRepo(deps.db);
   const mailActionThrottle = new MailActionThrottleRepo(deps.db);
   const inboundDocuments = new InboundDocumentsRepo(deps.db);
@@ -468,6 +470,7 @@ export function buildApp(deps: AppDeps): Hono {
     },
   });
   const mailIntake = new MailIntakeService({
+    ignoreEngine: mailIgnoreEngine,
     source: mailSource,
     sourceReady: deps.gmailOAuth && !deps.mailSource ? () => deps.gmailOAuth?.status().configured === true : undefined,
     watchState: mailWatchState,
@@ -676,6 +679,7 @@ export function buildApp(deps: AppDeps): Hono {
   if (deps.gmailOAuth) app.route("/v1/gmail-auth", gmailOAuthRouter(deps.gmailOAuth));
   app.route("/v1/mail-history", mailHistoryRouter(mailMessages, deps.gmailOAuth?.origin));
   app.route("/v1/mail", mailIntakeRouter({
+    ignoreEngine: mailIgnoreEngine,
     service: mailIntake,
     watch: mailWatch,
     messages: mailMessages,

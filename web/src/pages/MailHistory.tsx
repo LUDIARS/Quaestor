@@ -8,6 +8,7 @@ interface MailRow {
 }
 
 function resultLabel(outcome: string): string {
+  if (outcome.startsWith("ignored: pattern ")) return "共通パターンで除外（LLM不使用）";
   if (outcome.startsWith("committed:")) return "取り込み済み";
   const labels: Record<string, string> = { ignored: "対象外（判定済み）", processing: "処理中",
     needs_review: "要確認", duplicate: "添付重複", error: "解析エラー", notified: "通知済み",

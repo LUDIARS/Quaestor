@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { InboundDocumentRow, InboundDocumentsRepo } from "../db/inbound-documents-repo.js";
 import type { MailMessagesRepo } from "../db/mail-messages-repo.js";
 import type { MailIntakeService } from "../services/mail-intake-service.js";
+import type { MailIgnoreEngine } from "../services/mail-ignore-engine.js";
 import type { MailWatchRunner } from "../services/mail-watch-runner.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
@@ -26,6 +27,7 @@ const CommitSchema = z.object({
 }).strict();
 
 export interface MailIntakeApiDeps {
+  ignoreEngine?: MailIgnoreEngine;
   service: MailIntakeService;
   /** realtime 未配線なら watch 系は disabled を 200 で返す */
   watch?: MailWatchRunner;
@@ -56,6 +58,17 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
       ? c.json(await deps.service.sweep(parsed.data))
       : c.json({ error: parsed.error.message }, 400);
   });
+
+  app.get("/ignore-patterns", (c) => c.json(deps.ignoreEngine
+    ? { ...deps.ignoreEngine.stats(), rules: deps.ignoreEngine.rules() } : { disabled: true }));
+  app.post("/ignore-patterns/bootstrap", async (c) => {
+    const parsed = z.object({ limit: z.number().int().min(1).max(200).default(100) }).strict()
+      .safeParse(await c.req.json().catch(() => null));
+    return parsed.success ? c.json(await deps.service.bootstrapIgnoreRules(parsed.data.limit))
+      : c.json({ error: "invalid bootstrap request" }, 400);
+  });
+  app.post("/ignore-patterns/:id/retire", (c) => deps.ignoreEngine?.retire(c.req.param("id"))
+    ? c.json({ ok: true }) : c.json({ error: "rule not found" }, 404));
 
   /**
    * history 差分の手動同期 (デバッグ用)。 通常は Pub/Sub 通知が呼ぶ。
