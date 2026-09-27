@@ -75,6 +75,19 @@ describe("MailIntakeService", () => {
     });
   });
 
+  it("limits a larger search to new messages and does not count prior claims toward the batch", async () => {
+    const batch = Array.from({ length: 6 }, (_, i) => ({ ...invoiceMessage(), id: `batch-${i}`,
+      subject: "Digest", attachments: [] }));
+    source = mailSource(batch);
+    const service = createService(REVIEW_EXTRACTION);
+    await service.sweep({ limit: 2 });
+    expect(messages.list()).toHaveLength(2);
+    await service.sweep({ limit: 3 });
+    expect(messages.list()).toHaveLength(5);
+    expect(source.search).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ maxResults: 500 }));
+    await expect(service.sweep({ limit: 251 })).rejects.toThrow(RangeError);
+  });
+
   it("stores a reviewable PDF after claiming its parent message and processes it only once", async () => {
     const service = createService(REVIEW_EXTRACTION);
 

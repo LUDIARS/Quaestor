@@ -96,6 +96,7 @@ import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 import { mailIntakeRouter } from "./api/mail-intake.js";
 import { MailIgnoreEngine } from "./services/mail-ignore-engine.js";
 import { mailHistoryRouter } from "./api/mail-history.js";
+import { MailIgnoreGroupsRepo } from "./db/mail-ignore-groups-repo.js";
 import { gmailOAuthRouter } from "./api/gmail-oauth.js";
 import type { GmailOAuth } from "./services/gmail-oauth.js";
 import { MailIntakeService, type MailIntakeConfig } from "./services/mail-intake-service.js";
@@ -677,7 +678,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/config", configRouter());
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
   if (deps.gmailOAuth) app.route("/v1/gmail-auth", gmailOAuthRouter(deps.gmailOAuth));
-  app.route("/v1/mail-history", mailHistoryRouter(mailMessages, deps.gmailOAuth?.origin));
+  app.route("/v1/mail-history", mailHistoryRouter(mailMessages, deps.gmailOAuth?.origin, undefined, new MailIgnoreGroupsRepo(deps.db)));
   app.route("/v1/mail", mailIntakeRouter({
     ignoreEngine: mailIgnoreEngine,
     service: mailIntake,

@@ -63,6 +63,23 @@ export class MailIgnoreEngine {
       retiredRules: rules.filter((rule) => rule.state === "retired").length, minimumMessages: IGNORE_POLICY.minimumMessages };
   }
 
+  /** Explicit operator approval of the currently observed templates; never revives retired rules. */
+  activateObserved(): { created: number; activeRules: number } {
+    return this.db.transaction(() => {
+      let created = 0;
+      for (const features of this.evidence.features()) {
+        if (features.policy !== IGNORE_POLICY.version) continue;
+        const when: Condition = { op: "and", clauses: Object.entries(features)
+          .map(([feature, value]) => ({ op: "cmp", feature, cmp: "==", value })) };
+        if (this.box.rules.findByFingerprint(DOMAIN, ruleFingerprint(when, "ignore"))) continue;
+        this.box.engine.addRule({ domain: DOMAIN, description: "Operator-approved observed ignored template (non-LLM)",
+          when, output: "ignore", state: "auto", source: "seed", confidence: 0.8 });
+        created++;
+      }
+      return { created, activeRules: this.stats().activeRules };
+    })();
+  }
+
   retire(ruleId: string): boolean {
     const rule = this.box.rules.get(ruleId);
     return rule?.domain === DOMAIN && !!this.box.engine.setRuleState(ruleId, "retired");

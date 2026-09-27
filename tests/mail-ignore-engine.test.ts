@@ -7,6 +7,7 @@ import { MailIgnoreEngine } from "../src/services/mail-ignore-engine.js";
 import { bootstrapIgnorePatterns } from "../src/services/mail-ignore-bootstrap.js";
 import { ignoreFeatures } from "../src/mail/ignore-features.js";
 import { classifyMail } from "../src/mail/classify.js";
+import { MailIgnoreGroupsRepo } from "../src/db/mail-ignore-groups-repo.js";
 
 function message(id: string): MailMessage {
   return { id, threadId: "thread", from: { address: "news@example.test" }, to: [],
@@ -20,6 +21,37 @@ describe("non-LLM bulk-ignore rules", () => {
   let engine: MailIgnoreEngine;
   beforeEach(() => { db = new Database(":memory:"); applyMigrations(db); engine = new MailIgnoreEngine(db); });
   afterEach(() => { db.close(); });
+
+  it("explicitly activates observed eligible templates once, without reviving retired rules", () => {
+    engine.observe(message("one"));
+    engine.observe({ ...message("protected"), subject: "Your invoice" });
+    expect(engine.activateObserved()).toEqual({ created: 1, activeRules: 1 });
+    expect(engine.activateObserved().created).toBe(0);
+    engine.retire(engine.rules()[0]!.id);
+    expect(engine.activateObserved()).toEqual({ created: 0, activeRules: 0 });
+    expect(engine.stats().minimumMessages).toBe(5);
+  });
+
+  it("groups across history pages and keeps unprofiled and protected mail separate", () => {
+    const repo = new MailMessagesRepo(db);
+    for (let i = 0; i < 62; i++) {
+      repo.claim({ message_id: String(i), thread_id: null, from_address: "news@example.test",
+        subject: "Weekly digest", received_at: i, processed_at: 100, kind: "ignore",
+        outcome: "ignored", rule_index: null, error: null });
+      if (i < 60) engine.observe(message(String(i)));
+      if (i === 60) engine.observe({ ...message(String(i)), subject: "Your invoice" });
+    }
+    const groups = new MailIgnoreGroupsRepo(db);
+    const rows = groups.list(0);
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toMatchObject({ count: 60, state: "auto" });
+    expect(groups.messages(rows[0]!.id, 0)).toHaveLength(51);
+    expect(groups.messages(rows[0]!.id, 50)).toHaveLength(10);
+    expect(rows.slice(1).map((row) => row.state).sort()).toEqual(["ineligible", "unprofiled"]);
+    engine.retire(rows[0]!.ruleId!);
+    expect(groups.list(0)[0]!.state).toBe("retired");
+    expect(repo.list(undefined, 100)).toHaveLength(62);
+  });
 
   it("requires five distinct messages and all three common features; stores no body text", () => {
     for (let i = 0; i < 10; i++) engine.observe(message("same"));

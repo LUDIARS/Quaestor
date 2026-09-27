@@ -4,6 +4,7 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
+    { "pathPattern": "(^|/)src/db/mail-ignore-groups-repo\\.ts$" },
     { "pathPattern": "(^|/)src/db/mail-ignore-evidence-repo\\.ts$" },
     { "pathPattern": "(^|/)src/services/mail-ignore-(?:engine|bootstrap)\\.ts$" },
     { "pathPattern": "(^|/)src/api/mail-history\\.ts$" },

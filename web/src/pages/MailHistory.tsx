@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { MailIgnoreGroups } from "../components/MailIgnoreGroups.js";
 
 const KINDS: Record<string, string> = { invoice: "請求書・領収書", cloud_notice: "クラウド通知",
   ci_failure: "CI失敗", dependabot: "依存更新", ignore: "対象外" };
@@ -21,6 +22,8 @@ function timestamp(value: number): string {
 
 /** Viewing persisted history never starts ingestion or reanalysis. */
 export function MailHistory() {
+  const [view, setView] = useState<"messages" | "groups">("groups");
+  const [group, setGroup] = useState<{ id: string; title: string } | null>(null);
   const [kind, setKind] = useState("");
   const [revision, setRevision] = useState(0);
   const [offset, setOffset] = useState(0);
@@ -28,10 +31,12 @@ export function MailHistory() {
   const [items, setItems] = useState<MailRow[] | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
+    if (view !== "messages") return;
     const controller = new AbortController();
     setItems(null); setError(false);
     const query = new URLSearchParams({ offset: String(offset) });
     if (kind) query.set("kind", kind);
+    if (group) query.set("group", group.id);
     void fetch(`/v1/mail-history?${query}`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error("history unavailable");
@@ -40,12 +45,18 @@ export function MailHistory() {
         if (!controller.signal.aborted) { setItems(value.items); setHasMore(value.hasMore); }
       }).catch(() => { if (!controller.signal.aborted) setError(true); });
     return () => controller.abort();
-  }, [kind, offset, revision]);
+  }, [kind, offset, revision, group, view]);
   return <section className="space-y-4">
     <h1 className="text-xl font-semibold">メール解析履歴</h1>
     <p className="text-sm text-subtle">取得・分類したメールの保存履歴です。対象外のメールも表示します。この画面の閲覧・更新では再解析しません。メール本文は保存していません。</p>
+    <div className="flex gap-3">
+      <button type="button" aria-pressed={view === "groups"} className="border border-border rounded px-3 py-2" onClick={() => setView("groups")}>除外ルール別グループ</button>
+      <button type="button" aria-pressed={view === "messages" && !group} className="border border-border rounded px-3 py-2" onClick={() => { setView("messages"); setGroup(null); setKind(""); setOffset(0); }}>メール一覧</button>
+    </div>
+    {view === "groups" ? <MailIgnoreGroups onSelect={(id, title) => { setGroup({ id, title }); setKind("ignore"); setOffset(0); setView("messages"); }} /> : <>
+    {group && <p className="text-sm">グループ: {group.title} <button type="button" className="underline ml-2" onClick={() => setView("groups")}>グループ一覧へ戻る</button></p>}
     <div className="flex flex-wrap items-center gap-3">
-      <label>分類 <select className="border border-border bg-surface rounded p-2" value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); }}>
+      <label>分類 <select disabled={!!group} className="border border-border bg-surface rounded p-2" value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); }}>
         <option value="">すべて</option>
         {Object.entries(KINDS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </select></label>
@@ -70,6 +81,7 @@ export function MailHistory() {
         <button type="button" className="border border-border rounded px-3 py-2 disabled:opacity-40" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>前へ</button>
         <button type="button" className="border border-border rounded px-3 py-2 disabled:opacity-40" disabled={!hasMore} onClick={() => setOffset(offset + 50)}>次へ</button>
       </div>
+    </>}
     </>}
   </section>;
 }

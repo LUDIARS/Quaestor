@@ -103,7 +103,10 @@ export class MailIntakeService {
    * @implements SPEC-MAIL-INTAKE-003 (spec/feature/mail-intake.md)
    * @implements SPEC-MAIL-INTAKE-006 (spec/feature/mail-intake.md)
    */
-  async sweep(opts: { dry_run?: boolean } = {}): Promise<MailSweepResult> {
+  async sweep(opts: { dry_run?: boolean; limit?: number } = {}): Promise<MailSweepResult> {
+    if (opts.limit !== undefined && (!Number.isInteger(opts.limit) || opts.limit < 1 || opts.limit > 250)) {
+      throw new RangeError("limit must be an integer from 1 to 250");
+    }
     const disabledReason = this.disabledReason();
     if (disabledReason) return resultDisabled(disabledReason);
     const source = this.deps.source;
@@ -112,6 +115,8 @@ export class MailIntakeService {
     let messages: MailMessage[];
     try {
       messages = await source.search(this.deps.config.query, {
+        // The source exposes one page (up to 500). Preserve the configured query scope.
+        ...(opts.limit === undefined ? {} : { maxResults: 500 }),
         loadAttachments: false,
         maxAttachmentBytes: this.deps.config.maxAttachmentBytes,
       });
@@ -121,6 +126,9 @@ export class MailIntakeService {
       return result;
     }
     const result = emptyResult(messages.length);
+    if (opts.limit !== undefined) {
+      messages = messages.filter((message) => !this.deps.messages.find(message.id)).slice(0, opts.limit);
+    }
     await this.processMessages(messages, opts, result);
     return result;
   }

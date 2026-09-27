@@ -11,7 +11,7 @@ import type { ReceiptStorage } from "../services/receipt-storage.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
 import { normalizeDate } from "../shared/text.js";
 
-const SweepSchema = z.object({ dry_run: z.boolean().optional() }).strict();
+const SweepSchema = z.object({ dry_run: z.boolean().optional(), limit: z.number().int().min(1).max(250).optional() }).strict();
 const MessageQuerySchema = z.object({
   // MailKind と同じ集合にする。 足し忘れると GET ?kind=ci_failure が 400 になる。
   kind: z.enum(["invoice", "cloud_notice", "ci_failure", "dependabot", "ignore"]).optional(),
@@ -69,6 +69,13 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
   });
   app.post("/ignore-patterns/:id/retire", (c) => deps.ignoreEngine?.retire(c.req.param("id"))
     ? c.json({ ok: true }) : c.json({ error: "rule not found" }, 404));
+
+  app.post("/ignore-patterns/activate-observed", async (c) => {
+    const parsed = z.object({ approve: z.literal(true) }).strict().safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "explicit approval required" }, 400);
+    return deps.ignoreEngine ? c.json(deps.ignoreEngine.activateObserved())
+      : c.json({ error: "ignore engine unavailable" }, 503);
+  });
 
   /**
    * history 差分の手動同期 (デバッグ用)。 通常は Pub/Sub 通知が呼ぶ。

@@ -1,11 +1,13 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { MailMessagesRepo } from "../db/mail-messages-repo.js";
+import type { MailIgnoreGroupsRepo } from "../db/mail-ignore-groups-repo.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
 
 const Query = z.object({
   kind: z.enum(["invoice", "cloud_notice", "ci_failure", "dependabot", "ignore"]).optional(),
   offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+  group: z.string().regex(/^(?:[a-f0-9]{64}|unprofiled|ineligible)$/).optional(),
 });
 
 /** Read-only history. Public metadata access behind Cloudflare Access approved by neco. */
@@ -13,6 +15,7 @@ export function mailHistoryRouter(
   messages: MailMessagesRepo,
   configuredOrigin?: string,
   isLocal: (c: Context) => boolean = isDirectLoopbackRequest,
+  groups?: MailIgnoreGroupsRepo,
 ): Hono {
   const app = new Hono();
   const canonical = configuredOrigin ? new URL(configuredOrigin) : undefined;
@@ -33,7 +36,17 @@ export function mailHistoryRouter(
   app.get("/", (c) => {
     const query = Query.safeParse(c.req.query());
     if (!query.success) return c.json({ error: "invalid history query" }, 400);
-    const rows = messages.list(query.data.kind, 51, query.data.offset);
+    if (query.data.group && query.data.kind && query.data.kind !== "ignore") return c.json({ error: "group requires ignore kind" }, 400);
+    if (query.data.group && !groups) return c.json({ error: "groups unavailable" }, 503);
+    const rows = query.data.group && groups ? groups.messages(query.data.group, query.data.offset)
+      : messages.list(query.data.kind, 51, query.data.offset);
+    return c.json({ items: rows.slice(0, 50), hasMore: rows.length > 50 });
+  });
+  app.get("/groups", (c) => {
+    const query = Query.safeParse(c.req.query());
+    if (!query.success || query.data.group || (query.data.kind && query.data.kind !== "ignore")) return c.json({ error: "invalid group query" }, 400);
+    if (!groups) return c.json({ error: "groups unavailable" }, 503);
+    const rows = groups.list(query.data.offset);
     return c.json({ items: rows.slice(0, 50), hasMore: rows.length > 50 });
   });
   return app;
