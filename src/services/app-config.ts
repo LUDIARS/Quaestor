@@ -42,6 +42,8 @@ export interface AppConfig {
     logLevel: string;
   };
   web: {
+    /** Cloudflare Access で保護された Gmail OAuth の正規 HTTPS origin。null はローカル用。 */
+    gmailOAuthOrigin: string | null;
     /** Vite dev server の allowedHosts (外部ホスト)。localhost / 127.0.0.1 は常に許可。 */
     allowedHosts: string[];
   };
@@ -177,7 +179,7 @@ const DEFAULTS: AppConfig = {
     },
   },
   server:  { host: "127.0.0.1", port: 17400, logLevel: "info" },
-  web: { allowedHosts: [] },
+  web: { allowedHosts: [], gmailOAuthOrigin: null },
   storage: { dbPath: "app_data/quaestor.db", receiptsRoot: "app_data/receipts" },
   ocrWorker: { enabled: true, intervalMs: 30_000 },
   ocrClaudeCode: { model: "sonnet" },
@@ -317,6 +319,7 @@ export function loadAppConfig(file = "quaestor.config.json"): AppConfig {
       },
     },
     web: {
+      gmailOAuthOrigin: strOrNull(env("QUAESTOR_GMAIL_OAUTH_ORIGIN"), fromFile?.web?.gmailOAuthOrigin),
       allowedHosts: arr(fromFile?.web?.allowedHosts, DEFAULTS.web.allowedHosts),
     },
   };

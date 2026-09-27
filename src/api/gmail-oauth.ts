@@ -10,19 +10,26 @@ const COOKIE_PATH = "/v1/gmail-auth";
 
 export function gmailOAuthRouter(
   oauth: GmailOAuth,
-  canAccess: (context: Context) => boolean = isDirectLoopbackRequest,
+  canAccess?: (context: Context) => boolean,
 ): Hono {
   const app = new Hono();
+  const canonical = new URL(oauth.origin);
+  const isPublic = canonical.protocol === "https:";
   app.use("*", async (c, next) => {
     c.header("Cache-Control", "no-store");
     c.header("Referrer-Policy", "no-referrer");
     c.header("X-Content-Type-Options", "nosniff");
     c.header("X-Frame-Options", "DENY");
     c.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'");
-    if (!canAccess(c)) return c.json({ error: "direct loopback access required" }, 403);
-    // /status contains only booleans and canonical URLs and supports the local Vite proxy.
-    if (c.req.path !== `${COOKIE_PATH}/status` && new URL(c.req.url).origin !== oauth.origin) {
-      return c.json({ error: "open the local Gmail setup page" }, 403);
+    // Cloudflare Access is the authentication boundary for the configured public host.
+    // TLS terminates at the tunnel; do not derive callback URLs from forwarded headers.
+    const request = new URL(c.req.url);
+    const publicHost = isPublic && request.host === canonical.host && !c.req.header("X-Forwarded-Prefix");
+    const permitted = canAccess ? canAccess(c) : publicHost || isDirectLoopbackRequest(c);
+    if (!permitted) return c.json({ error: "Gmail setup access denied" }, 403);
+    // The local status endpoint can link to the configured public setup page.
+    if (c.req.path !== `${COOKIE_PATH}/status` && !(isPublic ? publicHost : request.origin === oauth.origin)) {
+      return c.json({ error: "open the configured Gmail setup page" }, 403);
     }
     await next();
   });
@@ -31,7 +38,7 @@ export function gmailOAuthRouter(
   app.get("/status", (c) => c.json(oauth.status()));
   app.get("/setup", (c) => {
     const session = oauth.session(getCookie(c, COOKIE));
-    setCookie(c, COOKIE, session.id, { httpOnly: true, sameSite: "Lax", path: COOKIE_PATH, maxAge: 600 });
+    setCookie(c, COOKIE, session.id, { httpOnly: true, secure: isPublic, sameSite: "Lax", path: COOKIE_PATH, maxAge: 600 });
     return c.html(gmailOAuthPage(oauth.status(), session.csrf, session.result));
   });
   app.post("/start", async (c) => {

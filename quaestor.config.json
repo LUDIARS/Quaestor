@@ -83,6 +83,7 @@
   },
   "web": {
     "$comment": "Vite dev server の allowedHosts (外部ホスト = Cloudflare Tunnel / Tailscale 等)。localhost / 127.0.0.1 は常に許可されるため不要。変更後は dev server 再起動が必要。設定 UI (/v1/config/web) からも変更可。",
-    "allowedHosts": ["quaestor.vtn-game.com"]
+    "allowedHosts": ["quaestor.vtn-game.com", "qs.ai-run-do.com"],
+    "gmailOAuthOrigin": "https://qs.ai-run-do.com"
   }
 }

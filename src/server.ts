@@ -102,7 +102,7 @@ const app = buildApp({
   // sidecar は backend からだけ叩く (web へは公開しない)
   ocrSidecarUrl: sidecarUrlOf(config),
   mailIntake: config.mailIntake,
-  gmailOAuth: new GmailOAuth(secretStore, `http://127.0.0.1:${config.server.port}`, {
+  gmailOAuth: new GmailOAuth(secretStore, config.web.gmailOAuthOrigin ?? `http://127.0.0.1:${config.server.port}`, {
     QUAESTOR_GMAIL_CLIENT_ID: process.env.QUAESTOR_GMAIL_CLIENT_ID,
     QUAESTOR_GMAIL_CLIENT_SECRET: process.env.QUAESTOR_GMAIL_CLIENT_SECRET,
     QUAESTOR_GMAIL_REFRESH_TOKEN: process.env.QUAESTOR_GMAIL_REFRESH_TOKEN,

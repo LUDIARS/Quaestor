@@ -16,6 +16,9 @@ function fixture(scope = GMAIL_READ_SCOPE) {
 }
 
 describe("browser-bound Gmail OAuth", () => {
+  it.each(["http://qs.example.com", "https://qs.example.com/path", "https://user:pass@qs.example.com", "https://qs.example.com?x=1"])("rejects invalid configured origins: %s", (value) => {
+    expect(() => new GmailOAuth({ loadStrict: () => ({}), setMany: vi.fn() }, value)).toThrow();
+  });
   it("uses PKCE, exchanges on the server and atomically stores credentials without returning tokens", async () => {
     const f = fixture();
     const session = f.oauth.session();

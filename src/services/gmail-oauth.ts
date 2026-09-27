@@ -38,8 +38,9 @@ export class GmailOAuth {
     private readonly now: () => number = Date.now,
   ) {
     const url = new URL(origin);
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || url.origin !== origin) {
-      throw new Error("Gmail OAuth requires a canonical loopback origin");
+    const allowedProtocol = url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "127.0.0.1");
+    if (!allowedProtocol || url.origin !== origin) {
+      throw new Error("Gmail OAuth requires a canonical HTTPS or loopback origin");
     }
     this.setupUrl = `${origin}/v1/gmail-auth/setup`;
     this.redirectUri = `${origin}/v1/gmail-auth/callback`;

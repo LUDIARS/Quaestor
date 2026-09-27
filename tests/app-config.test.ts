@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { assertLocalTestAllowed, gaBenchSidecarUrlOf, loadAppConfig, sidecarUrlOf } from "../src/services/app-config.js";
 
 const ENV_KEYS = [
+  "QUAESTOR_GMAIL_OAUTH_ORIGIN",
   "QUAESTOR_HOST", "QUAESTOR_PORT", "QUAESTOR_LOG_LEVEL",
   "QUAESTOR_DB", "QUAESTOR_RECEIPTS_ROOT",
   "QUAESTOR_OCR_WORKER", "QUAESTOR_OCR_INTERVAL_MS", "QUAESTOR_OCR_CLAUDE_MODEL",
@@ -38,6 +39,17 @@ describe("app-config loader (§7.1)", () => {
     expect(c.ocrSidecar.port).toBe(17350);
     expect(c.ocrSidecar.manage).toBe(true);
     expect(sidecarUrlOf(c)).toBe("http://127.0.0.1:17350");
+  });
+
+  it("loads the Gmail public origin independently of invoice sharing", () => {
+    expect(loadAppConfig(join(dir, "missing.json")).web.gmailOAuthOrigin).toBeNull();
+    const file = join(dir, "gmail.json");
+    writeFileSync(file, JSON.stringify({ web: { gmailOAuthOrigin: "https://qs.example.com" },
+      invoiceShare: { publicUrl: "https://share.example.com" } }), "utf8");
+    expect(loadAppConfig(file).web.gmailOAuthOrigin).toBe("https://qs.example.com");
+    process.env.QUAESTOR_GMAIL_OAUTH_ORIGIN = "https://override.example.com";
+    expect(loadAppConfig(file).web.gmailOAuthOrigin).toBe("https://override.example.com");
+    expect(loadAppConfig(file).invoiceShare.publicUrl).toBe("https://share.example.com");
   });
 
   it("training.gaBench: 既定 off / 3 時 / 1 世代 / 運用 sidecar / cpu。ファイルと env で上書きでき、不正 device は cpu", () => {

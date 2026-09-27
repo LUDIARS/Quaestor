@@ -3,15 +3,20 @@
 ユーザーが GCP の既存 OAuth クライアントで Gmail 読み取りを許可し、Google → Qs backend →
 暗号化ストアの経路で refresh token を保存する。AI・チャット・ツールへ秘密値を貼る手順は持たない。
 
-- SPEC-GMAIL-OAUTH-WEB-001: 設定画面の Gmail 連携カードから backend のローカル認証ページを開く。
-  認証ページは Qs ホスト PC の `127.0.0.1` だけで利用できる。Viewer / Tunnel / LAN は対象外。
-  backend の設定ポートから URL を生成する。GCP web client は表示された callback URI を登録する。
+- SPEC-GMAIL-OAUTH-WEB-001: 公開ドメインのルートから設定画面の Gmail 連携カードを開く。
+  `web.gmailOAuthOrigin`（環境上書き `QUAESTOR_GMAIL_OAUTH_ORIGIN`）を正規 HTTPS origin とし、
+  setup / callback URL はその設定から生成する。現在の設定は `https://qs.ai-run-do.com`。
+  Cloudflare Access が認証境界。Tunnel / Vite は Host を保持し、TLS 終端後の HTTP 転送を許容する。
+  転送ヘッダから認証URLを生成せず、別HostとViewer経由は拒否する。
+  origin未設定時のみ従来の直接loopbackモードとなる。不正なoriginは起動時に失敗する。
+  GCP web client に `https://qs.ai-run-do.com/v1/gmail-auth/callback` を登録する。
 - SPEC-GMAIL-OAUTH-WEB-002: OAuth client JSON (`web` / `installed`) または ID・secret をブラウザで直接投入する。
   Google の endpoint は固定し、アップロード JSON の endpoint は利用しない。値は応答へ戻さない。
   scope は `gmail.readonly`、offline consent を要求。service account / ADC JSON は取り込まない。
 - SPEC-GMAIL-OAUTH-WEB-003: CSRF token と Origin 検証、HttpOnly / SameSite=Lax cookie、単回 state、
   PKCE S256、10分の期限で callback を開始ブラウザに結び付ける。同時保留は最大32セッション。
-  プロセス再起動時は認可を最初からやり直す。外部転送、iframe、cross-site form は拒否する。
+  公開HTTPSモードのcookieはSecure属性付き。プロセス再起動時は認可を最初からやり直す。
+  iframe、cross-site form は拒否する。
 - SPEC-GMAIL-OAUTH-WEB-004: token exchange は backend のみ。refresh token と readonly scope を検証して
   client情報と一括暗号化保存する。キャンセル・権限不足・再送・交換失敗では既存保存値を保持する。
   ストア復号失敗は更新を拒否し、空ストアで既存値を消さない。ファイル交換は暗号文の atomic rename。
@@ -32,11 +37,12 @@ Google 公式仕様: https://developers.google.com/identity/protocols/oauth2/web
 
 ## 操作
 
-1. Qs 実行 PC の Web UI → 設定 → Gmail と連携。
+1. `https://qs.ai-run-do.com/` で Cloudflare Access にログイン → 設定 → Gmail と連携。
 2. GCP の既存 OAuth クライアント JSON を選択するか、ID・secret を画面に直接入力。
-3. Web クライアントの場合、画面に表示された redirect URI を GCP に登録。
+3. 公開ドメインではウェブアプリ用クライアントを使い、画面に表示された redirect URI を GCP に登録。
 4. Google の画面で対象アカウントを選び、読み取りを許可。
 5. Qs の「保存しました」を確認。設定カードの「保存状態を確認」で表示更新。
 
 承認者自身がブラウザで実施する。AI に token や OAuth client JSON を渡さない。
-認証画面や callback ではプロキシのアクセスログも使わず、ローカル backend に直接接続する。
+Access保護を認証画面・callbackを含むホスト全体に適用し、backendへの直接公開を行わない。
+プロキシでcallbackのqueryやリクエスト本文を記録しない。Access設定の変更は本修正では行わない。

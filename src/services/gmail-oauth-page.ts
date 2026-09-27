@@ -15,7 +15,7 @@ export function gmailOAuthPage(status: GmailAuthStatus, csrf: string, result?: s
 ${result === "saved" ? "<p role=\"status\">保存しました。メールの定期取得に反映されます。リアルタイム受信は別途設定が必要です。</p>" : ""}
 ${result === "failed" ? "<p role=\"alert\">認証を完了できませんでした。Google で読み取りを許可し、クライアントとリダイレクト URI を確認してやり直してください。既存の保存内容は変更していません。</p>" : ""}
 <p>GCP の「Google Auth Platform → クライアント」で既存の OAuth クライアントを確認してください。
-ウェブアプリの場合は、次の URI を「承認済みのリダイレクト URI」に登録します。</p>
+公開ドメインで認証する場合はウェブアプリ用クライアントを使い、次の URI を「承認済みのリダイレクト URI」に登録します。</p>
 <p><code>${escape(status.redirectUri)}</code></p>
 <form action="/v1/gmail-auth/start" method="post" enctype="multipart/form-data" autocomplete="off">
 <input type="hidden" name="csrf" value="${escape(csrf)}">
