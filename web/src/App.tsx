@@ -20,6 +20,7 @@ import { ApportionmentSheet } from "./pages/ApportionmentSheet.js";
 import { Depreciation } from "./pages/Depreciation.js";
 import { MobileHome } from "./pages/MobileHome.js";
 import { CostStructure } from "./pages/CostStructure.js";
+import { MailHistory } from "./pages/MailHistory.js";
 import { Nav } from "./components/Nav.js";
 import { isPage, pageLabel, type Page } from "./lib/pages.js";
 import { recordVisit } from "./lib/page-visits.js";
@@ -98,6 +99,7 @@ export function App() {
           {page === "scan" && <Scan />}
           {page === "receipts" && <Receipts />}
           {page === "imports" && <Imports />}
+          {page === "mail-history" && <MailHistory />}
           {page === "profiles" && <StatementProfiles />}
           {page === "transactions" && <Transactions />}
           {page === "reconcile" && <Reconcile />}

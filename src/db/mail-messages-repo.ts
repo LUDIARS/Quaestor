@@ -47,14 +47,14 @@ export class MailMessagesRepo {
   }
 
   /** @implements SPEC-MAIL-INTAKE-001 (spec/feature/mail-intake.md) */
-  list(kind?: MailKind, limit = 50): MailMessageRow[] {
+  list(kind?: MailKind, limit = 50, offset = 0): MailMessageRow[] {
     return (kind
       ? this.db.prepare(
-        "SELECT * FROM mail_messages WHERE kind = ? ORDER BY received_at DESC LIMIT ?",
-      ).all(kind, limit)
+        "SELECT * FROM mail_messages WHERE kind = ? ORDER BY received_at DESC, message_id DESC LIMIT ? OFFSET ?",
+      ).all(kind, limit, offset)
       : this.db.prepare(
-        "SELECT * FROM mail_messages ORDER BY received_at DESC LIMIT ?",
-      ).all(limit)) as MailMessageRow[];
+        "SELECT * FROM mail_messages ORDER BY received_at DESC, message_id DESC LIMIT ? OFFSET ?",
+      ).all(limit, offset)) as MailMessageRow[];
   }
 }
 

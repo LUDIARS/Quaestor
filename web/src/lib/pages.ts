@@ -6,7 +6,7 @@ export type Page =
   | "scan" | "receipts" | "imports" | "profiles" | "transactions" | "reconcile"
   | "household" | "cost-structure" | "invest" | "portfolio"
   | "invoices" | "business-plan" | "subsidies"
-  | "export" | "settings";
+  | "export" | "settings" | "mail-history";
 
 export type NavSection = "記帳" | "取込" | "家計・資産" | "事業" | "設定";
 
@@ -27,6 +27,7 @@ export const PAGES: readonly PageDef[] = [
   { key: "scan", label: "スキャン", section: "取込" },
   { key: "receipts", label: "レシート", section: "取込" },
   { key: "imports", label: "明細取込", section: "取込" },
+  { key: "mail-history", label: "メール解析履歴", section: "取込" },
   { key: "profiles", label: "明細プロファイル", section: "取込" },
   { key: "transactions", label: "取引", section: "取込" },
   { key: "reconcile", label: "突合", section: "取込" },

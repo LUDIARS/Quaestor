@@ -29,6 +29,7 @@ export default defineConfig({
     proxy: {
       // Vite string shorthand rewrites Host; OAuth needs the original public host.
       "/v1/gmail-auth": { target: "http://127.0.0.1:17400", changeOrigin: false },
+      "/v1/mail-history": { target: "http://127.0.0.1:17400", changeOrigin: false },
       "/v1": "http://127.0.0.1:17400",
       "/health": "http://127.0.0.1:17400",
     },
