@@ -37,6 +37,10 @@ export function gmailOAuthRouter(
   app.onError((_error, c) => c.json({ error: "Gmail setup is unavailable. Reload and retry." }, 503));
   app.get("/status", (c) => c.json(oauth.status()));
   app.get("/setup", (c) => {
+    // no-referrer makes a browser's form POST carry Origin:null (Fetch §3.2).
+    // Preserve Origin for our same-origin form; suppress cross-origin referrers.
+    // Callback and redirect responses retain the middleware's no-referrer policy.
+    c.header("Referrer-Policy", "same-origin");
     const session = oauth.session(getCookie(c, COOKIE));
     setCookie(c, COOKIE, session.id, { httpOnly: true, secure: isPublic, sameSite: "Lax", path: COOKIE_PATH, maxAge: 600 });
     return c.html(gmailOAuthPage(oauth.status(), session.csrf, session.result));

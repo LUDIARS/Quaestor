@@ -27,7 +27,10 @@
   ストア復号失敗は更新を拒否し、空ストアで既存値を消さない。ファイル交換は暗号文の atomic rename。
 - SPEC-GMAIL-OAUTH-WEB-005: HTML / JSON / ログに client secret、code、token、Googleの生エラーを出さない。
   cookieとCSRF以外の秘密は HTML に埋めない。callback 成功時は query の無い setup URL へ303で戻す。
-  no-store / no-referrer / CSP を付与し、UI は外部アセット・解析スクリプトを読み込まない。
+  no-store / CSP を付与し、UI は外部アセット・解析スクリプトを読み込まない。
+  フォームを含むsetup応答はReferrer-Policy: same-originとする。no-referrerだと通常フォームPOSTの
+  Originがnullになるため。startのGoogle転送・callback・その他応答はno-referrerを維持する。
+  Origin:nullを許可する例外は設けない（Fetch標準 §3.2 https://fetch.spec.whatwg.org/#origin-header）。
 - SPEC-GMAIL-OAUTH-WEB-006: 成功後は既存 GmailSource が新しい資格情報を遅延参照するため再起動不要。
   未設定時の sweep は従来の disabled 応答を維持する。保存状態は有効性の保証と区別して表示する。
   Pub/Sub や定期ジョブの設定・実メール取込・GCP アプリ作成は本変更では実行しない。

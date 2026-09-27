@@ -21,6 +21,7 @@ describe("Gmail setup HTTP boundary", () => {
     const app = new Hono().route("/v1/gmail-auth", gmailOAuthRouter(oauth));
     const setup = await app.request(`${backendOrigin}/v1/gmail-auth/setup`);
     expect(setup.status).toBe(200);
+    expect(setup.headers.get("referrer-policy")).toBe("same-origin");
     const cookie = setup.headers.get("set-cookie")!;
     expect(cookie).toContain("Secure");
     expect(cookie).toContain("HttpOnly");
@@ -33,11 +34,13 @@ describe("Gmail setup HTTP boundary", () => {
       body: new URLSearchParams({ csrf, client_id: "test.apps.googleusercontent.com", client_secret: "fixture" }),
     });
     expect(start.status).toBe(303);
+    expect(start.headers.get("referrer-policy")).toBe("no-referrer");
     const google = new URL(start.headers.get("location")!);
     expect(google.searchParams.get("redirect_uri")).toBe(`${publicOrigin}/v1/gmail-auth/callback`);
     const callback = `${backendOrigin}/v1/gmail-auth/callback?code=fixture&state=${google.searchParams.get("state")}`;
     const complete = await app.request(callback, { headers: { Cookie: cookie.split(";")[0] } });
     expect(complete.status).toBe(303);
+    expect(complete.headers.get("referrer-policy")).toBe("no-referrer");
     expect(complete.headers.get("location")).toBe(`${publicOrigin}/v1/gmail-auth/setup`);
     expect(save).toHaveBeenCalledOnce();
     expect((exchange.mock.calls[0]?.[1]?.body as URLSearchParams).get("redirect_uri"))
@@ -66,7 +69,7 @@ describe("Gmail setup HTTP boundary", () => {
     const app = fixture();
     const response = await app.request(`${origin}/v1/gmail-auth/setup`);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("referrer-policy")).toBe("same-origin");
     expect(response.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response.headers.get("set-cookie")).toContain("SameSite=Lax");
     const page = await response.text();
@@ -79,7 +82,15 @@ describe("Gmail setup HTTP boundary", () => {
   it("does not reflect callback secrets into error pages", async () => {
     const response = await fixture().request(`${origin}/v1/gmail-auth/callback?code=private-code&state=invalid`);
     expect(response.status).toBe(400);
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
     expect(await response.text()).not.toContain("private-code");
+  });
+  it("still rejects opaque Origin even with same-origin fetch metadata", async () => {
+    const response = await fixture().request(`${origin}/v1/gmail-auth/start`, {
+      method: "POST", headers: { Origin: "null", "Sec-Fetch-Site": "same-origin" }, body: "csrf=fixture",
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: "invalid origin" });
   });
   it("exchanges neither codes nor tokens in status JSON", async () => {
     const response = await fixture().request(`${origin}/v1/gmail-auth/status`);
