@@ -103,6 +103,7 @@ import { MailIntakeService, type MailIntakeConfig } from "./services/mail-intake
 import { MailActions } from "./services/mail-actions.js";
 import { MailWatchRunner } from "./services/mail-watch-runner.js";
 import { GmailSource, createRefreshTokenProvider, type MailSource } from "@ludiars/mail-inbox";
+import { gmailPacedFetch } from "./services/gmail-paced-fetch.js";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
 import { invoiceSlackDeliveriesRouter } from "./api/invoice-slack-deliveries.js";
@@ -449,9 +450,10 @@ export function buildApp(deps: AppDeps): Hono {
     refreshToken: process.env.QUAESTOR_GMAIL_REFRESH_TOKEN,
   };
   const mailSource = deps.mailSource ?? (
-    deps.gmailOAuth ? new GmailSource({ auth: deps.gmailOAuth }) :
+    deps.gmailOAuth ? new GmailSource({ auth: deps.gmailOAuth, fetchImpl: gmailPacedFetch() }) :
     mailCredentials.clientId && mailCredentials.clientSecret && mailCredentials.refreshToken
       ? new GmailSource({
+        fetchImpl: gmailPacedFetch(),
         auth: createRefreshTokenProvider({
           clientId: mailCredentials.clientId,
           clientSecret: mailCredentials.clientSecret,
