@@ -32,6 +32,7 @@ import { GaBenchNightlyJob } from "./services/ocr-ga-bench/nightly-job.js";
 import { runGaBench } from "./services/ocr-ga-bench/bench-runner.js";
 import { assertLocalTestAllowed, gaBenchSidecarUrlOf, loadAppConfig, sidecarUrlOf } from "./services/app-config.js";
 import { SecretStore } from "./services/secret-store.js";
+import { GmailOAuth } from "./services/gmail-oauth.js";
 import { NotificationWorker } from "./services/notification-worker.js";
 import { SubsidyCrawlWorker } from "./services/subsidy-crawl-worker.js";
 import { SubsidiesRepo } from "./db/subsidies-repo.js";
@@ -39,7 +40,8 @@ import { JGrantsCrawler, MirasapoPlusCrawler, CompositeCrawler } from "./service
 import { runtimeVersionFromEnvironment } from "./services/runtime-version.js";
 
 // シークレット (ANTHROPIC_API_KEY 等) を暗号化ストアから注入 (メモリのみ、平文ファイル無し)
-const injectedSecrets = new SecretStore().injectIntoEnv();
+const secretStore = new SecretStore();
+const injectedSecrets = secretStore.injectIntoEnv();
 
 // 注入済みシークレットも通常の env override と同じ扱いで設定へ反映する。
 const config = loadAppConfig();
@@ -100,6 +102,11 @@ const app = buildApp({
   // sidecar は backend からだけ叩く (web へは公開しない)
   ocrSidecarUrl: sidecarUrlOf(config),
   mailIntake: config.mailIntake,
+  gmailOAuth: new GmailOAuth(secretStore, `http://127.0.0.1:${config.server.port}`, {
+    QUAESTOR_GMAIL_CLIENT_ID: process.env.QUAESTOR_GMAIL_CLIENT_ID,
+    QUAESTOR_GMAIL_CLIENT_SECRET: process.env.QUAESTOR_GMAIL_CLIENT_SECRET,
+    QUAESTOR_GMAIL_REFRESH_TOKEN: process.env.QUAESTOR_GMAIL_REFRESH_TOKEN,
+  }),
   // 常駐プロセスだけが Pub/Sub の StreamingPull を張る (テストや埋め込み利用では張らない)。
   startMailWatch: true,
   ocrClaudeCodeModel: config.ocrClaudeCode.model,

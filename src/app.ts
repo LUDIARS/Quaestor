@@ -94,6 +94,8 @@ import { apportionmentAdvisorRouter } from "./api/apportionment-advisor.js";
 import { configRouter } from "./api/config.js";
 import { memoriaIntegrationRouter } from "./api/memoria-integration.js";
 import { mailIntakeRouter } from "./api/mail-intake.js";
+import { gmailOAuthRouter } from "./api/gmail-oauth.js";
+import type { GmailOAuth } from "./services/gmail-oauth.js";
 import { MailIntakeService, type MailIntakeConfig } from "./services/mail-intake-service.js";
 import { MailActions } from "./services/mail-actions.js";
 import { MailWatchRunner } from "./services/mail-watch-runner.js";
@@ -254,6 +256,8 @@ export interface AppDeps {
   invoiceShareAccessLogger?: ShareAccessLogger;
   /** Gmail 受信メールの分類・請求書取り込み設定。省略時は無効。 */
   mailIntake?: MailIntakeConfig;
+  /** Explicit production dependency; tests/embedded apps never open the operator's secret store. */
+  gmailOAuth?: GmailOAuth;
   /** テスト・埋め込み用途のメール取得元。実運用では GmailSource を自動構築する。 */
   mailSource?: MailSource;
   /** 検知後の起動。省略時は設定どおりの MailActions を組み立てる (テストで差し替える) */
@@ -441,6 +445,7 @@ export function buildApp(deps: AppDeps): Hono {
     refreshToken: process.env.QUAESTOR_GMAIL_REFRESH_TOKEN,
   };
   const mailSource = deps.mailSource ?? (
+    deps.gmailOAuth ? new GmailSource({ auth: deps.gmailOAuth }) :
     mailCredentials.clientId && mailCredentials.clientSecret && mailCredentials.refreshToken
       ? new GmailSource({
         auth: createRefreshTokenProvider({
@@ -463,6 +468,7 @@ export function buildApp(deps: AppDeps): Hono {
   });
   const mailIntake = new MailIntakeService({
     source: mailSource,
+    sourceReady: deps.gmailOAuth && !deps.mailSource ? () => deps.gmailOAuth?.status().configured === true : undefined,
     watchState: mailWatchState,
     actions: mailActions,
     messages: mailMessages,
@@ -666,6 +672,7 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
   app.route("/v1/config", configRouter());
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
+  if (deps.gmailOAuth) app.route("/v1/gmail-auth", gmailOAuthRouter(deps.gmailOAuth));
   app.route("/v1/mail", mailIntakeRouter({
     service: mailIntake,
     watch: mailWatch,

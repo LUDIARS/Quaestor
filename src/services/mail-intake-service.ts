@@ -63,6 +63,7 @@ export interface MailSyncResult extends MailSweepResult {
 
 export interface MailIntakeDeps {
   source?: MailSource;
+  sourceReady?: () => boolean;
   /** realtime の基準点。 省略時 syncFromHistory は disabled を返す */
   watchState?: MailWatchStateRepo;
   /** ci_failure / dependabot を検知したときの起動 */
@@ -452,6 +453,7 @@ export class MailIntakeService {
   /** @implements SPEC-MAIL-INTAKE-003 (spec/feature/mail-intake.md) */
   private disabledReason(): string | null {
     if (!this.deps.config.enabled) return "mailIntake.enabled=false";
+    if (this.deps.sourceReady && !this.deps.sourceReady()) return "QUAESTOR_GMAIL_* is not configured";
     return null;
   }
 

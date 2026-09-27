@@ -149,6 +149,11 @@ key はラベル (`global` / `tag:<形状タグ>`、ファイル名は `tag_<タ
 同階層の `bench-report.json` (`spec/feature/ocr-ga-evaluation.md`)。
 # mail-intake
 
+Gmail の認証は Web UI の **設定 → Gmail と連携** から実施できる。
+GCP の OAuth クライアント JSON または ID・secret を本人がローカル画面に入力し、Google の同意後に
+backend が refresh token を直接暗号化保存する。token を AI / チャット / ツールへ渡さない。
+操作手順とアクセス境界は `spec/feature/gmail-oauth-web.md` を参照。
+
 `quaestor.config.json` の `mailIntake.enabled`、`query`、`documentsRoot`、`maxAttachmentBytes`、`rules` はメール取込の非シークレット設定である。Gmail 認証は暗号化ストアに `QUAESTOR_GMAIL_CLIENT_ID`、`QUAESTOR_GMAIL_CLIENT_SECRET`、`QUAESTOR_GMAIL_REFRESH_TOKEN` を登録する。権限は `gmail.readonly` のみとする。
 
 # mail-realtime

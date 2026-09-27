@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { OcrEvolutionCard } from "../components/ocr-evolution/OcrEvolutionCard";
+import { GmailConnectionCard } from "../components/GmailConnectionCard.js";
 
 function WebHostsSection() {
   const [hosts, setHosts] = useState<string[] | null>(null);
@@ -92,6 +93,9 @@ export function Settings() {
       <header>
         <h1 className="text-xl font-bold">設定</h1>
       </header>
+      <section>
+        <GmailConnectionCard />
+      </section>
       <section>
         <WebHostsSection />
       </section>

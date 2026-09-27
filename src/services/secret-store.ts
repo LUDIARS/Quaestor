@@ -14,7 +14,7 @@ import {
   createCipheriv, createDecipheriv, randomBytes,
 } from "node:crypto";
 import {
-  readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync,
+  readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync, renameSync, unlinkSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
@@ -47,30 +47,46 @@ export class SecretStore {
 
   /** 全シークレットを復号して返す (ストア未作成は {}) */
   load(): Record<string, string> {
+    try { return this.loadStrict(); } catch {
+      // Preserve the legacy optional-read contract; all mutations use loadStrict instead.
+      return {};
+    }
+  }
+
+  /** 更新経路は復号失敗を空ストアと誤認して既存の秘密を消さない。 */
+  loadStrict(): Record<string, string> {
     if (!existsSync(this.file)) return {};
     try {
       const enc = JSON.parse(readFileSync(this.file, "utf8")) as EncFile;
       const key = this.readKey();
-      if (!key) return {};
+      if (!key) throw new Error("secret store key unavailable");
       const d = createDecipheriv(ALG, key, Buffer.from(enc.iv, "base64"));
       d.setAuthTag(Buffer.from(enc.tag, "base64"));
       const plain = Buffer.concat([d.update(Buffer.from(enc.data, "base64")), d.final()]);
-      return JSON.parse(plain.toString("utf8")) as Record<string, string>;
+      const parsed: unknown = JSON.parse(plain.toString("utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || Object.values(parsed).some((value) => typeof value !== "string")) {
+        throw new Error("invalid secret store");
+      }
+      return parsed as Record<string, string>;
     } catch {
-      return {}; // 壊れた/鍵不一致は「無し」として動く (起動は止めない)
+      throw new Error("secret store unavailable");
     }
   }
 
   /** 1 件登録 (既存は上書き)。鍵は初回に自動生成 */
   set(name: string, value: string): void {
-    const all = this.load();
-    all[name] = value;
-    this.save(all);
+    this.setMany({ [name]: value });
+  }
+
+  /** OAuth client と refresh token を一つの暗号化書込みで確定する。 */
+  setMany(values: Record<string, string>): void {
+    this.save({ ...this.loadStrict(), ...values });
   }
 
   /** 1 件削除。 @returns 存在したか */
   remove(name: string): boolean {
-    const all = this.load();
+    const all = this.loadStrict();
     if (!(name in all)) return false;
     delete all[name];
     this.save(all);
@@ -110,7 +126,13 @@ export class SecretStore {
       data: data.toString("base64"),
     };
     mkdirSync(dirname(this.file), { recursive: true });
-    writeFileSync(this.file, JSON.stringify(enc, null, 2), "utf8");
+    const temporary = `${this.file}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(enc, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
+      renameSync(temporary, this.file);
+    } finally {
+      if (existsSync(temporary)) unlinkSync(temporary);
+    }
   }
 
   private readKey(): Buffer | null {
