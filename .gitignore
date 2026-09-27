@@ -13,6 +13,8 @@ web/vite.config.ts
 # vite.config の TS コンパイル副産物 (project references で出る)
 web/vite.config.d.ts
 web/vite.config.js
+web/vite.runtime.config.d.ts
+web/vite.runtime.config.js
 
 # Tauri
 src-tauri/target/

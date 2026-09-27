@@ -7,6 +7,11 @@
   `web.gmailOAuthOrigin`（環境上書き `QUAESTOR_GMAIL_OAUTH_ORIGIN`）を正規 HTTPS origin とし、
   setup / callback URL はその設定から生成する。現在の設定は `https://qs.ai-run-do.com`。
   Cloudflare Access が認証境界。Tunnel / Vite は Host を保持し、TLS 終端後の HTTP 転送を許容する。
+  管理済み `web/vite.runtime.config.ts` をnpmのdev/build/previewで明示的に読み込む。
+  `/v1/gmail-auth` を汎用 `/v1` より先に定義し `changeOrigin: false` を明示する。
+  Viteの文字列短縮設定はHostを書き換えるのでこの経路では使用しない。
+  Git管理外の旧 `vite.config.ts` は標準起動では読まない。ホストは既存の設定ファイルと
+  VITE_ALLOWED_HOSTS / LUDIARS_ALLOWED_HOSTSから読み込み、管理外ファイルを上書きしない。
   転送ヘッダから認証URLを生成せず、別HostとViewer経由は拒否する。
   origin未設定時のみ従来の直接loopbackモードとなる。不正なoriginは起動時に失敗する。
   GCP web client に `https://qs.ai-run-do.com/v1/gmail-auth/callback` を登録する。
