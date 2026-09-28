@@ -4,8 +4,10 @@
 Production starts a persistent crawler when mail intake is enabled and credentials
 are configured. Each scan starts with the newest list page (10 IDs); subsequent
 pages use nextPageToken. Existing configured query/date/category scope is retained.
-The shipped/default query has no age limit, allowing an explicitly requested
-backfill to discover older inbox mail. Promotions/social filters remain enabled.
+The shipped/default query starts at 2026-01-01 00:00 JST (after:1767193200),
+as requested by neco. Inbox and promotions/social filters remain enabled.
+The fixed date uses seconds to avoid Gmail's PST interpretation of date strings:
+https://developers.google.com/workspace/gmail/api/guides/filtering.
 Check history before fetching bodies. Stop scanning at the first completed ID;
 error/processing rows are not completion boundaries, but are not replayed either.
 The configured query must retain Gmail's newest-first mailbox listing behavior;
