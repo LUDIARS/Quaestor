@@ -19,7 +19,25 @@ export class MailCrawler {
   status() {
     const state = this.deps.state.load(this.deps.query);
     return { ready: this.deps.ready(), running: !!this.running, pending: state.pending.length,
-      nextAt: state.nextAt, processed: state.processed, lastError: state.lastError, pageSize: 10 };
+      nextAt: state.nextAt, processed: state.processed, lastError: state.lastError, pageSize: 10,
+      backfill: state.backfill ?? null };
+  }
+  /** @implements SPEC-MAIL-CRAWLER-004 */
+  startBackfill(requestId: string, limit: number): ReturnType<MailCrawler["status"]> {
+    if (!/^[a-zA-Z0-9-]{8,80}$/.test(requestId) || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+      throw new Error("invalid_backfill_request");
+    }
+    const state = this.deps.state.load(this.deps.query);
+    if (state.backfill?.requestId === requestId) {
+      if (state.backfill.target !== limit) throw new Error("backfill_request_conflict");
+      return this.status();
+    }
+    if (this.running || state.backfill?.status === "active") throw new Error("crawler_busy");
+    state.backfill = { requestId, target: limit, processed: 0, status: "active" };
+    // Keep pending work and provider cooldown; restart discovery at the newest page.
+    state.pageToken = null; state.endOfScan = false;
+    this.deps.state.save(state);
+    return this.status();
   }
   start(): void { this.stopped = false; this.schedule(); }
   async stop(): Promise<void> { this.stopped = true; clearTimeout(this.timer); await this.running; }
@@ -44,6 +62,12 @@ export class MailCrawler {
     if (!this.deps.ready()) { this.deps.state.save(state); return; }
     try {
       while (!this.stopped && this.now() - started < 60_000) {
+        const backfill = state.backfill?.status === "active" ? state.backfill : undefined;
+        if (backfill && (backfill.processed >= backfill.target || (state.endOfScan && !state.pending.length))) {
+          backfill.status = backfill.processed >= backfill.target ? "completed" : "exhausted";
+          state.pending = []; state.pageToken = null; state.endOfScan = false;
+          break;
+        }
         if (!state.pending.length) {
           if (state.endOfScan) { state.endOfScan = false; state.pageToken = null; break; }
           const page = await this.deps.source.listIds(state.query, state.pageToken);
@@ -51,6 +75,7 @@ export class MailCrawler {
           // Snapshot pending IDs before fetching bodies so partial success survives errors/restarts.
           for (const id of page.ids) {
             const existing = this.deps.messages.find(id);
+            if (backfill && existing) continue;
             if (existing && existing.outcome !== "error" && existing.outcome !== "processing") {
               state.endOfScan = true; break;
             }
@@ -62,7 +87,10 @@ export class MailCrawler {
           if (!state.pending.length) continue;
         }
         const id = state.pending[0]!;
-        if (!this.deps.messages.find(id) && await this.deps.process(id)) state.processed++;
+        if (!this.deps.messages.find(id) && await this.deps.process(id)) {
+          state.processed++;
+          if (backfill) backfill.processed++;
+        }
         state.pending.shift();
         state.failures = 0; state.lastError = null;
         this.deps.state.save(state);

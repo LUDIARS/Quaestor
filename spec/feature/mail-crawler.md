@@ -43,3 +43,20 @@ stay pending with mail_analysis_unconfigured instead of being marked ignored.
 Validation: Revisor tests cover multi-page throughput, known-ID stop, concurrent
 ticks, partial failure/restart, time window continuation, provider cooldown and
 rolling budget. TypeScript checked locally; real provider behavior checked after merge.
+
+## SPEC-MAIL-CRAWLER-004
+POST /v1/mail/crawler/backfill accepts request_id (8-80 alphanumeric/hyphen chars)
+and limit (1-500), only from the existing trusted direct-loopback boundary.
+An explicit request enables bounded historical discovery in the same crawler.
+Skip every existing history row without refetching its body; continue beyond known
+IDs until limit newly processed messages or mailbox exhaustion. Preserve the
+configured Gmail query, learned rules, Luna cache, rolling quota and retry delays.
+
+Persist request identity, target, count and active/completed/exhausted status in
+the existing crawl state. The same latest request ID and limit returns its status;
+a changed limit for that ID or a different request during active work returns 409.
+Reject starts while a tick is running. Preserve pending work and cooldown on start,
+restart discovery at the newest page, and reset discovery after the bounded run.
+IDs queued beyond the target remain unprocessed and may be found by a later run.
+A query change resets the run. An accepted request is not evidence of completion.
+Normal newest-mail polling resumes after completion/exhaustion.

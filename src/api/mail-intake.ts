@@ -66,6 +66,20 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
   app.get("/crawler", (c) => c.json({ ...(deps.crawler?.status() ?? { disabled: true }),
     analysis: { model: "gpt-6-luna", transport: "codex-exec", authentication: "codex-login", configured: deps.analyzerConfigured?.() ?? false } }));
 
+  app.post("/crawler/backfill", async (c) => {
+    const parsed = z.object({ request_id: z.string().regex(/^[a-zA-Z0-9-]{8,80}$/),
+      limit: z.number().int().min(1).max(500) }).strict().safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) return c.json({ error: "invalid backfill request" }, 400);
+    if (!deps.crawler) return c.json({ error: "crawler unavailable" }, 503);
+    try { return c.json(deps.crawler.startBackfill(parsed.data.request_id, parsed.data.limit), 202); }
+    catch (error) {
+      if (error instanceof Error && ["crawler_busy", "backfill_request_conflict"].includes(error.message)) {
+        return c.json({ error: error.message }, 409);
+      }
+      throw error;
+    }
+  });
+
   app.get("/ignore-patterns", (c) => c.json(deps.ignoreEngine
     ? { ...deps.ignoreEngine.stats(), rules: deps.ignoreEngine.rules() } : { disabled: true }));
   app.post("/ignore-patterns/bootstrap", async (c) => {

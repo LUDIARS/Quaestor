@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 export interface MailCrawlState {
   query: string; pageToken: string | null; pending: string[]; endOfScan: boolean;
   nextAt: number; failures: number; processed: number; lastError: string | null;
+  backfill?: { requestId: string; target: number; processed: number; status: "active" | "completed" | "exhausted" };
 }
 
 /** @implements SPEC-MAIL-CRAWLER-003 */

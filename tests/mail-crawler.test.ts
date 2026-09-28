@@ -63,6 +63,37 @@ describe("incremental mail crawler", () => {
     time = 161_000; await crawler.tick(); expect(state.load("in:inbox").pending).toEqual([]);
     expect(list).toHaveBeenCalledTimes(1);
   });
+  it("backfills exactly 500 unseen messages beyond known mail and makes the request idempotent", async () => {
+    claim("known");
+    const list = vi.fn(async (_query: string, token: string | null) => {
+      const page = Number(token ?? 0);
+      return { ids: ["known", ...Array.from({ length: 9 }, (_, i) => `old-${page * 9 + i}`)], nextPageToken: String(page + 1) };
+    });
+    const { crawler, process } = create(list);
+    crawler.startBackfill("test-backfill-500", 500);
+    await crawler.tick();
+    expect(process).toHaveBeenCalledTimes(500);
+    expect(process).not.toHaveBeenCalledWith("known");
+    expect(crawler.status().backfill).toMatchObject({ target: 500, processed: 500, status: "completed" });
+    expect(crawler.startBackfill("test-backfill-500", 500).backfill?.status).toBe("completed");
+    expect(() => crawler.startBackfill("test-backfill-500", 499)).toThrow("backfill_request_conflict");
+  });
+  it("retains a backfill across restart and provider cooldown, then reports exhaustion", async () => {
+    const list = vi.fn().mockResolvedValue({ ids: ["a", "b"], nextPageToken: null });
+    const first = create(list, vi.fn(async (id: string) => {
+      if (id === "b") throw new GmailRateLimit(time + 300_000, 429, "userRateLimitExceeded");
+      claim(id); return true;
+    }));
+    first.crawler.startBackfill("resume-backfill", 500);
+    await first.crawler.tick();
+    expect(() => first.crawler.startBackfill("different-request", 500)).toThrow("crawler_busy");
+    const resumed = create(list);
+    time = 399_999; await resumed.crawler.tick(); expect(resumed.process).not.toHaveBeenCalled();
+    time = 400_000; await resumed.crawler.tick();
+    expect(resumed.process.mock.calls.map(([id]) => id)).toEqual(["b"]);
+    expect(resumed.crawler.status().backfill).toMatchObject({ processed: 2, status: "exhausted" });
+    expect(list).toHaveBeenCalledTimes(1);
+  });
   it("honors retry-after and never retains raw provider text", async () => {
     const response = new Response(JSON.stringify({ error: { message: "private payload", errors: [{ reason: "userRateLimitExceeded" }] } }),
       { status: 403, headers: { "Retry-After": "300" } });
