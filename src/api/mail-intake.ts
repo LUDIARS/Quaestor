@@ -64,7 +64,7 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
   });
 
   app.get("/crawler", (c) => c.json({ ...(deps.crawler?.status() ?? { disabled: true }),
-    analysis: { model: "gpt-6-luna", configured: deps.analyzerConfigured?.() ?? false } }));
+    analysis: { model: "gpt-6-luna", transport: "codex-exec", authentication: "codex-login", configured: deps.analyzerConfigured?.() ?? false } }));
 
   app.get("/ignore-patterns", (c) => c.json(deps.ignoreEngine
     ? { ...deps.ignoreEngine.stats(), rules: deps.ignoreEngine.rules() } : { disabled: true }));

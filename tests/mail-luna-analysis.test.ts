@@ -53,24 +53,21 @@ describe("Luna mail analysis", () => {
     expect(engine.stats().observed).toBe(0);
     expect(messages.list().every((row) => row.outcome.startsWith("analysis_review:"))).toBe(true);
   });
-  it("bounds transmitted data, disables storage/tools and excludes attachment bytes", async () => {
-    const upstream = vi.fn(async (_input: unknown, _init: RequestInit | undefined) => new Response(JSON.stringify({ status: "completed",
-      output: [{ content: [{ type: "output_text", text: '{"kind":"review","confidence":0.5}' }] }] })));
-    const client = new MailLunaAnalysis(() => "test-key", upstream as typeof fetch);
-    await client.analyze({ ...message("wire"), text: "x".repeat(30_000),
+  it("bounds transmitted data and excludes attachment bytes", async () => {
+    const run = vi.fn(async (_prompt: string, _schema: object) => ({ kind: "review", confidence: 0.5 }));
+    await new MailLunaAnalysis(run).analyze({ ...message("wire"), text: "x".repeat(30_000),
       attachments: [{ filename: "doc.pdf", mimeType: "application/pdf", size: 6, attachmentId: "secret-id", data: Buffer.from("SECRET") }] });
-    const body = JSON.parse(upstream.mock.calls[0]![1]!.body as string);
-    expect(body).toMatchObject({ model: "gpt-6-luna", store: false, reasoning: { effort: "none" }, max_output_tokens: 300 });
-    expect(body.tools).toBeUndefined();
-    expect(JSON.parse(body.input).text).toHaveLength(24_000);
-    expect(body.input).not.toContain("SECRET"); expect(body.input).not.toContain("secret-id");
+    const prompt = run.mock.calls[0]![0];
+    const input = JSON.parse(prompt.split("EMAIL_DATA_JSON:\n")[1]!);
+    expect(input.text).toHaveLength(24_000);
+    expect(input.truncated).toBe(true);
+    expect(prompt).not.toContain("SECRET"); expect(prompt).not.toContain("secret-id");
+    expect(run.mock.calls[0]![1]).toMatchObject({ additionalProperties: false, required: ["kind", "confidence"] });
   });
-  it("fails explicitly without credentials or on incomplete/invalid responses", async () => {
-    const unused = vi.fn();
-    await expect(new MailLunaAnalysis(() => undefined, unused).analyze(message("none")))
-      .rejects.toMatchObject({ code: "mail_luna_unconfigured" });
-    expect(unused).not.toHaveBeenCalled();
-    const client = new MailLunaAnalysis(() => "test-key", vi.fn(async () => new Response('{"status":"incomplete","output":[]}')));
-    await expect(client.analyze(message("bad"))).rejects.toMatchObject({ code: "mail_luna_invalid_result" });
+  it("preserves runner failures and rejects invalid classification", async () => {
+    const error = Object.assign(new Error("unavailable"), { code: "mail_luna_cli_missing" });
+    await expect(new MailLunaAnalysis(async () => { throw error; }).analyze(message("none"))).rejects.toBe(error);
+    await expect(new MailLunaAnalysis(async () => ({ kind: "ignore", confidence: 5 })).analyze(message("bad")))
+      .rejects.toMatchObject({ code: "mail_luna_invalid_result" });
   });
 });
