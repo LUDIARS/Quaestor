@@ -94,6 +94,19 @@ describe("incremental mail crawler", () => {
     expect(resumed.crawler.status().backfill).toMatchObject({ processed: 2, status: "exhausted" });
     expect(list).toHaveBeenCalledTimes(1);
   });
+  it("continues past 500 until exhaustion for an explicitly unbounded request", async () => {
+    const list = vi.fn(async (_query: string, token: string | null) => {
+      const page = Number(token ?? 0);
+      return { ids: Array.from({ length: 10 }, (_, i) => `all-${page * 10 + i}`), nextPageToken: page < 50 ? String(page + 1) : null };
+    });
+    const { crawler, process } = create(list);
+    crawler.startBackfill("all-year-2026", null);
+    await crawler.tick();
+    expect(process).toHaveBeenCalledTimes(510);
+    expect(crawler.status().backfill).toMatchObject({ target: null, processed: 510, status: "exhausted" });
+    expect(crawler.startBackfill("all-year-2026", null).backfill?.status).toBe("exhausted");
+    expect(() => crawler.startBackfill("all-year-2026", 500)).toThrow("backfill_request_conflict");
+  });
   it("honors retry-after and never retains raw provider text", async () => {
     const response = new Response(JSON.stringify({ error: { message: "private payload", errors: [{ reason: "userRateLimitExceeded" }] } }),
       { status: 403, headers: { "Retry-After": "300" } });

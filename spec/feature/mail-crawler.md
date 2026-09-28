@@ -5,7 +5,9 @@ Production starts a persistent crawler when mail intake is enabled and credentia
 are configured. Each scan starts with the newest list page (10 IDs); subsequent
 pages use nextPageToken. Existing configured query/date/category scope is retained.
 The shipped/default query starts at 2026-01-01 00:00 JST (after:1767193200),
-as requested by neco. Inbox and promotions/social filters remain enabled.
+as requested by neco. After explicit all-mail authorization, inbox/category filters
+are removed. Gmail's default exclusion of spam/trash remains. Previously analyzed
+messages are skipped; this does not reclassify old review outcomes.
 The fixed date uses seconds to avoid Gmail's PST interpretation of date strings:
 https://developers.google.com/workspace/gmail/api/guides/filtering.
 Check history before fetching bodies. Stop scanning at the first completed ID;
@@ -64,3 +66,30 @@ restart discovery at the newest page, and reset discovery after the bounded run.
 IDs queued beyond the target remain unprocessed and may be found by a later run.
 A query change resets the run. An accepted request is not evidence of completion.
 Normal newest-mail polling resumes after completion/exhaustion.
+
+## SPEC-MAIL-CRAWLER-005
+After neco explicitly authorized all unprocessed 2026 mail and its Luna analysis,
+POST /v1/mail/crawler/backfill also accepts until_exhausted:true instead of limit.
+Both fields together are invalid. Persist target:null for an explicitly unbounded
+run; continue past 500 until the configured query is exhausted. Keep rolling quota,
+cooldowns, checkpoint persistence and the single worker. Retrying the same request
+ID returns its status; changing the mode for that ID conflicts. Null is not the
+default for old callers. Normal polling resumes when the scan exhausts.
+
+## SPEC-MAIL-CRAWLER-006
+neco requested status every ten minutes for long-running operations. Run the
+session-owned read-only monitor from the project body after starting the job:
+node --import tsx src/cli/mail-progress.ts <catalog-loopback-base-url> <request-id>
+LICTOR_PORT must refer to the caller's current sidecar. No session identity is
+saved. The helper reads crawler status every 30 seconds, reports immediately on
+start, then every ten minutes and on completion/error transitions. It never starts
+ingestion. It ends after final report or replacement of its monitored request.
+
+Messages contain only counts, state and safe error codes. Pending IDs count is not
+presented as total remaining. Lictor's /v1/internal/send-file sends the UTF-8 status
+and caption to this session. Monitor state/lock/receipt live under ignored
+app_data/mail-progress/<request-id>. API acceptance is not delivery proof; reconcile
+the accepted message ID with Cc delivery if necessary. Unknown delivery leaves a
+pending marker and stops automatic resends. An orphan lock requires checking the
+old process before removal. A session that ends also requires restarting the helper
+under a current sidecar. Service interruption is reported and status reads retry.

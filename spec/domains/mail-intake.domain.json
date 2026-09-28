@@ -4,6 +4,7 @@
   "presetRules": [],
   "templateRules": [],
   "membership": [
+    { "pathPattern": "(^|/)src/(?:cli/mail-progress|services/mail-progress-(?:report|relay))\\.ts$" },
     { "pathPattern": "(^|/)src/services/(?:mail-crawler|gmail-crawl-source|gmail-rate-limit)\\.ts$" },
     { "pathPattern": "(^|/)src/db/mail-crawl-state-repo\\.ts$" },
     { "pathPattern": "(^|/)src/services/mail-(?:luna-analysis|crawl-analysis|codex-exec)\\.ts$" },

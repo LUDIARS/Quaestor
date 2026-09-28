@@ -23,8 +23,8 @@ export class MailCrawler {
       backfill: state.backfill ?? null };
   }
   /** @implements SPEC-MAIL-CRAWLER-004 */
-  startBackfill(requestId: string, limit: number): ReturnType<MailCrawler["status"]> {
-    if (!/^[a-zA-Z0-9-]{8,80}$/.test(requestId) || !Number.isInteger(limit) || limit < 1 || limit > 500) {
+  startBackfill(requestId: string, limit: number | null): ReturnType<MailCrawler["status"]> {
+    if (!/^[a-zA-Z0-9-]{8,80}$/.test(requestId) || (limit !== null && (!Number.isInteger(limit) || limit < 1 || limit > 500))) {
       throw new Error("invalid_backfill_request");
     }
     const state = this.deps.state.load(this.deps.query);
@@ -63,8 +63,9 @@ export class MailCrawler {
     try {
       while (!this.stopped && this.now() - started < 60_000) {
         const backfill = state.backfill?.status === "active" ? state.backfill : undefined;
-        if (backfill && (backfill.processed >= backfill.target || (state.endOfScan && !state.pending.length))) {
-          backfill.status = backfill.processed >= backfill.target ? "completed" : "exhausted";
+        const targetReached = backfill && backfill.target !== null && backfill.processed >= backfill.target;
+        if (backfill && (targetReached || (state.endOfScan && !state.pending.length))) {
+          backfill.status = targetReached ? "completed" : "exhausted";
           state.pending = []; state.pageToken = null; state.endOfScan = false;
           break;
         }
