@@ -102,7 +102,10 @@ import type { GmailOAuth } from "./services/gmail-oauth.js";
 import { MailIntakeService, type MailIntakeConfig } from "./services/mail-intake-service.js";
 import { MailActions } from "./services/mail-actions.js";
 import { MailWatchRunner } from "./services/mail-watch-runner.js";
-import { GmailSource, createRefreshTokenProvider, type MailSource } from "@ludiars/mail-inbox";
+import { createRefreshTokenProvider, type MailSource } from "@ludiars/mail-inbox";
+import { GmailCrawlSource } from "./services/gmail-crawl-source.js";
+import { MailCrawler } from "./services/mail-crawler.js";
+import { MailCrawlStateRepo } from "./db/mail-crawl-state-repo.js";
 import { gmailPacedFetch } from "./services/gmail-paced-fetch.js";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
@@ -268,6 +271,7 @@ export interface AppDeps {
   mailActions?: MailActions;
   /** true のときだけ Pub/Sub 購読を張る。テストとビルド時の常駐を避けるため既定 false */
   startMailWatch?: boolean;
+  startMailCrawler?: boolean;
   /** buildApp が所有する timer / background I/O 等を、プロセス終了時に解放するための登録先。 */
   registerCleanup?: (cleanup: () => void | Promise<void>) => void;
 }
@@ -450,9 +454,9 @@ export function buildApp(deps: AppDeps): Hono {
     refreshToken: process.env.QUAESTOR_GMAIL_REFRESH_TOKEN,
   };
   const mailSource = deps.mailSource ?? (
-    deps.gmailOAuth ? new GmailSource({ auth: deps.gmailOAuth, fetchImpl: gmailPacedFetch() }) :
+    deps.gmailOAuth ? new GmailCrawlSource({ auth: deps.gmailOAuth, fetchImpl: gmailPacedFetch() }) :
     mailCredentials.clientId && mailCredentials.clientSecret && mailCredentials.refreshToken
-      ? new GmailSource({
+      ? new GmailCrawlSource({
         fetchImpl: gmailPacedFetch(),
         auth: createRefreshTokenProvider({
           clientId: mailCredentials.clientId,
@@ -485,6 +489,16 @@ export function buildApp(deps: AppDeps): Hono {
     notifications: notificationService,
     config: mailConfig,
   });
+  const mailCrawler = mailSource instanceof GmailCrawlSource ? new MailCrawler({
+    source: mailSource, messages: mailMessages, state: new MailCrawlStateRepo(deps.db), query: mailConfig.query,
+    ready: () => mailConfig.enabled && (!deps.gmailOAuth || deps.gmailOAuth.status().configured),
+    process: (id) => mailIntake.processCrawledMessage(id),
+  }) : undefined;
+  if (deps.startMailCrawler && mailCrawler) {
+    if (!deps.registerCleanup) throw new Error("mail crawler requires cleanup registration");
+    mailCrawler.start();
+    deps.registerCleanup(() => mailCrawler.stop());
+  }
   // Pub/Sub 購読は設定と鍵が揃っているときだけ張る。 欠けていれば理由付きで disabled のまま。
   const mailWatch = new MailWatchRunner({
     source: mailSource,
@@ -682,6 +696,7 @@ export function buildApp(deps: AppDeps): Hono {
   if (deps.gmailOAuth) app.route("/v1/gmail-auth", gmailOAuthRouter(deps.gmailOAuth));
   app.route("/v1/mail-history", mailHistoryRouter(mailMessages, deps.gmailOAuth?.origin, undefined, new MailIgnoreGroupsRepo(deps.db)));
   app.route("/v1/mail", mailIntakeRouter({
+    crawler: mailCrawler,
     ignoreEngine: mailIgnoreEngine,
     service: mailIntake,
     watch: mailWatch,

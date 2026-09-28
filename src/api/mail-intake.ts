@@ -6,6 +6,7 @@ import type { InboundDocumentRow, InboundDocumentsRepo } from "../db/inbound-doc
 import type { MailMessagesRepo } from "../db/mail-messages-repo.js";
 import type { MailIntakeService } from "../services/mail-intake-service.js";
 import type { MailIgnoreEngine } from "../services/mail-ignore-engine.js";
+import type { MailCrawler } from "../services/mail-crawler.js";
 import type { MailWatchRunner } from "../services/mail-watch-runner.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
@@ -27,6 +28,7 @@ const CommitSchema = z.object({
 }).strict();
 
 export interface MailIntakeApiDeps {
+  crawler?: MailCrawler;
   ignoreEngine?: MailIgnoreEngine;
   service: MailIntakeService;
   /** realtime 未配線なら watch 系は disabled を 200 で返す */
@@ -53,11 +55,14 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
   });
 
   app.post("/sweep", async (c) => {
+    if (deps.crawler) return c.json({ error: "crawler owns ingestion; inspect /v1/mail/crawler" }, 409);
     const parsed = SweepSchema.safeParse(await c.req.json().catch(() => null));
     return parsed.success
       ? c.json(await deps.service.sweep(parsed.data))
       : c.json({ error: parsed.error.message }, 400);
   });
+
+  app.get("/crawler", (c) => c.json(deps.crawler?.status() ?? { disabled: true }));
 
   app.get("/ignore-patterns", (c) => c.json(deps.ignoreEngine
     ? { ...deps.ignoreEngine.stats(), rules: deps.ignoreEngine.rules() } : { disabled: true }));

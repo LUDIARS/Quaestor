@@ -98,6 +98,22 @@ export class MailIntakeService {
     return bootstrapIgnorePatterns(this.deps.source, this.deps.messages, this.deps.ignoreEngine, this.deps.config.rules, limit);
   }
 
+  /** @implements SPEC-MAIL-CRAWLER-001 */
+  async processCrawledMessage(id: string): Promise<boolean> {
+    const reason = this.disabledReason();
+    if (reason || !this.deps.source) throw new Error("mail_crawler_disabled");
+    if (this.deps.messages.find(id)) return false;
+    const message = await this.deps.source.get(id, { loadAttachments: false,
+      maxAttachmentBytes: this.deps.config.maxAttachmentBytes });
+    if (!message) return false; // Deleted between list and get; advance this pending ID.
+    if (classifyMail(message, this.deps.config.rules).kind === "ignore" && !this.deps.ignoreEngine?.match(message, false)) {
+      // Unknown mail must remain pending until the selected analyzer is configured.
+      throw Object.assign(new Error("Mail analyzer not configured"), { code: "mail_analysis_unconfigured" });
+    }
+    await this.processMessages([message], {}, emptyResult(1));
+    return true;
+  }
+
   /**
    * @implements SPEC-MAIL-INTAKE-001 (spec/feature/mail-intake.md)
    * @implements SPEC-MAIL-INTAKE-003 (spec/feature/mail-intake.md)

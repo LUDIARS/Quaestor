@@ -109,6 +109,7 @@ const app = buildApp({
   }),
   // 常駐プロセスだけが Pub/Sub の StreamingPull を張る (テストや埋め込み利用では張らない)。
   startMailWatch: true,
+  startMailCrawler: true,
   ocrClaudeCodeModel: config.ocrClaudeCode.model,
   invoiceShare: localTest
     ? { ...config.invoiceShare, publicUrl: `http://localhost:${config.server.port}` }
