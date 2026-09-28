@@ -22,7 +22,9 @@ function timestamp(value: number): string {
   return new Date(value * 1000).toLocaleString("ja-JP");
 }
 
-/** Viewing persisted history never starts ingestion or reanalysis. */
+/** Viewing persisted history never starts ingestion or reanalysis.
+ * @implements SPEC-MAIL-TOPIC-GROUPS-001
+ */
 export function MailHistory() {
   const [view, setView] = useState<"messages" | "groups">("groups");
   const [group, setGroup] = useState<{ id: string; title: string } | null>(null);
@@ -52,10 +54,10 @@ export function MailHistory() {
     <h1 className="text-xl font-semibold">メール解析履歴</h1>
     <p className="text-sm text-subtle">取得・分類したメールの保存履歴です。対象外のメールも表示します。この画面の閲覧・更新では再解析しません。メール本文は保存していません。</p>
     <div className="flex gap-3">
-      <button type="button" aria-pressed={view === "groups"} className="border border-border rounded px-3 py-2" onClick={() => setView("groups")}>除外ルール別グループ</button>
+      <button type="button" aria-pressed={view === "groups"} className="border border-border rounded px-3 py-2" onClick={() => setView("groups")}>通知・除外グループ</button>
       <button type="button" aria-pressed={view === "messages" && !group} className="border border-border rounded px-3 py-2" onClick={() => { setView("messages"); setGroup(null); setKind(""); setOffset(0); }}>メール一覧</button>
     </div>
-    {view === "groups" ? <MailIgnoreGroups onSelect={(id, title) => { setGroup({ id, title }); setKind("ignore"); setOffset(0); setView("messages"); }} /> : <>
+    {view === "groups" ? <MailIgnoreGroups onSelect={(id, title) => { setGroup({ id, title }); setKind(id.startsWith("topic:") ? "" : "ignore"); setOffset(0); setView("messages"); }} /> : <>
     {group && <p className="text-sm">グループ: {group.title} <button type="button" className="underline ml-2" onClick={() => setView("groups")}>グループ一覧へ戻る</button></p>}
     <div className="flex flex-wrap items-center gap-3">
       <label>分類 <select disabled={!!group} className="border border-border bg-surface rounded p-2" value={kind} onChange={(event) => { setKind(event.target.value); setOffset(0); }}>

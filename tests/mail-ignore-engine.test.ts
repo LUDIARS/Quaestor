@@ -32,7 +32,7 @@ describe("non-LLM bulk-ignore rules", () => {
     expect(engine.stats().minimumMessages).toBe(5);
   });
 
-  it("groups across history pages and keeps unprofiled and protected mail separate", () => {
+  it("regroups stored sender history without changing eligibility or retiring rules", () => {
     const repo = new MailMessagesRepo(db);
     for (let i = 0; i < 62; i++) {
       repo.claim({ message_id: String(i), thread_id: null, from_address: "news@example.test",
@@ -43,13 +43,14 @@ describe("non-LLM bulk-ignore rules", () => {
     }
     const groups = new MailIgnoreGroupsRepo(db);
     const rows = groups.list(0);
-    expect(rows).toHaveLength(3);
-    expect(rows[0]).toMatchObject({ count: 60, state: "auto" });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ count: 62, state: "topic", ruleId: null });
     expect(groups.messages(rows[0]!.id, 0)).toHaveLength(51);
-    expect(groups.messages(rows[0]!.id, 50)).toHaveLength(10);
-    expect(rows.slice(1).map((row) => row.state).sort()).toEqual(["ineligible", "unprofiled"]);
-    engine.retire(rows[0]!.ruleId!);
-    expect(groups.list(0)[0]!.state).toBe("retired");
+    expect(groups.messages(rows[0]!.id, 50)).toHaveLength(12);
+    expect(engine.stats()).toMatchObject({ observed: 61, eligible: 60, activeRules: 1 });
+    engine.retire(engine.rules()[0]!.id);
+    expect(groups.list(0)[0]!.state).toBe("topic");
+    expect(engine.stats().retiredRules).toBe(1);
     expect(repo.list(undefined, 100)).toHaveLength(62);
   });
 
