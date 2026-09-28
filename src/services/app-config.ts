@@ -145,7 +145,7 @@ export interface AppConfig {
 const DEFAULTS: AppConfig = {
   mailIntake: {
     enabled: true,
-    query: "in:inbox newer_than:3d -category:promotions -category:social",
+    query: "in:inbox -category:promotions -category:social",
     documentsRoot: "app_data/inbound",
     maxAttachmentBytes: 15_728_640,
     rules: [
