@@ -28,6 +28,7 @@ const CommitSchema = z.object({
 }).strict();
 
 export interface MailIntakeApiDeps {
+  analyzerConfigured?: () => boolean;
   crawler?: MailCrawler;
   ignoreEngine?: MailIgnoreEngine;
   service: MailIntakeService;
@@ -62,7 +63,8 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
       : c.json({ error: parsed.error.message }, 400);
   });
 
-  app.get("/crawler", (c) => c.json(deps.crawler?.status() ?? { disabled: true }));
+  app.get("/crawler", (c) => c.json({ ...(deps.crawler?.status() ?? { disabled: true }),
+    analysis: { model: "gpt-6-luna", configured: deps.analyzerConfigured?.() ?? false } }));
 
   app.get("/ignore-patterns", (c) => c.json(deps.ignoreEngine
     ? { ...deps.ignoreEngine.stats(), rules: deps.ignoreEngine.rules() } : { disabled: true }));

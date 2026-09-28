@@ -14,6 +14,7 @@ import type { NotificationService } from "./notification-service.js";
 import type { ReceiptIntake } from "./receipt-intake.js";
 import type { MailIgnoreEngine } from "./mail-ignore-engine.js";
 import { bootstrapIgnorePatterns } from "./mail-ignore-bootstrap.js";
+import type { MailCrawlAnalysis } from "./mail-crawl-analysis.js";
 
 /** Gmail Pub/Sub リアルタイム受信の設定 (spec/feature/mail-realtime.md) */
 export interface MailRealtimeConfig {
@@ -64,6 +65,7 @@ export interface MailSyncResult extends MailSweepResult {
 }
 
 export interface MailIntakeDeps {
+  crawlAnalysis?: MailCrawlAnalysis;
   ignoreEngine?: MailIgnoreEngine;
   source?: MailSource;
   sourceReady?: () => boolean;
@@ -106,6 +108,7 @@ export class MailIntakeService {
     const message = await this.deps.source.get(id, { loadAttachments: false,
       maxAttachmentBytes: this.deps.config.maxAttachmentBytes });
     if (!message) return false; // Deleted between list and get; advance this pending ID.
+    if (await this.deps.crawlAnalysis?.handle(message)) return true;
     if (classifyMail(message, this.deps.config.rules).kind === "ignore" && !this.deps.ignoreEngine?.match(message, false)) {
       // Unknown mail must remain pending until the selected analyzer is configured.
       throw Object.assign(new Error("Mail analyzer not configured"), { code: "mail_analysis_unconfigured" });

@@ -9,6 +9,8 @@ interface MailRow {
 }
 
 function resultLabel(outcome: string): string {
+  if (outcome === "ignored: luna") return "Luna解析で対象外";
+  if (outcome.startsWith("analysis_review: ")) return `要確認（Luna判定: ${KINDS[outcome.slice(17)] ?? "判断保留"}）`;
   if (outcome.startsWith("ignored: pattern ")) return "共通パターンで除外（LLM不使用）";
   if (outcome.startsWith("committed:")) return "取り込み済み";
   const labels: Record<string, string> = { ignored: "対象外（判定済み）", processing: "処理中",
@@ -69,7 +71,7 @@ export function MailHistory() {
       {items.length === 0 && <p>{kind ? "この分類の履歴はありません。" : "解析履歴はまだありません。"}</p>}
       <ul className="space-y-3">
         {items.map((mail) => <li key={mail.message_id} className="rounded border border-border bg-surface p-4 space-y-2 break-words">
-          <div className="flex flex-wrap gap-2 text-sm"><span className="rounded bg-muted px-2 py-1">{KINDS[mail.kind] ?? mail.kind}</span><span>{resultLabel(mail.outcome)}</span></div>
+          <div className="flex flex-wrap gap-2 text-sm"><span className="rounded bg-muted px-2 py-1">{mail.outcome.startsWith("analysis_review:") ? "要確認" : KINDS[mail.kind] ?? mail.kind}</span><span>{resultLabel(mail.outcome)}</span></div>
           <h2 className="font-semibold">{mail.subject || "（件名なし）"}</h2>
           <p className="text-sm">差出人: {mail.from_address}</p>
           <p className="text-xs text-subtle">受信: {timestamp(mail.received_at)} ／ 処理: {timestamp(mail.processed_at)}</p>

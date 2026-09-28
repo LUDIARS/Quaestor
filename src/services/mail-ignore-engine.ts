@@ -41,17 +41,18 @@ export class MailIgnoreEngine {
   }
 
   /** Distinct message IDs vote once. Guards/nonmatching bodies are recorded as ineligible. */
-  observe(message: MailMessage): void {
+  observe(message: MailMessage, analyzedIgnore = false): void {
     const candidate = ignoreFeatures(message);
     this.db.transaction(() => {
       const inserted = this.evidence.record(message.id, IGNORE_POLICY.version, candidate, Math.floor(this.now() / 1000));
       if (!inserted || !candidate) return;
-      if (this.evidence.support(candidate.fingerprint) < IGNORE_POLICY.minimumMessages) return;
+      if (!analyzedIgnore && this.evidence.support(candidate.fingerprint) < IGNORE_POLICY.minimumMessages) return;
       const when: Condition = { op: "and", clauses: Object.entries(candidate.features)
         .map(([feature, value]) => ({ op: "cmp", feature, cmp: "==", value })) };
       // A retired rule remains retired; repeated evidence must not revive it.
       if (this.box.rules.findByFingerprint(DOMAIN, ruleFingerprint(when, "ignore"))) return;
-      this.box.engine.addRule({ domain: DOMAIN, description: "Repeated ignored mail template (non-LLM)",
+      this.box.engine.addRule({ domain: DOMAIN, description: analyzedIgnore
+        ? "Guarded Luna ignore template" : "Repeated ignored mail template (non-LLM)",
         when, output: "ignore", state: "auto", source: "seed", confidence: 0.8 });
     })();
   }

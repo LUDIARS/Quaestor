@@ -71,7 +71,7 @@ export class MailCrawler {
       state.failures++;
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
       state.lastError = error instanceof GmailRateLimit ? `gmail_${error.status}_${error.reason}`
-        : code === "mail_analysis_unconfigured" ? code : "mail_crawl_failed";
+        : /^(?:mail_analysis_unconfigured|mail_luna_[a-z0-9_]+)$/.test(code) ? code : "mail_crawl_failed";
       const backoff = Math.min(60_000 * 2 ** Math.min(state.failures - 1, 6), 3_600_000);
       state.nextAt = Math.max(this.now() + backoff, error instanceof GmailRateLimit ? error.retryAt : 0);
     }

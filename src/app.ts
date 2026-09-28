@@ -107,6 +107,8 @@ import { GmailCrawlSource } from "./services/gmail-crawl-source.js";
 import { MailCrawler } from "./services/mail-crawler.js";
 import { MailCrawlStateRepo } from "./db/mail-crawl-state-repo.js";
 import { gmailPacedFetch } from "./services/gmail-paced-fetch.js";
+import { MailLunaAnalysis } from "./services/mail-luna-analysis.js";
+import { MailCrawlAnalysis } from "./services/mail-crawl-analysis.js";
 import { InvoiceShareService } from "./services/invoice-share-service.js";
 import { InvoiceShareRateLimiter } from "./services/invoice-share-rate-limiter.js";
 import { invoiceSlackDeliveriesRouter } from "./api/invoice-slack-deliveries.js";
@@ -477,6 +479,8 @@ export function buildApp(deps: AppDeps): Hono {
     },
   });
   const mailIntake = new MailIntakeService({
+    crawlAnalysis: new MailCrawlAnalysis(deps.db, new MailLunaAnalysis(() =>
+      process.env.QUAESTOR_MAIL_LUNA_API_KEY ?? process.env.OPENAI_API_KEY), mailMessages, mailIgnoreEngine, mailConfig.rules),
     ignoreEngine: mailIgnoreEngine,
     source: mailSource,
     sourceReady: deps.gmailOAuth && !deps.mailSource ? () => deps.gmailOAuth?.status().configured === true : undefined,
@@ -696,6 +700,7 @@ export function buildApp(deps: AppDeps): Hono {
   if (deps.gmailOAuth) app.route("/v1/gmail-auth", gmailOAuthRouter(deps.gmailOAuth));
   app.route("/v1/mail-history", mailHistoryRouter(mailMessages, deps.gmailOAuth?.origin, undefined, new MailIgnoreGroupsRepo(deps.db)));
   app.route("/v1/mail", mailIntakeRouter({
+    analyzerConfigured: () => !!(process.env.QUAESTOR_MAIL_LUNA_API_KEY ?? process.env.OPENAI_API_KEY),
     crawler: mailCrawler,
     ignoreEngine: mailIgnoreEngine,
     service: mailIntake,
