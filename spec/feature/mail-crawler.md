@@ -93,3 +93,14 @@ the accepted message ID with Cc delivery if necessary. Unknown delivery leaves a
 pending marker and stops automatic resends. An orphan lock requires checking the
 old process before removal. A session that ends also requires restarting the helper
 under a current sidecar. Service interruption is reported and status reads retry.
+
+The send-file acceptance envelope is { ok: true, relayed: 1, message: { message: { id } } }:
+Lictor wraps the complete Cc chat response. Only a positive safe-integer numeric id
+is valid; strings, missing IDs, invalid envelopes and HTTP failures cannot advance
+the checkpoint or replace the previous receipt. receipt.json.messageId retains this
+Cc acceptance ID, not a Discord message ID or delivery confirmation. Create the
+pending marker exclusively before preparing or sending the report; an existing
+marker blocks another attempt without overwriting its evidence. Leave it in place
+on ambiguous responses, transport failures or incomplete local persistence.
+
+Reference: actio:47daf22c-5f9f-4775-9e41-c84ebefeade6.

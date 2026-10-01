@@ -1,0 +1,13 @@
+{
+  "service": "quaestor",
+  "include": [
+    "src/services/mail-progress-receipt.ts"
+  ],
+  "runtime": {
+    "autoImport": false,
+    "entrypoints": []
+  },
+  "rules": {
+    "contract-wrap": true
+  }
+}

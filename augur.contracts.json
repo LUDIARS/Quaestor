@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "contractsDir": "src/contracts",
+  "importFrom": "@ludiars/log-weaver",
+  "contracts": [
+    {
+      "id": "C-1",
+      "criterion": "C-1 acceptedProgressMessageId(receipt): 正しい二重 message 応答の正の安全整数 ID のみを返し、それ以外は null とする",
+      "symbol": "acceptedProgressMessageId",
+      "file": "src/services/mail-progress-receipt.ts",
+      "module": "src/contracts/mail-progress-receipt.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    }
+  ]
+}
