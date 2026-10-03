@@ -14,8 +14,7 @@ OCR 結果だけでは原因を区別できない。
 
 - 設定: `quaestor.config.json` の `ocrClaudeCode.model` (既定 `sonnet`)
 - env override: `QUAESTOR_OCR_CLAUDE_MODEL`
-- 明示的に `null` を書いた時だけ `--model` を付けず CLI 既定へ委ねる
-  (キー未指定は既定モデルであって、 CLI 既定ではない)
+- 明示的な `null` も共有ライブラリの Claude 既定モデルを使う。CLI の対話設定には委ねない。
 - モデル名は英数字で始まり、英数字・`.`・`_`・`-` のみを 128 文字まで許可する。
   不正な設定値は既定の `sonnet` に戻す。
 

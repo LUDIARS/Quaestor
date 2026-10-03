@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawnOneShot as spawn, resolveModel } from "@ludiars/one-shot";
 import { existsSync } from "node:fs";
 import { mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,7 +20,7 @@ export function resolveMailCodex(): string | null {
 }
 
 export function mailCodexArgs(schema: string): string[] {
-  return ["-a", "never", "exec", "--model", "gpt-6-luna", "--sandbox", "read-only", "--ephemeral",
+  return ["-a", "never", "exec", "--model", resolveModel("luna", "codex"), "--sandbox", "read-only", "--ephemeral",
     "--ignore-user-config", "--skip-git-repo-check", "--json", "--color", "never", "--output-schema", schema,
     "-c", 'model_reasoning_effort="none"', "-c", 'web_search="disabled"', "-c", "project_doc_max_bytes=0",
     ...DISABLED.flatMap((name) => ["--disable", name]), "-"];

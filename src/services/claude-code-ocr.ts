@@ -13,7 +13,7 @@
  *    遷移、 完了は claude の PATCH で 'done'/'manual'/'failed' に切り替わる
  */
 
-import { spawn } from "node:child_process";
+import { spawnOneShot as spawn, resolveModel } from "@ludiars/one-shot";
 import { resolve, dirname, join } from "node:path";
 import { mkdirSync, createWriteStream, readFileSync, existsSync } from "node:fs";
 import { classificationPromptSection } from "./ocr-classification-prompt.js";
@@ -29,9 +29,8 @@ export interface ClaudeCodeOcrOptions {
   /** ログ出力先ディレクトリ。 既定 app_data/claude-code-logs */
   logDir?: string;
   /**
-   * `--model` に渡すモデル。 未指定だと CLI 既定のモデルに乗るため、
-   * そのモデルの利用上限を対話セッション側で使い切っていると OCR まで巻き込まれて
-   * 画像を見る前に exit する。 null / 未指定で CLI 既定に委ねる。
+   * `--model` に渡すモデル。役割名は共有ライブラリで解決する。
+   * null / 未指定は共有ライブラリの Claude 既定モデルを使用する。
    */
   model?: string | null;
 }
@@ -85,16 +84,16 @@ export class ClaudeCodeOcr {
         const bashPath = this.opts.bashPath ?? process.env.CLAUDE_CODE_GIT_BASH_PATH;
         if (bashPath) env.CLAUDE_CODE_GIT_BASH_PATH = bashPath;
 
-        const model = safeModelName(this.opts.model);
+        const model = resolveModel(safeModelName(this.opts.model) ?? undefined, "claude");
         const args = ["-p", "--dangerously-skip-permissions"];
         if (model) args.push("--model", model);
-        logStream.write(`model: ${model ?? "(claude cli default)"}\n`);
+        logStream.write(`model: ${model}\n`);
 
         const child = spawn("claude", args, {
           env,
           cwd: this.opts.workingDir,
           stdio: ["pipe", "pipe", "pipe"],
-          shell: true,
+          shell: false,
         });
 
         child.stdout?.on("data", (d) => logStream.write(d));
@@ -168,7 +167,7 @@ export class ClaudeCodeOcr {
   }
 }
 
-/** Prevent programmatic callers from turning the Windows shell invocation into command injection. */
+/** Retain the existing model-name input contract for programmatic callers. */
 function safeModelName(value: string | null | undefined): string | null {
   return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)
     ? value

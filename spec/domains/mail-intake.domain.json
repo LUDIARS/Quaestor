@@ -3,7 +3,9 @@
   "description": "受信メールの決定的分類と請求書 PDF の取り込み、 および Gmail リアルタイム受信 (Pub/Sub) と CI 失敗 / Dependabot 検知後の起動。 突合は receipt-intake、 通知経路は notifications が持つ。",
   "presetRules": [],
   "templateRules": [],
+  "specRefs": ["spec/feature/shared-one-shot.md"],
   "membership": [
+    { "pathPattern": "(^|/)tests/mail-codex-exec\\.test\\.ts$" },
     { "pathPattern": "(^|/)src/(?:cli/mail-progress|services/mail-progress-(?:report|relay))\\.ts$" },
     { "pathPattern": "(^|/)src/services/(?:mail-crawler|gmail-crawl-source|gmail-rate-limit)\\.ts$" },
     { "pathPattern": "(^|/)src/db/mail-crawl-state-repo\\.ts$" },

@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { spawn } from "node:child_process";
+import { spawnOneShot as spawn } from "@ludiars/one-shot";
 import { mailCodexArgs, mailCodexEnv, runMailCodex } from "../src/services/mail-codex-exec.js";
 
-vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
+vi.mock("@ludiars/one-shot", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@ludiars/one-shot")>(), spawnOneShot: vi.fn(),
+}));
 
 function childFixture(output: string, exitCode = 0) {
   const child = Object.assign(new EventEmitter(), {
@@ -48,6 +50,12 @@ describe("mail Codex subprocess boundary", () => {
     const fixture = childFixture('{"type":"item.started","item":{"type":"command_execution"}}\n' + success);
     await expect(runMailCodex("mail", {})).rejects.toMatchObject({ code: "mail_luna_unexpected_tool" });
     expect(fixture.child.kill).toHaveBeenCalled();
+  });
+  it("resolves the shared model override without changing classification restrictions", () => {
+    vi.stubEnv("LUDIARS_ONESHOT_MODEL_LUNA", "gpt-test-luna");
+    const args = mailCodexArgs("schema.json");
+    expect(args[args.indexOf("--model") + 1]).toBe("gpt-test-luna");
+    expect(args).toContain("read-only");
   });
   it("excludes service secrets and disables execution capabilities", () => {
     expect(mailCodexEnv({ PATH: "bin", USERPROFILE: "profile", OPENAI_API_KEY: "secret", GMAIL_TOKEN: "secret", LICTOR_PORT: "1" }))

@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -38,7 +38,8 @@
     "pdf-parse": "^2.4.5",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0",
-    "zod": "^3.24.0"
+    "zod": "^3.24.0",
+    "@ludiars/one-shot": "file:lib/lapilli/packages/one-shot"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",

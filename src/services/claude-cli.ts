@@ -5,7 +5,7 @@
  * 長プロンプトは stdin で渡す (Windows ENAMETOOLONG 回避)。 Windows は CLAUDE_CODE_GIT_BASH_PATH が要る。
  */
 
-import { spawn } from "node:child_process";
+import { spawnOneShot as spawn } from "@ludiars/one-shot";
 import { reportConcordiaCostOneShot } from "./concordia-cost.js";
 
 export interface ClaudeCliOptions {
@@ -13,8 +13,8 @@ export interface ClaudeCliOptions {
   bashPath?: string;      // env CLAUDE_CODE_GIT_BASH_PATH と同じ
   timeoutMs?: number;     // 既定 120_000
   /**
-   * `--model`。 未指定 / null で CLI 既定に委ねる (対話側で使い切ったモデルの上限に巻き込まれ得る、
-   * spec/feature/receipt-ocr-claude-cli.md)。 shell 経由で渡すため英数字・`.`・`_`・`-` 以外は無視する。
+   * `--model`。 未指定 / null は共有ライブラリの Claude 既定モデルを使用する。
+   * 既存の入力契約として英数字・`.`・`_`・`-` 以外は無視する。
    */
   model?: string | null;
   /**
@@ -28,7 +28,7 @@ export interface ClaudeCliOptions {
 
 const SAFE_ARG = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
-/** shell 経由の spawn で引数がコマンドに化けないよう、 安全な形の値だけ通す。 */
+/** 既存の設定契約に合うモデル名とツール名だけを引数へ渡す。 */
 export function claudeCliArgs(opts: ClaudeCliOptions): string[] {
   const args = ["-p", "--output-format", "json"];
   if (typeof opts.model === "string" && SAFE_ARG.test(opts.model)) args.push("--model", opts.model);
@@ -112,7 +112,8 @@ export function spawnClaude(prompt: string, opts: ClaudeCliOptions = {}): Promis
     const child = spawn(cliPath, claudeCliArgs(opts), {
       env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: true,
+      shell: false,
+      cwd: process.cwd(),
     });
 
     let out = "";

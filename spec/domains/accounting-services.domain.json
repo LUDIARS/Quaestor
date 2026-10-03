@@ -10,5 +10,8 @@
     {
       "pathPattern": "(^|/)src/business-plan/(?:.*/)?[^/]+$"
     }
+  ],
+  "specRefs": [
+    "spec/feature/shared-one-shot.md"
   ]
 }
