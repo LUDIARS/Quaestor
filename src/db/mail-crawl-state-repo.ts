@@ -1,8 +1,11 @@
 import type Database from "better-sqlite3";
+import type { MailCrawlFailure } from "../services/mail-crawl-failure.js";
 
 export interface MailCrawlState {
   query: string; pageToken: string | null; pending: string[]; endOfScan: boolean;
   nextAt: number; failures: number; processed: number; lastError: string | null;
+  /** Secret-free classification of the latest failed tick; kept after recovery as the last failure time. */
+  lastFailure?: MailCrawlFailure | null;
   backfill?: { requestId: string; target: number | null; processed: number; status: "active" | "completed" | "exhausted" };
 }
 

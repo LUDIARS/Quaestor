@@ -104,3 +104,26 @@ marker blocks another attempt without overwriting its evidence. Leave it in plac
 on ambiguous responses, transport failures or incomplete local persistence.
 
 Reference: actio:47daf22c-5f9f-4775-9e41-c84ebefeade6.
+
+## SPEC-MAIL-CRAWLER-007
+A failed tick records a secret-free classification (src/services/mail-crawl-failure.ts)
+in addition to the legacy lastError value, which stays unchanged for existing
+callers (mail_crawl_failed, gmail_<status>_<reason>, mail_luna_* codes).
+Fields: stage (list_ids or process), category, errorClass, optional code, HTTP
+status and rate-limit reason, and the failure time. Categories include
+gmail_auth_refresh_rejected (OAuth refresh answered non-2xx; the library does not
+expose the OAuth error body, so invalid_grant cannot be distinguished), gmail_auth_network,
+gmail_auth_invalid_response, gmail_<status> (gmail_401 etc.), gmail_rate_limit,
+gmail_invalid_page, gmail_repeated_page, gmail_unconfigured, network,
+network_timeout, mail Luna codes and unknown. Only fixed vocabulary and numbers
+are kept: exception messages, tokens, refresh tokens, client secrets and mail
+body/subject/addresses never enter the classification. Codes must match a short
+safe token pattern or are dropped.
+
+src/services/mail-crawler.ts logs the classification through the app logger at warn
+("mail crawl tick failed", with the failure count) and persists it as lastFailure
+via src/db/mail-crawl-state-repo.ts. GET /v1/mail/crawler adds failures and
+lastFailure; lastFailure is retained after recovery as the latest failure time.
+Finding why the Gmail list call fails is out of scope.
+
+Validation: tests/mail-crawl-failure.test.ts. Reference: actio:e60edb63-0d44-4891-be46-b8efc8a70f2b.

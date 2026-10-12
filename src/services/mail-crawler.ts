@@ -3,10 +3,14 @@ import type { MailMessagesRepo } from "../db/mail-messages-repo.js";
 import type { MailCrawlStateRepo } from "../db/mail-crawl-state-repo.js";
 import type { MailIdSource } from "./gmail-crawl-source.js";
 import { GmailRateLimit } from "./gmail-rate-limit.js";
+import { classifyMailCrawlFailure, type MailCrawlStage } from "./mail-crawl-failure.js";
+
+export interface MailCrawlerLogger { warn(fields: Record<string, unknown>, message?: string): void }
 
 interface CrawlerDeps {
   source: MailSource & MailIdSource; messages: MailMessagesRepo; state: MailCrawlStateRepo;
   query: string; ready: () => boolean; process: (id: string) => Promise<boolean>; now?: () => number;
+  logger?: MailCrawlerLogger;
 }
 
 /** @implements SPEC-MAIL-CRAWLER-001 SPEC-MAIL-CRAWLER-002 SPEC-MAIL-CRAWLER-003 */
@@ -20,7 +24,7 @@ export class MailCrawler {
     const state = this.deps.state.load(this.deps.query);
     return { ready: this.deps.ready(), running: !!this.running, pending: state.pending.length,
       nextAt: state.nextAt, processed: state.processed, lastError: state.lastError, pageSize: 10,
-      backfill: state.backfill ?? null };
+      failures: state.failures, lastFailure: state.lastFailure ?? null, backfill: state.backfill ?? null };
   }
   /** @implements SPEC-MAIL-CRAWLER-004 */
   startBackfill(requestId: string, limit: number | null): ReturnType<MailCrawler["status"]> {
@@ -60,6 +64,7 @@ export class MailCrawler {
     const started = this.now();
     state.nextAt = started + 60_000;
     if (!this.deps.ready()) { this.deps.state.save(state); return; }
+    let stage: MailCrawlStage = "list_ids";
     try {
       while (!this.stopped && this.now() - started < 60_000) {
         const backfill = state.backfill?.status === "active" ? state.backfill : undefined;
@@ -70,6 +75,7 @@ export class MailCrawler {
           break;
         }
         if (!state.pending.length) {
+          stage = "list_ids";
           if (state.endOfScan) { state.endOfScan = false; state.pageToken = null; break; }
           const page = await this.deps.source.listIds(state.query, state.pageToken);
           if (page.nextPageToken && page.nextPageToken === state.pageToken) throw new Error("gmail_repeated_page");
@@ -88,6 +94,7 @@ export class MailCrawler {
           if (!state.pending.length) continue;
         }
         const id = state.pending[0]!;
+        stage = "process";
         if (!this.deps.messages.find(id) && await this.deps.process(id)) {
           state.processed++;
           if (backfill) backfill.processed++;
@@ -98,6 +105,10 @@ export class MailCrawler {
       }
     } catch (error) {
       state.failures++;
+      const failure = classifyMailCrawlFailure(error, stage, this.now());
+      state.lastFailure = failure;
+      // Only the classified fields are logged: no exception message, credentials or mail metadata.
+      this.deps.logger?.warn({ ...failure, failures: state.failures }, "mail crawl tick failed");
       const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
       state.lastError = error instanceof GmailRateLimit ? `gmail_${error.status}_${error.reason}`
         : /^(?:mail_analysis_unconfigured|mail_luna_[a-z0-9_]+)$/.test(code) ? code : "mail_crawl_failed";

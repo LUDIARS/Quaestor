@@ -5,10 +5,10 @@
   "contracts": [
     {
       "id": "C-1",
-      "criterion": "C-1 acceptedProgressMessageId(receipt): 正しい二重 message 応答の正の安全整数 ID のみを返し、それ以外は null とする",
-      "symbol": "acceptedProgressMessageId",
-      "file": "src/services/mail-progress-receipt.ts",
-      "module": "src/contracts/mail-progress-receipt.contract.ts",
+      "criterion": "C-1 classifyMailCrawlFailure(error, stage, at): stage/category/errorClass/code/status/reason/at の固定語彙・数値だけを返し、例外 message や秘密を含めず、OAuth refresh 拒否は gmail_auth_refresh_rejected、gmail_http_NNN は gmail_NNN、fetch failed は network に分類する",
+      "symbol": "classifyMailCrawlFailure",
+      "file": "src/services/mail-crawl-failure.ts",
+      "module": "src/contracts/mail-crawl-failure.contract.ts",
       "mode": "observe",
       "sample": 1
     }

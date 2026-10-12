@@ -1,7 +1,7 @@
 {
   "service": "quaestor",
   "include": [
-    "src/services/mail-progress-receipt.ts"
+    "src/services/mail-crawl-failure.ts"
   ],
   "runtime": {
     "autoImport": false,

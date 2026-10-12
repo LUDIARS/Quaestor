@@ -497,6 +497,7 @@ export function buildApp(deps: AppDeps): Hono {
     source: mailSource, messages: mailMessages, state: new MailCrawlStateRepo(deps.db), query: mailConfig.query,
     ready: () => mailConfig.enabled && (!deps.gmailOAuth || deps.gmailOAuth.status().configured),
     process: (id) => mailIntake.processCrawledMessage(id),
+    logger: deps.logger,
   }) : undefined;
   if (deps.startMailCrawler && mailCrawler) {
     if (!deps.registerCleanup) throw new Error("mail crawler requires cleanup registration");
