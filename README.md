@@ -59,7 +59,7 @@
 ## 個人データの扱い
 
 - 会計データはすべて **ローカル SQLite** に保管
-- LUDIARS 全体ルール (個人データは Cernere 単一情報源、 自前 DB に持たない) との関係: Quaestor の取引データはそもそも外部 share 前提でない金銭情報なので、 Cernere 経由でなくローカル完結とする (AIFormat §5 の例外運用、 spec/data-model.md 参照)
+- LUDIARS 全体ルール (個人データは Cernere 単一情報源、 自前 DB に持たない) との関係: Quaestor の取引データはそもそも外部 share 前提でない金銭情報なので、 Cernere 経由でなくローカル完結とする (AIFormat §5 の例外運用、 DESIGN.md「正規化レコード (Ledger)」節参照)
 - Cloud sync は v0.x 以降に検討、 デフォルト OFF
 
 ## 開発状況
