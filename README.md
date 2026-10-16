@@ -85,11 +85,16 @@ v1.0 一気通貫実装済 (2026-05-02)。 詳細は `DESIGN.md`。
 
 ```powershell
 cd E:\Document\Ars\Quaestor
+git submodule update --init lib/lapilli   # @ludiars/one-shot を file: で参照するため npm install より先に必須
 npm install
 cd web; npm install; cd ..
 npm run dev:all     # backend (17400) + web vite (5117) を concurrently で同時起動
 # → http://127.0.0.1:5117
 ```
+
+`lib/lapilli` を展開しないまま `npm install` すると `@ludiars/one-shot` が解決できず、backend は
+`ERR_MODULE_NOT_FOUND` で起動に失敗する (2026-10-12 の起動失敗の原因)。clone 直後や
+`lib/lapilli` の固定版が進んだ main を取り込んだあとも、同じコマンドで展開し直してから `npm install` する。
 
 OCR を有効化する場合は backend 起動 shell で `ANTHROPIC_API_KEY` を export。
 
