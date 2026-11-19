@@ -18,6 +18,7 @@ export interface ApportionmentAdvisorApiDeps {
  * /v1/apportionment-advisor — 未知 payee の科目学習 (成長型ブラックボックス)。
  *
  *   POST /advise           未知 payee を判定 (学習済みルールは即決 / 未知は LLM)
+ *   GET  /unknown          未マッチ payee 一覧 (支出額順)
  *   GET  /review           レビュー待ち判断キュー
  *   POST /review/:id       OK/NG (卒業で apportionment_rules へ実体化)
  *   GET  /rules            blackbox ルール一覧 + 卒業メトリクス
