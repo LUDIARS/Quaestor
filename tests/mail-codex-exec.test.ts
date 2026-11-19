@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { spawnOneShot as spawn } from "@ludiars/one-shot";
 import { mailCodexArgs, mailCodexEnv, runMailCodex } from "../src/services/mail-codex-exec.js";
+import { stubModelRoleMap } from "./fixtures/model-role-map.js";
 
 vi.mock("@ludiars/one-shot", async (importOriginal) => ({
   ...await importOriginal<typeof import("@ludiars/one-shot")>(), spawnOneShot: vi.fn(),
@@ -27,7 +28,9 @@ const success = JSON.stringify({ type: "item.completed", item: { type: "agent_me
   + '\n{"type":"turn.completed"}\n';
 
 describe("mail Codex subprocess boundary", () => {
-  afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
+  let cleanupRoleMap: () => void;
+  beforeEach(() => { cleanupRoleMap = stubModelRoleMap({ codex: { luna: "codex-test-luna" } }); });
+  afterEach(() => { vi.unstubAllEnvs(); cleanupRoleMap(); vi.clearAllMocks(); });
   it("passes mail only through stdin and requires a completed successful turn", async () => {
     vi.stubEnv("QUAESTOR_CODEX_PATH", process.execPath);
     const child = childFixture(success);
@@ -37,6 +40,7 @@ describe("mail Codex subprocess boundary", () => {
     expect(JSON.stringify(call)).not.toContain("private mail");
     expect(call[2]).toMatchObject({ shell: false, windowsHide: true });
     expect(call[1]).toContain("--ephemeral");
+    expect(call[1][call[1].indexOf("--model") + 1]).toBe("codex-test-luna");
   });
   it("rejects a failed process even if it emitted valid classification JSON", async () => {
     vi.stubEnv("QUAESTOR_CODEX_PATH", process.execPath);
@@ -56,6 +60,16 @@ describe("mail Codex subprocess boundary", () => {
     const args = mailCodexArgs("schema.json");
     expect(args[args.indexOf("--model") + 1]).toBe("gpt-test-luna");
     expect(args).toContain("read-only");
+  });
+  it("rejects a missing Luna mapping before spawning", async () => {
+    const cleanupMissingMap = stubModelRoleMap({});
+    try {
+      vi.stubEnv("QUAESTOR_CODEX_PATH", process.execPath);
+      await expect(runMailCodex("mail", {})).rejects.toThrow("model_role_unresolved:luna");
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      cleanupMissingMap();
+    }
   });
   it("excludes service secrets and disables execution capabilities", () => {
     expect(mailCodexEnv({ PATH: "bin", USERPROFILE: "profile", OPENAI_API_KEY: "secret", GMAIL_TOKEN: "secret", LICTOR_PORT: "1" }))

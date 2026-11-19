@@ -4,7 +4,7 @@
  * 設計方針:
  *  - 構造化抽出は **tool_use** で受ける (tool_choice で強制) — 自由テキストを後付けでパースしない
  *  - system prompt は cache_control: ephemeral で 1 セッション内 multi-receipt の入力を節約
- *  - 既定 model は **Haiku 4.5** — 単純な OCR に Sonnet/Opus は要らない、 速度・コスト重視
+ *  - 既定は速度・コスト重視の Haiku 役割
  *  - DI 可能: テストでは fake client を渡せるよう interface 化
  *
  * @implements SPEC-SCAN-KIND-001 (spec/feature/scan-document-kinds.md)
@@ -12,6 +12,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { resolveAnthropicModel } from "./anthropic-model.js";
 import { DOC_KINDS, SAMPLE_ROLES } from "../shared/document-kinds.js";
 import { classificationPromptSection } from "./ocr-classification-prompt.js";
 import { normalizeLlmLabels, type LlmLabels } from "./receipt-labels.js";
@@ -103,18 +104,18 @@ export interface AnthropicOcrOptions {
 
 export class AnthropicOcrClient implements OcrClient {
   private readonly client: Anthropic;
-  private readonly model: string;
+  private readonly model: string | undefined;
 
   constructor(opts: AnthropicOcrOptions = {}) {
     const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
     this.client = new Anthropic({ apiKey });
-    this.model = opts.model ?? "claude-haiku-4-5-20251001";
+    this.model = opts.model;
   }
 
   async extract(image: Buffer, mime: "image/jpeg" | "image/png"): Promise<ReceiptOcrResult> {
     const res = await this.client.messages.create({
-      model: this.model,
+      model: resolveAnthropicModel(this.model),
       max_tokens: 1024,
       system: [
         { type: "text", text: SYSTEM_PROMPT, cache_control: { type: "ephemeral" } },

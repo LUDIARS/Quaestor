@@ -7,6 +7,7 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
+import { resolveAnthropicModel } from "./anthropic-model.js";
 import type { ImportedTransaction, SourceKind } from "../shared/types.js";
 import { statementRowSourceId } from "./statement-rows.js";
 
@@ -65,18 +66,18 @@ const SCREENSHOT_SYSTEM = `あなたは日本のクレカ明細 / 銀行明細 /
 
 export class SmartImporter {
   private readonly client: Anthropic;
-  private readonly model: string;
+  private readonly model: string | undefined;
 
   constructor(opts: SmartImportOptions = {}) {
     const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
     this.client = new Anthropic({ apiKey });
-    this.model = opts.model ?? "claude-haiku-4-5-20251001";
+    this.model = opts.model;
   }
 
   async fromScreenshot(image: Buffer, mime: "image/jpeg" | "image/png", account?: string): Promise<SmartImportResult> {
     const res = await this.client.messages.create({
-      model: this.model,
+      model: resolveAnthropicModel(this.model),
       max_tokens: 4096,
       system: [{ type: "text", text: SCREENSHOT_SYSTEM, cache_control: { type: "ephemeral" } }],
       tools: [SCREENSHOT_TOOL],
@@ -96,7 +97,7 @@ export class SmartImporter {
 
   async fromText(text: string, account?: string): Promise<SmartImportResult> {
     const res = await this.client.messages.create({
-      model: this.model,
+      model: resolveAnthropicModel(this.model),
       max_tokens: 4096,
       system: [{ type: "text", text: SCREENSHOT_SYSTEM, cache_control: { type: "ephemeral" } }],
       tools: [SCREENSHOT_TOOL],

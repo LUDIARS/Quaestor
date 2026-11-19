@@ -25,6 +25,7 @@ describe("Luna mail analysis", () => {
     const pipeline = new MailCrawlAnalysis(db, { analyze }, messages, engine, []);
     await Promise.all([pipeline.handle(message("a")), pipeline.handle(message("a"))]);
     expect(analyze).toHaveBeenCalledTimes(1);
+    expect(db.prepare("SELECT model FROM mail_luna_analysis WHERE message_id=?").get("a")).toEqual({ model: "luna" });
     expect(engine.stats().activeRules).toBe(1);
     expect(messages.find("a")?.outcome).toBe("ignored: luna");
     expect(await pipeline.handle(message("b"))).toBe(false);
@@ -41,6 +42,7 @@ describe("Luna mail analysis", () => {
     await pipeline.handle(message("second"));
     expect(engine.stats().activeRules).toBe(0);
     new MailAnalysisRepo(db).save("cached", { kind: "review", confidence: 0.3 });
+    db.prepare("UPDATE mail_luna_analysis SET model=? WHERE message_id=?").run("historical-model-id", "cached");
     const count = analyze.mock.calls.length;
     await new MailCrawlAnalysis(db, { analyze }, messages, engine, []).handle(message("cached"));
     expect(analyze).toHaveBeenCalledTimes(count);

@@ -1,7 +1,9 @@
 {
   "service": "quaestor",
   "include": [
-    "src/services/mail-crawl-failure.ts"
+    "src/services/mail-crawl-failure.ts",
+    "src/services/anthropic-model.ts",
+    "src/services/mail-codex-exec.ts"
   ],
   "runtime": {
     "autoImport": false,

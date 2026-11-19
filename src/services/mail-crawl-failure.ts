@@ -1,5 +1,7 @@
 import { MailInboxError } from "@ludiars/mail-inbox";
 import { GmailRateLimit } from "./gmail-rate-limit.js";
+import { contract } from '../contracts/contract-runtime.js'; /* augur-inject:import:fc628edf */
+import augurContract_61eb661f from '../contracts/mail-crawl-failure.contract.js'; /* augur-inject:contract-predicate:88e05da6 */
 
 export type MailCrawlStage = "list_ids" | "process";
 
@@ -54,3 +56,5 @@ export function classifyMailCrawlFailure(error: unknown, stage: MailCrawlStage, 
   }
   return { ...base, category: "unknown" };
 }
+// @ts-expect-error augur-inject
+classifyMailCrawlFailure = contract(classifyMailCrawlFailure, { ...augurContract_61eb661f, contractId: 'C-1', mode: 'observe', sample: 1, where: 'src/services/mail-crawl-failure.ts:31', rule: 'contract-wrap', id: '61eb661f' }); /* augur-inject:contract-wrap:61eb661f */

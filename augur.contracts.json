@@ -1,7 +1,8 @@
 {
   "version": 1,
   "contractsDir": "src/contracts",
-  "importFrom": "@ludiars/log-weaver",
+  "importFrom": "../contracts/contract-runtime.js",
+  "runtimeFile": "src/contracts/contract-runtime.ts",
   "contracts": [
     {
       "id": "C-1",
@@ -9,6 +10,24 @@
       "symbol": "classifyMailCrawlFailure",
       "file": "src/services/mail-crawl-failure.ts",
       "module": "src/contracts/mail-crawl-failure.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-2",
+      "criterion": "C-2 resolveAnthropicModel(requested): Haiku の役割から SDK に渡せる具体 ID を得て、明示 ID を保持する",
+      "symbol": "resolveAnthropicModel",
+      "file": "src/services/anthropic-model.ts",
+      "module": "src/contracts/anthropic-model.contract.ts",
+      "mode": "observe",
+      "sample": 1
+    },
+    {
+      "id": "C-3",
+      "criterion": "C-3 mailCodexArgs(schema): Luna の役割から得た具体 ID を CLI に渡し、出力スキーマと読み取り専用の制約を保持する",
+      "symbol": "mailCodexArgs",
+      "file": "src/services/mail-codex-exec.ts",
+      "module": "src/contracts/mail-codex-model.contract.ts",
       "mode": "observe",
       "sample": 1
     }

@@ -10,6 +10,7 @@ import type { MailCrawler } from "../services/mail-crawler.js";
 import type { MailWatchRunner } from "../services/mail-watch-runner.js";
 import type { ReceiptStorage } from "../services/receipt-storage.js";
 import { isDirectLoopbackRequest } from "../shared/local-request.js";
+import { MAIL_ANALYSIS_MODEL_ROLE } from "../shared/mail-analysis-model.js";
 import { normalizeDate } from "../shared/text.js";
 
 const SweepSchema = z.object({ dry_run: z.boolean().optional(), limit: z.number().int().min(1).max(250).optional() }).strict();
@@ -64,7 +65,7 @@ export function mailIntakeRouter(deps: MailIntakeApiDeps): Hono {
   });
 
   app.get("/crawler", (c) => c.json({ ...(deps.crawler?.status() ?? { disabled: true }),
-    analysis: { model: "gpt-6-luna", transport: "codex-exec", authentication: "codex-login", configured: deps.analyzerConfigured?.() ?? false } }));
+    analysis: { model: MAIL_ANALYSIS_MODEL_ROLE, transport: "codex-exec", authentication: "codex-login", configured: deps.analyzerConfigured?.() ?? false } }));
 
   app.post("/crawler/backfill", async (c) => {
     const requestId = z.string().regex(/^[a-zA-Z0-9-]{8,80}$/);

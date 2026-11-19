@@ -5,7 +5,8 @@ neco selected Luna and explicitly approved sending unknown email sender, subject
 body (at most 24,000 characters) and attachment names/types to OpenAI on 2026-09-28.
 Send no attachment bytes or Gmail credentials. On 2026-09-28 neco further directed
 Luna to run through Satelles or codex exec; use codex exec with the existing ChatGPT
-login, gpt-6-luna, reasoning:none, read-only sandbox and never approval policy.
+login, the `luna` role resolved from Concordia's model map, reasoning:none,
+read-only sandbox and never approval policy. An unresolved role fails before the CLI is launched.
 No API-key fallback. QUAESTOR_CODEX_PATH can select an absolute native executable;
 otherwise resolve codex from PATH or the standard Windows installation.
 
@@ -22,12 +23,13 @@ Accept strict kind/confidence JSON only after a successful turn AND zero process
 exit. Reject malformed output, unexpected tools, timeout (45s), and output above
 2 MB. Kill and reap failed children; remove the temporary schema/directory.
 CLI or authentication failure leaves unknown mail pending with a safe diagnostic.
-Status reports model, transport=codex-exec, authentication=codex-login and executable
+Status reports model role, transport=codex-exec, authentication=codex-login and executable
 presence as configured; configured does not assert that login is currently valid.
 
 ## SPEC-MAIL-LUNA-002
 Trusted configured classification and learned ignore rules run before Luna.
-Cache validated kind/confidence/model by Gmail ID immediately on successful analysis.
+Cache validated kind/confidence and model role by Gmail ID immediately on successful analysis.
+Existing cache entries with a historical model ID remain readable.
 Concurrent requests for the same ID share a single analysis. Persist mail history
 and rule evidence transactionally; a restart after cached analysis reuses it.
 No body text or prompt is stored in the analysis cache.

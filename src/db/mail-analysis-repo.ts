@@ -1,4 +1,5 @@
 import type Database from "better-sqlite3";
+import { MAIL_ANALYSIS_MODEL_ROLE } from "../shared/mail-analysis-model.js";
 
 /** @implements SPEC-MAIL-LUNA-002 */
 export class MailAnalysisRepo {
@@ -12,6 +13,6 @@ export class MailAnalysisRepo {
   }
   save(id: string, result: { kind: string; confidence: number }): void {
     this.db.prepare("INSERT OR IGNORE INTO mail_luna_analysis VALUES (?,?,?,?)")
-      .run(id, JSON.stringify(result), "gpt-6-luna", Math.floor(Date.now() / 1000));
+      .run(id, JSON.stringify(result), MAIL_ANALYSIS_MODEL_ROLE, Math.floor(Date.now() / 1000));
   }
 }

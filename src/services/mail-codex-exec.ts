@@ -3,6 +3,9 @@ import { existsSync } from "node:fs";
 import { mkdtemp, writeFile, unlink, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
+import { MAIL_ANALYSIS_MODEL_ROLE } from "../shared/mail-analysis-model.js";
+import { contract } from '../contracts/contract-runtime.js'; /* augur-inject:import:d3474264 */
+import augurContract_16e10dd2 from '../contracts/mail-codex-model.contract.js'; /* augur-inject:contract-predicate:d53d9c09 */
 
 const failure = (code: string): Error => Object.assign(new Error("Mail analysis unavailable"), { code });
 const DISABLED = ["shell_tool", "unified_exec", "code_mode", "code_mode_host", "apps", "plugins", "hooks",
@@ -20,11 +23,13 @@ export function resolveMailCodex(): string | null {
 }
 
 export function mailCodexArgs(schema: string): string[] {
-  return ["-a", "never", "exec", "--model", resolveModel("luna", "codex"), "--sandbox", "read-only", "--ephemeral",
+  return ["-a", "never", "exec", "--model", resolveModel(MAIL_ANALYSIS_MODEL_ROLE, "codex"), "--sandbox", "read-only", "--ephemeral",
     "--ignore-user-config", "--skip-git-repo-check", "--json", "--color", "never", "--output-schema", schema,
     "-c", 'model_reasoning_effort="none"', "-c", 'web_search="disabled"', "-c", "project_doc_max_bytes=0",
     ...DISABLED.flatMap((name) => ["--disable", name]), "-"];
 }
+// @ts-expect-error augur-inject
+mailCodexArgs = contract(mailCodexArgs, { ...augurContract_16e10dd2, contractId: 'C-3', mode: 'observe', sample: 1, where: 'src/services/mail-codex-exec.ts:23', rule: 'contract-wrap', id: '16e10dd2' }); /* augur-inject:contract-wrap:16e10dd2 */
 
 export function mailCodexEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const allowed = new Set(["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "HOME",
