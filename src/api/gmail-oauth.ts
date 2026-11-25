@@ -5,7 +5,7 @@ import { isDirectLoopbackRequest } from "../shared/local-request.js";
 import { GmailOAuth, type GmailClient } from "../services/gmail-oauth.js";
 import { gmailOAuthPage } from "../services/gmail-oauth-page.js";
 
-const COOKIE = "qs_gmail_oauth";
+export const GMAIL_SETUP_COOKIE = "qs_gmail_oauth";
 const COOKIE_PATH = "/v1/gmail-auth";
 
 export function gmailOAuthRouter(
@@ -41,8 +41,8 @@ export function gmailOAuthRouter(
     // Preserve Origin for our same-origin form; suppress cross-origin referrers.
     // Callback and redirect responses retain the middleware's no-referrer policy.
     c.header("Referrer-Policy", "same-origin");
-    const session = oauth.session(getCookie(c, COOKIE));
-    setCookie(c, COOKIE, session.id, { httpOnly: true, secure: isPublic, sameSite: "Lax", path: COOKIE_PATH, maxAge: 600 });
+    const session = oauth.session(getCookie(c, GMAIL_SETUP_COOKIE));
+    setCookie(c, GMAIL_SETUP_COOKIE, session.id, { httpOnly: true, secure: isPublic, sameSite: "Lax", path: COOKIE_PATH, maxAge: 600 });
     return c.html(gmailOAuthPage(oauth.status(), session.csrf, session.result));
   });
   app.post("/start", async (c) => {
@@ -52,7 +52,7 @@ export function gmailOAuthRouter(
     try {
       const body = await c.req.parseBody();
       const client = await parseClient(body);
-      const url = oauth.authorize(getCookie(c, COOKIE) ?? "", String(body.csrf ?? ""), client);
+      const url = oauth.authorize(getCookie(c, GMAIL_SETUP_COOKIE) ?? "", String(body.csrf ?? ""), client);
       // Redirects to Google are the only cross-origin form destination.
       c.header("Content-Security-Policy", "default-src 'none'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'");
       return c.redirect(url, 303);
@@ -62,7 +62,7 @@ export function gmailOAuthRouter(
   });
   app.get("/callback", async (c) => {
     try {
-      await oauth.complete(getCookie(c, COOKIE) ?? "", c.req.query("state") ?? "", c.req.query("error") ? undefined : c.req.query("code"));
+      await oauth.complete(getCookie(c, GMAIL_SETUP_COOKIE) ?? "", c.req.query("state") ?? "", c.req.query("error") ? undefined : c.req.query("code"));
     } catch {
       // Invalid/expired/replayed state must never exchange a code or reveal query parameters.
       return c.html("<html lang=\"ja\"><meta charset=\"utf-8\"><p>認証の有効期限が切れたか、このブラウザで開始されていません。</p><a href=\"/v1/gmail-auth/setup\">やり直す</a></html>", 400);

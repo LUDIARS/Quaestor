@@ -29,6 +29,12 @@ export class MailMessagesRepo {
       MailMessageRow | undefined;
   }
 
+  /** Recovery inventory needs only the result of the existing claim. */
+  outcome(id: string): Pick<MailMessageRow, "outcome" | "error"> | undefined {
+    return this.db.prepare("SELECT outcome,error FROM mail_messages WHERE message_id=?").get(id) as
+      Pick<MailMessageRow, "outcome" | "error"> | undefined;
+  }
+
   /** Atomically reserves a message so concurrent sweeps cannot process it twice. */
   /** @implements SPEC-MAIL-INTAKE-001 (spec/feature/mail-intake.md) */
   claim(row: MailMessageRow): boolean {

@@ -104,6 +104,10 @@ import { MailActions } from "./services/mail-actions.js";
 import { MailWatchRunner } from "./services/mail-watch-runner.js";
 import { createRefreshTokenProvider, type MailSource } from "@ludiars/mail-inbox";
 import { GmailCrawlSource } from "./services/gmail-crawl-source.js";
+import { MailRecoveryGate } from "./services/mail-recovery-gate.js";
+import { MailRecoveryService } from "./services/mail-recovery-service.js";
+import { MailRecoveryJobsRepo } from "./db/mail-recovery-jobs-repo.js";
+import { mailRecoveryRouter } from "./api/mail-recovery.js";
 import { MailCrawler } from "./services/mail-crawler.js";
 import { MailCrawlStateRepo } from "./db/mail-crawl-state-repo.js";
 import { gmailPacedFetch } from "./services/gmail-paced-fetch.js";
@@ -698,7 +702,23 @@ export function buildApp(deps: AppDeps): Hono {
   app.route("/v1/notify", notificationsRouter({ service: notificationService, plans: businessPlans }));
   app.route("/v1/config", configRouter());
   app.route("/v1/integrations/memoria", memoriaIntegrationRouter({ db: deps.db, rules }));
-  if (deps.gmailOAuth) app.route("/v1/gmail-auth", gmailOAuthRouter(deps.gmailOAuth));
+  if (deps.gmailOAuth) {
+    const oauth = deps.gmailOAuth;
+    if (mailSource instanceof GmailCrawlSource && mailCrawler) {
+      const recoveryGate = new MailRecoveryGate();
+      const recovery = new MailRecoveryService({
+        gate: recoveryGate, jobs: new MailRecoveryJobsRepo(deps.db), messages: mailMessages,
+        query: mailConfig.query, source: mailSource, logger: deps.logger,
+        ready: () => mailConfig.enabled && oauth.status().configured,
+        crawlerStatus: () => mailCrawler.status(),
+        connectionRevision: () => oauth.connectionRevision,
+        ingest: (message, load) => mailIntake.recoverLocally(message, load),
+      });
+      deps.registerCleanup?.(() => recoveryGate.stop());
+      app.route("/v1/gmail-auth/recovery", mailRecoveryRouter(oauth, recovery));
+    }
+    app.route("/v1/gmail-auth", gmailOAuthRouter(oauth));
+  }
   app.route("/v1/mail-history", mailHistoryRouter(mailMessages, deps.gmailOAuth?.origin, undefined, new MailIgnoreGroupsRepo(deps.db)));
   app.route("/v1/mail", mailIntakeRouter({
     analyzerConfigured: () => resolveMailCodex() !== null,

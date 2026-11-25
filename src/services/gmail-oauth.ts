@@ -67,10 +67,23 @@ export class GmailOAuth {
     return { id: key, csrf: session.csrf };
   }
 
-  authorize(id: string, csrf: string, client?: GmailClient): string {
+  /** Opaque in-process comparison only, including changes made via the secret-store CLI. */
+  get connectionRevision(): string { return this.connection().fingerprint; }
+
+  /** Check the existing operator setup session without allocating or extending one. */
+  hasSession(id: string | undefined, csrf: string | undefined): boolean {
+    return !!this.verifiedSession(id, csrf);
+  }
+
+  private verifiedSession(id: string | undefined, csrf: string | undefined): BrowserSession | undefined {
     this.prune();
-    const session = this.sessions.get(id);
-    if (!session || session.csrf !== csrf) throw new Error("invalid OAuth session");
+    const session = id ? this.sessions.get(id) : undefined;
+    return session && csrf === session.csrf ? session : undefined;
+  }
+
+  authorize(id: string, csrf: string, client?: GmailClient): string {
+    const session = this.verifiedSession(id, csrf);
+    if (!session) throw new Error("invalid OAuth session");
     const values = this.values();
     const chosen = client ?? { clientId: values[CLIENT_ID_KEY] ?? "", clientSecret: values[CLIENT_SECRET_KEY] ?? "" };
     if (!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(chosen.clientId)
@@ -128,16 +141,21 @@ export class GmailOAuth {
 
   /** The existing mail source picks up the saved credentials without a restart. */
   async getAccessToken(): Promise<string> {
+    const { fingerprint, clientId, clientSecret, refreshToken } = this.connection();
+    if (!this.cached || this.cached.fingerprint !== fingerprint) {
+      this.cached = { fingerprint, provider: createRefreshTokenProvider({ clientId, clientSecret, refreshToken }) };
+    }
+    return this.cached.provider.getAccessToken();
+  }
+
+  private connection(): GmailClient & { refreshToken: string; fingerprint: string } {
     const values = this.values();
     const clientId = values[CLIENT_ID_KEY];
     const clientSecret = values[CLIENT_SECRET_KEY];
     const refreshToken = values[REFRESH_TOKEN_KEY];
     if (!clientId || !clientSecret || !refreshToken) throw new Error("Gmail is not configured");
     const fingerprint = createHash("sha256").update(JSON.stringify([clientId, clientSecret, refreshToken])).digest("hex");
-    if (!this.cached || this.cached.fingerprint !== fingerprint) {
-      this.cached = { fingerprint, provider: createRefreshTokenProvider({ clientId, clientSecret, refreshToken }) };
-    }
-    return this.cached.provider.getAccessToken();
+    return { clientId, clientSecret, refreshToken, fingerprint };
   }
 
   private values(): Record<string, string | undefined> {

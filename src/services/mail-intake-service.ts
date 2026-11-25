@@ -6,7 +6,8 @@ import type { InboundDocumentsRepo } from "../db/inbound-documents-repo.js";
 import type { MailKind, MailMessagesRepo } from "../db/mail-messages-repo.js";
 import type { MailWatchStateRepo } from "../db/mail-watch-state-repo.js";
 import type { ReceiptsRepo } from "../db/receipts-repo.js";
-import { classifyMail, type MailRule } from "../mail/classify.js";
+import { classifyMail, type MailClassification, type MailRule } from "../mail/classify.js";
+import type { RecoveryOutcome } from "./mail-recovery-window.js";
 import { extractInvoicePdf, type PdfExtraction } from "../mail/pdf-extract.js";
 import type { MailActionKind, MailActionResult } from "./mail-actions.js";
 import type { MailNotice } from "./mail-notices.js";
@@ -260,18 +261,7 @@ export class MailIntakeService {
         continue;
       }
 
-      const claimed = this.deps.messages.claim({
-        message_id: message.id,
-        thread_id: message.threadId,
-        received_at: Math.floor(message.date.getTime() / 1000),
-        from_address: message.from.address,
-        subject: redactUrls(message.subject),
-        kind: classified.kind,
-        rule_index: classified.ruleIndex,
-        outcome: "processing",
-        error: null,
-        processed_at: nowSec(),
-      });
+      const claimed = this.claim(message, classified);
       if (!claimed) continue;
 
       result.processed[classified.kind]++;
@@ -293,6 +283,48 @@ export class MailIntakeService {
         this.deps.messages.updateOutcome(message.id, "error", errorKind);
         result.errors.push({ message_id: message.id, error: errorKind });
       }
+    }
+  }
+
+  private claim(message: MailMessage, classified: MailClassification): boolean {
+    return this.deps.messages.claim({
+      message_id: message.id, thread_id: message.threadId,
+      received_at: Math.floor(message.date.getTime() / 1000),
+      from_address: message.from.address, subject: redactUrls(message.subject),
+      kind: classified.kind, rule_index: classified.ruleIndex,
+      outcome: "processing", error: null, processed_at: nowSec(),
+    });
+  }
+
+  /** Recovery may store local results. Leave action-only and unknown mail unclaimed. */
+  async recoverLocally(message: MailMessage, load: (id: string, attachment: string) => Promise<Buffer | undefined>): Promise<RecoveryOutcome> {
+    const classified = classifyMail(message, this.deps.config.rules);
+    const kind = classified.kind;
+    if (kind === "ci_failure" || kind === "dependabot") return "deferred";
+    const rule = kind === "ignore" ? this.deps.ignoreEngine?.match(message, false) : null;
+    if (kind === "ignore" && !rule) return "deferred";
+    if (kind === "invoice") {
+      const pdf = this.invoiceAttachment(message);
+      // Reserve only after the last provider read. Interruption during a cooldown
+      // must leave a missing message eligible for a later attempt.
+      if (!pdf) return "deferred";
+      const data = pdf.data ?? await load(message.id, pdf.attachmentId);
+      if (!data) return "raced";
+      if (data.length > this.deps.config.maxAttachmentBytes) return "deferred";
+      message = { ...message, attachments: [{ ...pdf, data }] };
+    }
+    if (!this.claim(message, classified)) return "raced";
+    try {
+      // The production invoice parser is local pdf-parse. No action runner, analyzer,
+      // notification or learning hook is called by this entry point.
+      const outcome = kind === "invoice"
+        ? (await this.processInvoice(message, true, emptyResult(1))).outcome
+        : kind === "cloud_notice" ? "cloud_notice" : `ignored: pattern ${rule}`;
+      if (!this.deps.messages.updateOutcome(message.id, outcome, null)) throw new Error("claim_missing");
+      return "imported";
+    } catch (error) {
+      this.deps.messages.updateOutcome(message.id, "error", safeErrorKind(error));
+      return "unresolved";
     }
   }
 
@@ -351,11 +383,19 @@ export class MailIntakeService {
       return { outcome: action.outcome };
     }
 
-    const pdf = message.attachments.find(
+    return this.processInvoice(message, persist, result);
+  }
+
+  private invoiceAttachment(message: MailMessage): MailMessage["attachments"][number] | undefined {
+    return message.attachments.find(
       (attachment) => attachment.mimeType.toLowerCase() === "application/pdf"
         && attachment.size >= 0
         && attachment.size <= this.deps.config.maxAttachmentBytes,
     );
+  }
+
+  private async processInvoice(message: MailMessage, persist: boolean, result: MailSweepResult): Promise<ProcessedMail> {
+    const pdf = this.invoiceAttachment(message);
     if (!pdf) {
       result.needs_review++;
       return { outcome: "needs_review", notice: this.notice(message, "needs_review") };
@@ -403,6 +443,12 @@ export class MailIntakeService {
       });
     } catch (error) {
       await unlink(absolutePath).catch(() => { /* best-effort cleanup after failed DB insert */ });
+      // Different mail IDs can carry the same PDF. The unique index arbitrates
+      // if ordinary intake inserts it while recovery is awaiting the filesystem.
+      if (error && typeof error === "object" && "code" in error && error.code === "SQLITE_CONSTRAINT_UNIQUE"
+        && this.deps.documents.findByHash(hash)) {
+        return { outcome: "duplicate", notice: this.notice(message, "duplicate", pdf.filename) };
+      }
       throw error;
     }
 
